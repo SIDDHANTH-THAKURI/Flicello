@@ -8,6 +8,9 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import numpy as np
+import soundfile as sf
+
 from ..config import Config
 from ..edit.timeline import build_timeline
 from ..edit.validate import Issue, validate_edl
@@ -17,6 +20,17 @@ from ..workspace import Project, write_text_atomic
 from .assemble import assemble_video
 from .audio_mix import decode_music, mix_timeline, normalize, write_wav
 from .segments import render_segments
+
+
+EncodedPeakCeiling = -0.5  # dBFS: decoded AAC peaks above this risk clipping in some players
+
+
+def decoded_peak_db(video: Path, scratch: Path) -> float:
+    run_ffmpeg(["-i", str(video), "-vn", "-c:a", "pcm_f32le", str(scratch)], what="Could not decode audio for checking")
+    data, _ = sf.read(str(scratch), dtype="float32", always_2d=True)
+    scratch.unlink(missing_ok=True)
+    peak = float(np.abs(data).max()) if data.size else 0.0
+    return 20 * np.log10(peak) if peak > 0 else -120.0
 
 
 class EDLValidationError(ValueError):
@@ -78,9 +92,18 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
     mix_path = work / "mix.wav"
     write_wav(mix_path, mix)
 
-    run_ffmpeg(["-i", str(video_only), "-i", str(mix_path), "-map", "0:v:0", "-map", "1:a:0",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", cfg.render.audio_bitrate, "-shortest",
-                "-movflags", "+faststart", str(out_path)], what="Could not write the final file")
+    def mux(audio: Path) -> None:
+        run_ffmpeg(["-i", str(video_only), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", cfg.render.audio_bitrate, "-shortest",
+                    "-movflags", "+faststart", str(out_path)], what="Could not write the final file")
+
+    mux(mix_path)
+    # AAC encoding can overshoot the limiter's ceiling on spiky material; check the decoded result.
+    peak_db = decoded_peak_db(out_path, work / "check.wav")
+    if peak_db > EncodedPeakCeiling:
+        mix *= float(10 ** ((EncodedPeakCeiling - 0.2 - peak_db) / 20))
+        write_wav(mix_path, mix)
+        mux(mix_path)
 
     probe = ffprobe_json(out_path)
     duration = float((probe.get("format") or {}).get("duration") or 0.0)

@@ -1,6 +1,7 @@
 # VidoSuper: AI Video Editor Plan
 
-Status (2026-10-03): **Phase 0 done. Phase 1 done and verified on real footage** (16 DJI Osmo Pocket 3 clips, 4K60 10-bit, Sydney). Waiting for your review of the baseline before Phase 2.
+Status (2026-10-04): **Phases 0–3 done.** The first AI-edited video from the Sydney footage is in
+`Videos\VidoSuper`, waiting for your review. Next is Phase 4: critics, adversary and judge looping automatically.
 This is the living design doc. The decision log is at the bottom; usage is in [README.md](README.md).
 
 ---
@@ -357,6 +358,9 @@ I pause for your review after Phases 1, 2, and 3.
 - **2026-10-03:** Final renders default to x264 (best quality). Intel QuickSync works on this laptop and is about 3× faster; it's available as a setting.
 - **2026-10-03:** Decoding happens on the GPU (QuickSync decode + shrink) when possible. Analysis of 7.9 min of 4K60 DJI footage takes 2 min, down from 4 min. Rotated phone clips stay on software decoding so they never come out sideways.
 - **2026-10-03:** Real-footage check: flagged "shaky" and "blurry" stretches matched the frames. Fast pans now get their own label ("fast camera move") because an editor may still use them as whip transitions.
+- **2026-10-04:** Phase 2 on the Sydney footage: 16/16 clips logged by Sonnet analysts. The vision pass corrected local labels; for example, digital zoom jumps had been mislabeled as shake.
+- **2026-10-04:** Phase 3 on the same footage: the director and editor (Opus) produced a 60 s cut with 28 shots and all 26 cuts on the beat. The editor's draft review found a renderer bug ("dissolve" was a speckled pixel dissolve), now mapped to a smooth crossfade. The director asked for punch-ins, which now exist (zoom up to 2.5×). Loudness ceiling is now −1.5 dBTP, checked after AAC encoding.
+- **2026-10-04:** Until you supply music, edits use a synthesised placeholder track at 100 BPM. Real music needs a re-cut because tempo and sections change.
 
 ## Glossary
 - **EDL (Edit Decision List):** the recipe for the video: which clip, from which second to which second, in what order, with what transitions, music, and text.

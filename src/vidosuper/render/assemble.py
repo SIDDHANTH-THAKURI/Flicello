@@ -22,6 +22,10 @@ def output_encoder(quality: str, cfg: Config) -> list[str]:
             "-pix_fmt", "yuv420p"]
 
 
+# Editors mean a smooth crossfade by "dissolve"; FFmpeg's xfade "dissolve" is a speckled pixel dissolve.
+XFADE_NAMES = {"dissolve": "fade"}
+
+
 def assembly_graph(timeline: Timeline, meta: EditMeta) -> str:
     fps = timeline.fps
     runs: list[list[int]] = []
@@ -39,8 +43,9 @@ def assembly_graph(timeline: Timeline, meta: EditMeta) -> str:
     current = "r0"
     for k in range(1, len(runs)):
         first = timeline.items[runs[k][0]]
+        kind = XFADE_NAMES.get(first.seg.transition_in.type, first.seg.transition_in.type)
         lines.append(
-            f"[{current}][r{k}]xfade=transition={first.seg.transition_in.type}:"
+            f"[{current}][r{k}]xfade=transition={kind}:"
             f"duration={first.trans_frames / fps:.6f}:offset={first.start / fps:.6f}[x{k}]"
         )
         current = f"x{k}"

@@ -32,7 +32,7 @@ output:
   resolution: 1080p              # 1080p | 4k
   fps: auto                      # auto | 24 | 25 | 30 | 50 | 60
   loudness_lufs: -14
-  true_peak_db: -1.0
+  true_peak_db: -1.5             # headroom for AAC encoding overshoot
   captions: auto                 # auto (on for vertical) | on | off
 
 ingest:

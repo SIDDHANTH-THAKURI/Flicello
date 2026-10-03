@@ -47,7 +47,7 @@ class OutputCfg(_Strict):
     resolution: Literal["1080p", "4k"] = "1080p"
     fps: Literal["auto", 24, 25, 30, 50, 60] = "auto"
     loudness_lufs: float = -14.0
-    true_peak_db: float = -1.0
+    true_peak_db: float = -1.5
     captions: Literal["auto", "on", "off"] = "auto"
 
 

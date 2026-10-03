@@ -175,7 +175,8 @@ TransitionType = Literal[
 
 
 class Transition(BaseModel):
-    type: TransitionType = "cut"
+    type: TransitionType = Field("cut", description="'dissolve' and 'fade' are both a smooth crossfade; "
+                                                    "'fadeblack'/'fadewhite' dip through black/white.")
     duration: float = Field(0.0, description="Seconds; the shot overlaps the previous one by this much.")
 
 
@@ -220,7 +221,7 @@ class EditMeta(BaseModel):
     fade_in: float = 0.5
     fade_out: float = 1.0
     loudness_lufs: float = -14.0
-    true_peak_db: float = -1.0
+    true_peak_db: float = -1.5
     snap_to_beats: bool = Field(True, description="Nudge hard cuts onto music beats (when there is music).")
 
 

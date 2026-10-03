@@ -331,6 +331,8 @@ def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = No
     if not edl_path.exists():
         raise RunError(f"iteration {n} has no accepted EDL")
     edl = EDL.model_validate_json(edl_path.read_text(encoding="utf-8"))
+    edl.meta.loudness_lufs = cfg.output.loudness_lufs  # delivery settings follow the current config
+    edl.meta.true_peak_db = cfg.output.true_peak_db
     out_dir = Path.home() / "Videos" / "VidoSuper"
     out = out_dir / f"{project.clips_dir.name}-{state.run_id}-v{n}.mp4"
     render_edl(edl, project, cfg, quality="final", out_path=out)
