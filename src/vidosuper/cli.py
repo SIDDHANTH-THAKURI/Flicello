@@ -310,12 +310,143 @@ def inspect(folder: Path = typer.Argument(..., help="Folder with your raw clips"
     console.print(escape(str(out)))
 
 
-@app.command()
-def schema(name: str = typer.Argument(..., help="clip-analysis | edl")) -> None:
-    """Print the JSON schema an agent must follow."""
-    from .schemas import ClipAnalysis
+music_app = typer.Typer(no_args_is_help=True, help="Music: beats, bars, sections.")
+app.add_typer(music_app, name="music")
 
-    models = {"clip-analysis": ClipAnalysis, "edl": EDL}
+
+@music_app.command("analyze")
+def music_analyze(track: Path = typer.Argument(..., help="Music file")) -> None:
+    """Tempo, beats, bar starts, sections and drops of a track."""
+    from .music import analyze_music
+
+    console.print(escape(analyze_music(track).summary()))
+
+
+@music_app.command("placeholder")
+def music_placeholder(out: Path = typer.Argument(..., help="Where to write the .wav"),
+                      bpm: float = typer.Option(100.0, help="Tempo")) -> None:
+    """Write a license-free synthesised placeholder track (for testing beat-synced edits)."""
+    from .devtools import make_placeholder_music
+
+    console.print(escape(str(make_placeholder_music(out.expanduser().resolve(), bpm=bpm))))
+
+
+edit_app = typer.Typer(no_args_is_help=True, help="Phase 3: an edit run (brief → drafts → final).")
+app.add_typer(edit_app, name="edit")
+
+
+@edit_app.command("start")
+def edit_start(folder: Path = typer.Argument(..., help="Folder with your raw clips"),
+               intent: str = typer.Option(..., help="What the video should be, in plain words"),
+               platform: str = typer.Option("youtube", help="youtube | reels | shorts | tiktok | square"),
+               duration: float = typer.Option(60.0, help="Target length in seconds"),
+               resolution: str = typer.Option("1080p", help="1080p | 4k"),
+               music: Path | None = typer.Option(None, help="Music track (optional)")) -> None:
+    """Start an edit run (needs analysed footage)."""
+    from .loop import RunError, next_step, start_run
+
+    if platform not in PLATFORM_CANVAS:
+        raise typer.BadParameter(f"platform must be one of {', '.join(PLATFORM_CANVAS)}")
+    cfg = load_config()
+    try:
+        run = start_run(Project(folder, cfg), cfg, intent=intent, platform=platform, target_seconds=duration,
+                        resolution=resolution, music=music)
+    except RunError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    console.print(f"Run: {escape(str(run.dir))}")
+    music_info = run.music()
+    if music_info:
+        console.print(escape(music_info.summary()))
+    console.print(escape(next_step(run)))
+
+
+@edit_app.command("status")
+def edit_status(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
+    """Where the run is and what to do next."""
+    from .loop import Run, next_step
+
+    run = Run(run_dir)
+    state = run.load()
+    console.print(f"{escape(state.intent)} | {state.platform} {state.target_seconds:.0f}s | iteration {state.iteration}")
+    for line in state.history[-5:]:
+        console.print(f"  {escape(line)}")
+    console.print(escape(next_step(run)))
+
+
+@edit_app.command("submit-brief")
+def edit_submit_brief(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
+    """Validate the director's brief.json and move on to editing."""
+    from .loop import Run, next_step, submit_brief
+
+    run = Run(run_dir)
+    state = run.load()
+    problems = submit_brief(run, Project(state.clips_dir, load_config()))
+    if problems:
+        for p in problems:
+            console.print(f"[red]- {escape(p)}[/]")
+        raise typer.Exit(1)
+    console.print("[green]Brief accepted[/]")
+    console.print(escape(next_step(run)))
+
+
+@edit_app.command("submit-edl")
+def edit_submit_edl(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
+    """Validate the editor's edl.json, snap cuts to the beat and render the draft."""
+    from .loop import Run, next_step, submit_edl
+
+    cfg = load_config()
+    run = Run(run_dir)
+    state = run.load()
+    result = submit_edl(run, Project(state.clips_dir, cfg), cfg)
+    if result.problems:
+        console.print("[red]EDL rejected:[/]")
+        for p in result.problems:
+            console.print(f"[red]- {escape(p)}[/]")
+        raise typer.Exit(1)
+    for n in result.notes:
+        console.print(escape(n))
+    for w in result.warnings:
+        console.print(f"[yellow]warning: {escape(w)}[/]")
+    console.print(f"[green]Draft:[/] {escape(str(result.draft))}")
+    for s in result.sheets:
+        console.print(f"Shots: {escape(str(s))}")
+    console.print(escape(next_step(run)))
+
+
+@edit_app.command("revise")
+def edit_revise(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
+    """Start the next iteration from the current EDL."""
+    from .loop import Run, next_step, revise
+
+    run = Run(run_dir)
+    path = revise(run)
+    console.print(f"New iteration: {escape(str(path))}")
+    console.print(escape(next_step(run)))
+
+
+@edit_app.command("final")
+def edit_final(run_dir: Path = typer.Argument(..., help="Run folder"),
+               iteration: int | None = typer.Option(None, help="Which iteration (default: latest)"),
+               open_file: bool = typer.Option(False, "--open", help="Open the result")) -> None:
+    """Render the full-quality video from an accepted iteration."""
+    from .loop import Run, finalize
+
+    cfg = load_config()
+    run = Run(run_dir)
+    state = run.load()
+    out = finalize(run, Project(state.clips_dir, cfg), cfg, iteration)
+    console.print(f"[green]Final video:[/] {escape(str(out))}")
+    if open_file and os.name == "nt":
+        os.startfile(out)  # noqa: S606 - the user's own render
+
+
+@app.command()
+def schema(name: str = typer.Argument(..., help="clip-analysis | edit-brief | edl")) -> None:
+    """Print the JSON schema an agent must follow."""
+    from .schemas import ClipAnalysis, EditBrief
+
+    models = {"clip-analysis": ClipAnalysis, "edit-brief": EditBrief, "edl": EDL}
     if name not in models:
         raise typer.BadParameter(f"one of: {', '.join(models)}")
     print(json.dumps(models[name].model_json_schema(), indent=1))

@@ -54,6 +54,8 @@ def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: 
         "blur": cfg.render.blur_pad_sigma,
         "audio": seg.audio.mode == "original" and item.clip.has_audio,
     }
+    if seg.zoom > 1.0001:  # only part of the key when used, so existing cached shots stay valid
+        payload["zoom"] = [round(seg.zoom, 4), [round(v, 4) for v in seg.zoom_center]]
     return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
 
 

@@ -52,7 +52,7 @@ def grab_frames(video: str | Path, times: list[float]) -> list[tuple[float, np.n
 
 
 def build_sheet(frames: list[tuple[float, np.ndarray]], *, tile_long_edge: int = 480, columns: int | None = None,
-                label_prefix: str = "") -> Image.Image:
+                label_prefix: str = "", labels: list[str] | None = None) -> Image.Image:
     if not frames:
         raise ValueError("no frames to lay out")
     h, w = frames[0][1].shape[:2]
@@ -69,7 +69,7 @@ def build_sheet(frames: list[tuple[float, np.ndarray]], *, tile_long_edge: int =
                                             cv2.COLOR_BGR2RGB))
         x, y = (i % cols) * (tw + gap), (i // cols) * (th + gap)
         sheet.paste(tile, (x, y))
-        label = f"{label_prefix}{format_time(t)}"
+        label = labels[i] if labels else f"{label_prefix}{format_time(t)}"
         box = draw.textbbox((x + 6, y + 4), label, font=font)
         draw.rectangle((box[0] - 4, box[1] - 2, box[2] + 4, box[3] + 3), fill=(0, 0, 0))
         draw.text((x + 6, y + 4), label, fill=(255, 255, 0), font=font)

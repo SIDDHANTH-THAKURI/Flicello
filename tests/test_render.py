@@ -81,3 +81,26 @@ def test_transitions_framing_speed_and_hdr_final(ingested, cfg, tmp_path):
 
     gray = cv2.cvtColor(cv2.imread(str(frame)), cv2.COLOR_BGR2GRAY)
     assert gray.std() > 40 and np.percentile(gray, 5) < 60
+
+
+def test_punch_in_shows_the_requested_part_of_the_frame(ingested, cfg, tmp_path):
+    import cv2
+
+    project, clips, _ = ingested
+    clip = clips["a_stable"]
+    edl = EDL(project_dir=str(project.clips_dir), meta=EditMeta(width=640, height=360, fps=30, fade_in=0, fade_out=0),
+              segments=[Segment(id="z", clip_id=clip.clip_id, src_in=1.0, src_out=2.0, zoom=2.0,
+                                zoom_center=(0.25, 0.25))])
+    result = render_edl(edl, project, cfg, quality="final", out_path=tmp_path / "zoom.mp4")
+    out = cv2.VideoCapture(result.output)
+    ok, zoomed = out.read()
+    src = cv2.VideoCapture(clip.path)
+    src.set(cv2.CAP_PROP_POS_MSEC, 1000)
+    ok2, full = src.read()
+    assert ok and ok2
+    h, w = full.shape[:2]
+    quarter = cv2.resize(full[: h // 2, : w // 2], (640, 360), interpolation=cv2.INTER_AREA)
+    whole = cv2.resize(full, (640, 360), interpolation=cv2.INTER_AREA)
+    err_quarter = float(np.mean((zoomed.astype(float) - quarter) ** 2))
+    err_whole = float(np.mean((zoomed.astype(float) - whole) ** 2))
+    assert err_quarter < err_whole / 4, (err_quarter, err_whole)

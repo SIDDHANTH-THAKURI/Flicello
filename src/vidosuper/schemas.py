@@ -194,6 +194,11 @@ class Segment(BaseModel):
     transition_in: Transition = Field(default_factory=Transition)
     audio: SegmentAudio = Field(default_factory=SegmentAudio)
     framing: Literal["auto", "fill", "fit", "blur_pad"] = "auto"
+    zoom: float = Field(1.0, ge=1.0, le=2.5, description=(
+        "Punch-in: 1.25 shows the central 80% of the frame. Hides a pillar, phone mount or railing at the "
+        "edge; 4K sources allow up to 2x at 1080p without softness."))
+    zoom_center: tuple[float, float] = Field((0.5, 0.5), description=(
+        "Where the punched-in frame is centred, as fractions of the source width and height (0-1)."))
     role: str = ""
     rationale: str = ""
 
@@ -216,6 +221,7 @@ class EditMeta(BaseModel):
     fade_out: float = 1.0
     loudness_lufs: float = -14.0
     true_peak_db: float = -1.0
+    snap_to_beats: bool = Field(True, description="Nudge hard cuts onto music beats (when there is music).")
 
 
 class EDL(BaseModel):
@@ -225,6 +231,35 @@ class EDL(BaseModel):
     segments: list[Segment]
     music: MusicSpec | None = None
     notes: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Edit brief (written by the director subagent)
+# ---------------------------------------------------------------------------
+
+
+class BriefSection(BaseModel):
+    name: str = Field(..., description="e.g. 'hook', 'setting off', 'harbour walk', 'big reveal', 'ending'.")
+    purpose: str = Field(..., description="What this part does for the viewer.")
+    start: float = Field(..., description="Planned start on the finished video's timeline, seconds.")
+    end: float
+    energy: int = Field(..., ge=1, le=5)
+    shot_length: str = Field(..., description="Pacing, e.g. '1-2 beats (0.6-1.2 s), quick cuts'.")
+    music_section: str = Field("", description="Which part of the track plays here, if there is music.")
+    moments: list[str] = Field(..., description="Candidate moment ids (c05#2), best first.")
+
+
+class EditBrief(BaseModel):
+    title: str
+    logline: str = Field(..., description="One sentence: what this video is and why someone would watch it.")
+    target_seconds: float
+    hook: str = Field(..., description="Exactly what the first 1-3 seconds show, and why it grabs attention.")
+    structure: list[BriefSection]
+    ending: str = Field(..., description="How it ends and why that's satisfying.")
+    music_plan: str = Field("", description="Where the track starts, which sections land where, or why no music.")
+    must_include: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    style_notes: str = Field("", description="Transitions, speed changes, slow motion, sound, look.")
 
 
 PLATFORM_CANVAS: dict[str, tuple[int, int]] = {

@@ -43,9 +43,19 @@ def framing_filter(mode: str, width: int, height: int, blur_sigma: float) -> str
     raise ValueError(f"unknown framing mode {mode!r}")
 
 
-def gpu_prefilter(clip: ClipInfo, width: int, height: int) -> list[str]:
-    """Shrink on the GPU (QuickSync) to just cover the canvas, then download; HDR is tone-mapped after."""
-    scale = min(1.0, max(width / clip.width, height / clip.height))
+def zoom_filter(seg: Segment) -> str | None:
+    """Crop for a punch-in, centred on seg.zoom_center and kept inside the frame (even dimensions)."""
+    if seg.zoom <= 1.0001:
+        return None
+    z = seg.zoom
+    cx, cy = (min(1.0, max(0.0, v)) for v in seg.zoom_center)
+    return (f"crop=w='trunc(iw/{z:.4f}/2)*2':h='trunc(ih/{z:.4f}/2)*2':"
+            f"x='max(0,min(iw-ow,{cx:.4f}*iw-ow/2))':y='max(0,min(ih-oh,{cy:.4f}*ih-oh/2))'")
+
+
+def gpu_prefilter(clip: ClipInfo, width: int, height: int, zoom: float = 1.0) -> list[str]:
+    """Shrink on the GPU (QuickSync) to just cover the canvas (times any punch-in), then download."""
+    scale = min(1.0, max(width / clip.width, height / clip.height) * zoom)
     tw, th = _even(clip.width * scale), _even(clip.height * scale)
     fmt = "p010" if clip.hdr else "nv12"
     chain = [f"scale_qsv=w={tw}:h={th}:format={fmt}", "hwdownload", f"format={fmt}", "setsar=1"]
@@ -58,9 +68,11 @@ def segment_video_filter(clip: ClipInfo, seg: Segment, width: int, height: int, 
                          *, from_proxy: bool, blur_sigma: float, gpu: bool = False) -> str:
     pre = []
     if gpu:
-        pre += gpu_prefilter(clip, width, height)
+        pre += gpu_prefilter(clip, width, height, seg.zoom)
     elif clip.hdr and not from_proxy:  # proxies are already tone-mapped
         pre.append(tonemap_filter(clip))
+    if (crop := zoom_filter(seg)) is not None:
+        pre.append(crop)
     pre.append(f"setpts=(PTS-STARTPTS)/{seg.speed:.6f}")
     pre.append(f"fps={fps}")
     mode = resolve_framing(seg.framing, clip.width, clip.height, width, height)

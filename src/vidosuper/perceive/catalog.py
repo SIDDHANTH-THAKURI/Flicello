@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -56,8 +57,19 @@ def check_all(project: Project, clip_ids: list[str] | None = None) -> dict[str, 
     return {cid: check_analysis(project, clips[cid])[1] for cid in (clip_ids or list(clips)) if cid in clips}
 
 
+def short_ids(project: Project) -> dict[str, str]:
+    """c01, c02, ... in recording order — easier for people and agents than full clip ids."""
+    usable = [c for c in project.clips().values() if c.usable]  # the manifest is already chronological
+    return {c.clip_id: f"c{i + 1:02d}" for i, c in enumerate(usable)}
+
+
+def moment_ids(short: str, analysis: ClipAnalysis) -> list[tuple[str, object]]:
+    return [(f"{short}#{n + 1}", m) for n, m in enumerate(sorted(analysis.moments, key=lambda m: m.start))]
+
+
 def build_catalog(project: Project) -> dict:
     entries = []
+    shorts = short_ids(project)
     for clip in project.clips().values():
         if not clip.usable:
             continue
@@ -66,6 +78,7 @@ def build_catalog(project: Project) -> dict:
         transcript = load_transcript(project, clip.clip_id)
         sheets = sorted(str(p) for p in perception_dir(project, clip.clip_id).glob("sheet_*.jpg"))
         entries.append({
+            "short": shorts[clip.clip_id],
             "clip": clip.model_dump(mode="json", include={"clip_id", "rel_path", "duration", "width", "height",
                                                           "fps", "has_audio", "creation_time", "chapter"}),
             "signals": signals.model_dump(mode="json") if signals else None,
@@ -77,7 +90,53 @@ def build_catalog(project: Project) -> dict:
     catalog = {"clips_dir": str(project.clips_dir), "clips": entries}
     write_text_atomic(project.root / "catalog.json", json.dumps(catalog, indent=1))
     write_text_atomic(project.root / "catalog.html", render_html(catalog, project.root))
+    write_text_atomic(project.root / "catalog.md", render_markdown(catalog))
     return catalog
+
+
+def render_markdown(catalog: dict) -> str:
+    """Compact, token-cheap catalog for the director and editor agents."""
+    entries = catalog["clips"]
+    total = sum(e["clip"]["duration"] for e in entries)
+    lines = [
+        "# Footage catalog",
+        f"Clips folder: {catalog['clips_dir']} · {len(entries)} clips · {format_time(total)} of footage.",
+        "Times are clip seconds. Moments are `<clip>#<n>`. In an EDL, clip_id may be the short id (c05) or the "
+        "full id in brackets.",
+        "",
+    ]
+    for e in entries:
+        clip, a, sig = e["clip"], e["analysis"], e["signals"]
+        created = clip.get("creation_time")
+        when = datetime.fromisoformat(created).astimezone().strftime("%H:%M") if created else "?"
+        slowmo = f" ({clip['fps'] / 30:.0f}x slow-mo ok)" if clip["fps"] >= 47 else ""
+        lines.append(f"## {e['short']} [{clip['clip_id']}] {clip['duration']:.1f}s · {when} · ch{clip['chapter']} · "
+                     f"{clip['width']}x{clip['height']} {clip['fps']:.0f}fps{slowmo} · "
+                     f"{'audio' if clip['has_audio'] else 'no audio'}")
+        if not a:
+            lines.append("(not analysed)")
+            lines.append("")
+            continue
+        lines.append(f"{a['summary']} | scene: {a['scene']} | camera: {a['camera']} | energy {a['energy']}/5 · "
+                     f"appeal {a['visual_appeal']}/10" + (f" | place: {a['location_guess']}" if a.get("location_guess") else ""))
+        bad = [f"{u['start']:.1f}-{u['end']:.1f} {u['reason']}" for u in a["unusable"]]
+        if sig:
+            bad += [f"{b['start']:.1f}-{b['end']:.1f} {b['reason']} (auto)" for b in sig["bad_intervals"]]
+        if bad:
+            lines.append("Avoid: " + "; ".join(bad))
+        if a["issues"]:
+            lines.append("Issues: " + " ; ".join(a["issues"]))
+        for n, m in enumerate(sorted(a["moments"], key=lambda m: m["start"])):
+            peak = f" peak {m['peak']:.1f}" if m.get("peak") is not None else ""
+            notes = f" [{m['notes']}]" if m.get("notes") else ""
+            lines.append(f"- {e['short']}#{n + 1} {m['start']:.1f}-{m['end']:.1f}{peak} · {m['kind']} · hook {m['hook']} · "
+                         f"str {m['strength']} · {m['best_use']} · sound {m['sound']} — {m['description']}{notes}")
+        if e["speech"]:
+            lines.append("Speech: " + " / ".join(e["speech"][:6]))
+        if a.get("speed_ideas"):
+            lines.append("Speed ideas: " + a["speed_ideas"])
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _rel(path: str, root: Path) -> str:

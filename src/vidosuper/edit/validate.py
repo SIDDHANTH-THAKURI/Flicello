@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from ..schemas import EDL, ClipInfo, ClipSignals
+from ..schemas import EDL, ClipInfo, ClipSignals, Interval
 
 BOUNDS_SLACK = 0.05  # seconds past the end of a clip we silently clamp
 
@@ -23,8 +23,11 @@ class Issue:
 
 
 def validate_edl(edl: EDL, clips: dict[str, ClipInfo], signals: dict[str, ClipSignals] | None = None,
-                 *, repair: bool = True) -> list[Issue]:
-    """Check the recipe. With repair=True, tiny overruns past a clip's end are clamped in place."""
+                 *, unusable: dict[str, list[Interval]] | None = None, repair: bool = True) -> list[Issue]:
+    """Check the recipe. With repair=True, tiny overruns past a clip's end are clamped in place.
+
+    `unusable` holds ranges the AI analysts marked as never-use (stricter than the automatic flags).
+    """
     issues: list[Issue] = []
     if not edl.segments:
         issues.append(Issue("error", None, "the edit has no segments"))
@@ -69,6 +72,11 @@ def validate_edl(edl: EDL, clips: dict[str, ClipInfo], signals: dict[str, ClipSi
         if seg.speed < 1 and clip.fps * seg.speed < 0.9 * fps:
             issues.append(Issue("warning", sid, f"{seg.speed}x slow motion from a {clip.fps:.0f} fps clip will look choppy "
                                                 f"(needs {fps / seg.speed:.0f} fps source)"))
+        if seg.zoom > 1.0001:
+            short_side = min(clip.width, clip.height) / seg.zoom
+            if short_side < 0.75 * min(edl.meta.width, edl.meta.height):
+                issues.append(Issue("warning", sid, f"{seg.zoom:g}x punch-in leaves {short_side:.0f}px of the "
+                                                    f"{min(clip.width, clip.height)}px source; it will look soft"))
         if seg.audio.mode == "original" and not clip.has_audio:
             issues.append(Issue("warning", sid, "audio mode 'original' but the clip has no audio"))
 
@@ -83,6 +91,11 @@ def validate_edl(edl: EDL, clips: dict[str, ClipInfo], signals: dict[str, ClipSi
                     reasons.add(bad.reason)
             if overlap / (seg.src_out - seg.src_in) > 0.3:
                 issues.append(Issue("warning", sid, f"{overlap:.1f}s of this shot is {', '.join(sorted(reasons))}"))
+        for bad in (unusable or {}).get(seg.clip_id, []):
+            o = min(seg.src_out, bad.end) - max(seg.src_in, bad.start)
+            if o > 0.2:
+                issues.append(Issue("warning", sid, f"uses {o:.1f}s of a range marked unusable "
+                                                    f"({bad.start:.1f}-{bad.end:.1f}s: {bad.reason})"))
         for start, end, other in used.get(seg.clip_id, []):
             o = min(seg.src_out, end) - max(seg.src_in, start)
             if o > 0.5 * min(seg.src_out - seg.src_in, end - start):

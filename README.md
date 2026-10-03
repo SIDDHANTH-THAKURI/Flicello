@@ -17,6 +17,21 @@ From Git Bash use `./vido` instead of `.\vido.cmd`.
 | Say / type | What happens |
 |---|---|
 | `/analyze-footage <clips folder>` | Phase 2: transcripts + contact sheets, `clip-analyst` subagents log every clip, then a catalog (`catalog.html`) of moments and problems |
+| `/edit-video <clips folder> ...` | Phase 3: `director` plans the story, `editor` cuts a beat-synced draft, you review, final render lands in `Videos\VidoSuper` |
+
+## Commands (Phase 3: editing)
+
+| Command | What it does |
+|---|---|
+| `vido music analyze <track>` | Tempo, beat grid, bar starts, sections (intro/build/peak/break/outro), drops |
+| `vido music placeholder <out.wav>` | Synthesised license-free placeholder track for testing beat-synced edits |
+| `vido edit start <clips folder> --intent "..." [--platform youtube] [--duration 60] [--music track]` | Starts an edit run (folder with run.json, catalog.md, music.json) |
+| `vido edit status <run>` | Stage, history and the exact next step |
+| `vido edit submit-brief <run>` | Validates the director's brief.json |
+| `vido edit submit-edl <run>` | Validates the editor's edl.json, snaps cuts to beats, renders the draft + shot sheets + notes |
+| `vido edit revise <run>` | Starts the next iteration from the current EDL |
+| `vido edit final <run> [--open]` | Full-quality render to `%USERPROFILE%\Videos\VidoSuper\` |
+| `vido schema edit-brief` / `vido schema edl` | Formats the agents follow |
 
 ## Commands (Phase 2: perception)
 
