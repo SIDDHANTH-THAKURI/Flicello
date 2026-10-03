@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+
+# Secrets
+.env
+
+# Media and renders (heavy files live in %LOCALAPPDATA%\VidoSuper)
+*.mp4
+*.mov
+*.m4v
+*.mkv
+*.wav
+*.mp3
+*.m4a
+
+# Claude Code per-machine settings
+.claude/settings.local.json
+
+# OS / editors
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

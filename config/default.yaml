@@ -1,0 +1,63 @@
+# VidoSuper default configuration. Every value can be overridden per run.
+# Personal overrides can go in %USERPROFILE%\.vidosuper\config.yaml (same keys).
+
+mode: claude_code                # claude_code (Pro plan) | api (optional, later)
+workspace: auto                  # auto = %LOCALAPPDATA%\VidoSuper ; or an absolute path
+
+agents:                          # model per role (Claude Code subagent model aliases)
+  clip_analyst: sonnet
+  director: opus
+  editor: opus
+  critics: sonnet
+  adversary: opus
+  judge: opus
+
+loop:
+  max_rounds: 5
+  target_score: 8.5              # weighted, 0-10
+  max_blockers: 0
+  max_major_issues: 1
+  stop_after_no_gain: 2          # rounds without improvement
+  issues_per_round: 6
+  checkpoints: [1]               # pause for your review after round 1; [] = never
+
+limits:
+  max_minutes: 180               # active work time (usage-limit pauses don't count)
+  max_usd: 15                    # API mode only
+
+critic_weights: {hook: 0.20, story: 0.25, pacing: 0.25, technical: 0.15, style: 0.10, taste: 0.05}
+
+output:
+  platform: youtube              # youtube | reels | shorts | tiktok | square
+  resolution: 1080p              # 1080p | 4k
+  fps: auto                      # auto | 24 | 25 | 30 | 50 | 60
+  loudness_lufs: -14
+  true_peak_db: -1.0
+  captions: auto                 # auto (on for vertical) | on | off
+
+ingest:
+  extensions: [.mp4, .mov, .m4v, .mkv, .avi, .mts, .m2ts, .3gp, .webm]
+  proxy_long_edge: 640
+  proxy_fps: 30
+  workers: 2
+  hwaccel: auto                  # auto (Intel QuickSync GPU decode when available) | none
+  chapter_gap_hours: 3
+  chapter_distance_km: 15
+
+measure:
+  analysis_fps: 10               # samples per second for shake/blur/exposure/motion
+  analysis_width: 320
+  workers: 4
+  window_seconds: 3.0            # length of "best window" candidates
+
+render:
+  workers: 3
+  draft: {short_side: 540, preset: ultrafast, crf: 23}
+  final: {encoder: libx264, preset: slow, crf: 18, intermediate_crf: 12}
+  audio_bitrate: 256k
+  blur_pad_sigma: 30
+  music_duck_db: -12
+
+analysis:
+  frames_per_second: 0.5         # contact-sheet sampling (Phase 2)
+  whisper_model: small

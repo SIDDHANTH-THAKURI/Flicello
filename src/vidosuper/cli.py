@@ -1,0 +1,286 @@
+"""`vido` command line."""
+
+from __future__ import annotations
+
+import importlib
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+import typer
+from rich.console import Console
+from rich.markup import escape
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+
+from . import __version__
+from .config import Config, load_config
+from .edit import baseline_edl, choose_fps, validate_edl
+from .ffmpeg import capabilities, ffmpeg_bin, ffprobe_bin
+from .ingest import ingest_folder
+from .ingest.chapters import chronological
+from .perceive import measure_project
+from .render import EDLValidationError, render_edl
+from .schemas import EDL, PLATFORM_CANVAS, EditMeta, MusicSpec, canvas_for
+from .workspace import Project, write_model
+
+app = typer.Typer(add_completion=False, no_args_is_help=True,
+                  help="VidoSuper: AI video editor toolkit. Most work is driven by the /edit-video skill in Claude Code.")
+
+# When piped (e.g. run by Claude Code), Windows defaults to cp1252; force UTF-8 and a wide layout.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure") and (_stream.encoding or "").lower().replace("-", "") != "utf8":
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+console = Console() if sys.stdout.isatty() else Console(width=160)
+
+REQUIRED_ENCODERS = ("libx264", "aac")
+REQUIRED_FILTERS = ("zscale", "tonemap", "xfade", "gblur", "fade", "overlay", "tpad", "atempo", "apad",
+                    "aresample", "concat", "settb", "eq")
+OPTIONAL_FILTERS = ("vidstabdetect", "vidstabtransform", "subtitles", "drawtext")
+PACKAGES = (("numpy", True), ("cv2", True), ("scipy", True), ("soundfile", True), ("pyloudnorm", True),
+            ("PIL", True), ("pydantic", True), ("librosa", False), ("faster_whisper", False),
+            ("scenedetect", False), ("imagehash", False), ("jinja2", False))
+
+
+def _progress() -> Progress:
+    return Progress(SpinnerColumn(), TextColumn("[bold]{task.description}"), BarColumn(), MofNCompleteColumn(),
+                    TimeElapsedColumn(), console=console, transient=False)
+
+
+def _analyze(folder: Path, cfg: Config, force: bool = False) -> Project:
+    from .ingest.scan import scan_folder
+
+    total = len(scan_folder(Path(folder).expanduser().resolve(), cfg.ingest.extensions))
+    with _progress() as progress:
+        task = progress.add_task("Ingest (probe + proxies)", total=total)
+        project, clips = ingest_folder(folder, cfg, force=force, on_clip=lambda _: progress.advance(task))
+        progress.update(task, completed=total)
+        usable = [c for c in clips if c.usable]
+        task2 = progress.add_task("Measure (shake, blur, light, motion)", total=len(usable))
+        measure_project(project, cfg, force=force, on_clip=lambda _: progress.advance(task2))
+        progress.update(task2, completed=len(usable))
+    failed = [c for c in clips if not c.usable]
+    console.print(f"[green]{len(usable)} clips ready[/] in {escape(str(project.root))}")
+    for clip in failed:
+        console.print(f"[yellow]skipped[/] {escape(clip.rel_path)}: {escape(clip.error or '')}")
+    return project
+
+
+@app.command()
+def doctor() -> None:
+    """Check that FFmpeg, Python packages and the workspace are ready."""
+    cfg = load_config()
+    ok = True
+    table = Table(title=f"VidoSuper {__version__} doctor", show_lines=False)
+    table.add_column("Check")
+    table.add_column("Status")
+    table.add_column("Details", overflow="fold")
+
+    def row(name: str, good: bool, detail: str, required: bool = True) -> None:
+        nonlocal ok
+        status = "[green]OK[/]" if good else ("[red]MISSING[/]" if required else "[yellow]optional[/]")
+        ok = ok and (good or not required)
+        table.add_row(name, status, detail)
+
+    try:
+        caps = capabilities()
+        row("ffmpeg", caps["major"] >= 7, f"{caps['version']}\n{ffmpeg_bin()}")
+        row("ffprobe", True, ffprobe_bin())
+        missing_enc = [e for e in REQUIRED_ENCODERS if e not in caps["encoders"]]
+        row("encoders", not missing_enc, "missing: " + ", ".join(missing_enc) if missing_enc else ", ".join(REQUIRED_ENCODERS))
+        missing_f = [f for f in REQUIRED_FILTERS if f not in caps["filters"]]
+        row("filters", not missing_f, "missing: " + ", ".join(missing_f) if missing_f else f"{len(REQUIRED_FILTERS)} required present")
+        opt_f = [f for f in OPTIONAL_FILTERS if f not in caps["filters"]]
+        row("extra filters", not opt_f, "missing: " + ", ".join(opt_f) if opt_f else "stabilization + captions available", required=False)
+        row("Intel QuickSync", "h264_qsv" in caps["encoders"] and "qsv" in caps["hwaccels"],
+            "hardware encode/decode available" if "qsv" in caps["hwaccels"] else "not available", required=False)
+    except FileNotFoundError as exc:
+        row("ffmpeg", False, str(exc))
+
+    for name, required in PACKAGES:
+        try:
+            module = importlib.import_module(name)
+            row(f"python: {name}", True, str(getattr(module, "__version__", "")), required)
+        except Exception as exc:  # noqa: BLE001 - report anything that breaks an import
+            row(f"python: {name}", False, f"{type(exc).__name__}: {exc}", required)
+
+    root = cfg.workspace_root
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".write_test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        free_gb = shutil.disk_usage(root).free / 1e9
+        detail = f"{root}\n{free_gb:.0f} GB free"
+        if "onedrive" in str(root).lower():
+            detail += "\nWARNING: inside OneDrive; large files will sync"
+        row("workspace", free_gb > 5, detail)
+    except OSError as exc:
+        row("workspace", False, f"{root}: {exc}")
+    row("python", sys.version_info >= (3, 11), sys.version.split()[0])
+    row("mode", True, cfg.mode)
+    console.print(table)
+    if not ok:
+        raise typer.Exit(1)
+
+
+@app.command()
+def analyze(folder: Path = typer.Argument(..., help="Folder with your raw clips"),
+            force: bool = typer.Option(False, help="Redo everything, ignoring the cache")) -> None:
+    """Ingest + measure a clips folder (cached; safe to re-run)."""
+    _analyze(folder, load_config(), force)
+
+
+@app.command()
+def clips(folder: Path = typer.Argument(..., help="Folder with your raw clips"),
+          as_json: bool = typer.Option(False, "--json", help="Machine-readable output")) -> None:
+    """Show what was found in a clips folder, with technical quality."""
+    cfg = load_config()
+    project = Project(folder, cfg)
+    manifest = project.clips()
+    if as_json:
+        payload = []
+        for clip in manifest.values():
+            sig = project.load_signals(clip.clip_id)
+            payload.append({"clip": clip.model_dump(mode="json"),
+                            "signals": sig.model_dump(mode="json") if sig else None})
+        print(json.dumps(payload, indent=1))
+        return
+    table = Table(title=str(project.clips_dir))
+    for col in ("clip", "ch", "len", "size", "fps", "flags", "quality", "shake", "sharp", "bright", "bad parts"):
+        table.add_column(col)
+    for clip in manifest.values():
+        if not clip.usable:
+            table.add_row(clip.clip_id, "-", "-", "-", "-", "[red]error[/]", escape(clip.error or ""), "", "", "", "")
+            continue
+        sig = project.load_signals(clip.clip_id)
+        flags = " ".join(f for f, on in (("HDR", clip.hdr), ("VFR", clip.vfr), ("no-audio", not clip.has_audio),
+                                         (f"rot{clip.rotation}", clip.rotation != 0)) if on)
+        bad = ", ".join(f"{b.start:.1f}-{b.end:.1f}s {b.reason}" for b in sig.bad_intervals[:3]) if sig else ""
+        table.add_row(
+            clip.clip_id, str(clip.chapter), f"{clip.duration:.1f}s", f"{clip.width}x{clip.height}", f"{clip.fps:.0f}",
+            flags, f"{sig.quality_mean:.2f}" if sig else "-", f"{sig.shake_median:.3f}" if sig else "-",
+            f"{sig.sharpness_median:.2f}" if sig else "-", f"{sig.brightness_mean:.0f}" if sig else "-", escape(bad),
+        )
+    console.print(table)
+
+
+@app.command()
+def baseline(
+    folder: Path = typer.Argument(..., help="Folder with your raw clips"),
+    duration: float = typer.Option(60.0, help="Target length in seconds"),
+    platform: str = typer.Option("youtube", help="youtube | reels | shorts | tiktok | square"),
+    resolution: str = typer.Option("1080p", help="1080p | 4k"),
+    music: Path | None = typer.Option(None, help="Optional music file"),
+    quality: str = typer.Option("draft", help="draft (fast preview) | final (full quality)"),
+    shot: float = typer.Option(3.0, help="Seconds per shot"),
+    out: Path | None = typer.Option(None, help="Output file"),
+    open_file: bool = typer.Option(False, "--open", help="Open the result when done"),
+) -> None:
+    """Non-AI montage (best technical window per clip). Tests the whole pipeline end to end."""
+    if platform not in PLATFORM_CANVAS:
+        raise typer.BadParameter(f"platform must be one of {', '.join(PLATFORM_CANVAS)}")
+    cfg = load_config()
+    project = _analyze(folder, cfg)
+    clip_list = chronological([c for c in project.clips().values() if c.usable])
+    signals = {c.clip_id: s for c in clip_list if (s := project.load_signals(c.clip_id)) is not None}
+    fps = choose_fps(clip_list) if cfg.output.fps == "auto" else int(cfg.output.fps)
+    width, height = canvas_for(platform, resolution)
+    meta = EditMeta(title=f"{project.clips_dir.name} (baseline)", platform=platform, width=width, height=height,
+                    fps=fps, loudness_lufs=cfg.output.loudness_lufs, true_peak_db=cfg.output.true_peak_db)
+    music_spec = MusicSpec(path=str(music.expanduser().resolve())) if music else None
+    edl = baseline_edl(clip_list, signals, project_dir=str(project.clips_dir), meta=meta,
+                       target_seconds=duration, shot_seconds=shot, music=music_spec)
+    if not edl.segments:
+        console.print("[red]No usable shots found.[/]")
+        raise typer.Exit(1)
+    edl_path = project.edls / "baseline.json"
+    write_model(edl_path, edl)
+    _render(edl, project, cfg, quality, out or project.renders / f"baseline_{platform}_{quality}.mp4", open_file)
+    console.print(f"EDL: {escape(str(edl_path))}")
+
+
+@app.command()
+def render(
+    edl_file: Path = typer.Argument(..., help="EDL JSON file"),
+    quality: str = typer.Option("draft", help="draft | final"),
+    out: Path | None = typer.Option(None, help="Output file"),
+    open_file: bool = typer.Option(False, "--open", help="Open the result when done"),
+) -> None:
+    """Render an EDL."""
+    cfg = load_config()
+    edl = EDL.model_validate_json(edl_file.read_text(encoding="utf-8"))
+    project = Project(edl.project_dir, cfg)
+    _render(edl, project, cfg, quality, out or project.renders / f"{edl_file.stem}_{quality}.mp4", open_file)
+
+
+def _render(edl: EDL, project: Project, cfg: Config, quality: str, out: Path, open_file: bool) -> None:
+    try:
+        with _progress() as progress:
+            task = progress.add_task(f"Render {quality}", total=len(edl.segments))
+            result = render_edl(edl, project, cfg, quality=quality, out_path=out,
+                                on_shot=lambda: progress.advance(task))
+    except EDLValidationError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    console.print(
+        f"[green]Rendered[/] {escape(result.output)}\n"
+        f"  {result.width}x{result.height} @ {result.fps} fps, {result.duration:.1f}s, {result.shots} shots "
+        f"({result.shots_rendered} new), {result.seconds:.0f}s to render"
+    )
+    if result.loudness_measured is not None:
+        console.print(f"  loudness {result.loudness_measured:.1f} LUFS -> {edl.meta.loudness_lufs:.0f} LUFS")
+    for warning in result.warnings:
+        console.print(f"  [yellow]{escape(warning)}[/]")
+    if open_file and os.name == "nt":
+        os.startfile(result.output)  # noqa: S606 - opening the user's own render
+
+
+@app.command()
+def sheet(
+    video: Path = typer.Argument(..., help="Any video file (a render, a proxy, an original)"),
+    every: float = typer.Option(1.0, help="Seconds between frames"),
+    per_sheet: int = typer.Option(16, help="Frames per sheet image"),
+    out_dir: Path | None = typer.Option(None, help="Where to write the sheets (default: next to the video)"),
+) -> None:
+    """Timestamped frame grids of a video, for eyeballing an edit."""
+    from .ffmpeg import ffprobe_json
+    from .perceive.contact_sheet import sheets_for_video
+
+    duration = float(ffprobe_json(video)["format"]["duration"])
+    paths = sheets_for_video(video, duration, out_dir or video.parent, video.stem + "_sheet", every=every,
+                             per_sheet=per_sheet, max_frames=400)
+    for path in paths:
+        console.print(escape(str(path)))
+
+
+@app.command()
+def samples(folder: Path = typer.Argument(..., help="Where to write the synthetic test clips")) -> None:
+    """Write synthetic test clips (shaky, blurry, dark, HDR, rotated, 60 fps, no audio) + a music track."""
+    from .devtools import make_synthetic_clips
+
+    clips_dir, music = make_synthetic_clips(folder.expanduser().resolve())
+    console.print(f"Clips: {escape(str(clips_dir))}\nMusic: {escape(str(music))}")
+
+
+@app.command()
+def validate(edl_file: Path = typer.Argument(..., help="EDL JSON file")) -> None:
+    """Check an EDL without rendering it."""
+    cfg = load_config()
+    edl = EDL.model_validate_json(edl_file.read_text(encoding="utf-8"))
+    project = Project(edl.project_dir, cfg)
+    clip_map = project.clips()
+    signals = {cid: s for cid in clip_map if (s := project.load_signals(cid)) is not None}
+    issues = validate_edl(edl, clip_map, signals, repair=False)
+    for issue in issues:
+        console.print(("[red]" if issue.level == "error" else "[yellow]") + escape(str(issue)) + "[/]")
+    if not issues:
+        console.print("[green]EDL OK[/]")
+    if any(i.level == "error" for i in issues):
+        raise typer.Exit(1)
+
+
+if __name__ == "__main__":
+    app()

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Git Bash launcher for the vido CLI (the Python env lives outside OneDrive).
+base="${LOCALAPPDATA:-$HOME/AppData/Local}"
+if command -v cygpath >/dev/null 2>&1; then base="$(cygpath -u "$base")"; fi
+exe="$base/VidoSuper/venv/Scripts/vido.exe"
+if [ ! -x "$exe" ]; then
+  echo "VidoSuper is not installed yet. Run: powershell -ExecutionPolicy Bypass -File scripts/setup.ps1" >&2
+  exit 1
+fi
+exec "$exe" "$@"

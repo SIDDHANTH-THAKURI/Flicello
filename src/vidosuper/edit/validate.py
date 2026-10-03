@@ -1,0 +1,94 @@
+"""EDL checks. Errors block rendering; warnings are fed back to the editor as things to consider."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+from ..schemas import EDL, ClipInfo, ClipSignals
+
+BOUNDS_SLACK = 0.05  # seconds past the end of a clip we silently clamp
+
+
+@dataclass
+class Issue:
+    level: Literal["error", "warning"]
+    segment: str | None
+    message: str
+
+    def __str__(self) -> str:
+        where = f"[{self.segment}] " if self.segment else ""
+        return f"{self.level.upper()}: {where}{self.message}"
+
+
+def validate_edl(edl: EDL, clips: dict[str, ClipInfo], signals: dict[str, ClipSignals] | None = None,
+                 *, repair: bool = True) -> list[Issue]:
+    """Check the recipe. With repair=True, tiny overruns past a clip's end are clamped in place."""
+    issues: list[Issue] = []
+    if not edl.segments:
+        issues.append(Issue("error", None, "the edit has no segments"))
+    seen: set[str] = set()
+    used: dict[str, list[tuple[float, float, str]]] = {}
+    fps = edl.meta.fps
+    if fps <= 0 or edl.meta.width <= 0 or edl.meta.height <= 0:
+        issues.append(Issue("error", None, "meta.fps/width/height must be positive"))
+    if edl.meta.width % 2 or edl.meta.height % 2:
+        issues.append(Issue("error", None, "meta.width and meta.height must be even numbers"))
+
+    for seg in edl.segments:
+        sid = seg.id
+        if sid in seen:
+            issues.append(Issue("error", sid, "duplicate segment id"))
+        seen.add(sid)
+        clip = clips.get(seg.clip_id)
+        if clip is None:
+            issues.append(Issue("error", sid, f"unknown clip_id {seg.clip_id!r}"))
+            continue
+        if not clip.usable:
+            issues.append(Issue("error", sid, f"clip {seg.clip_id} failed to ingest: {clip.error}"))
+            continue
+        if not 0.1 <= seg.speed <= 8.0:
+            issues.append(Issue("error", sid, f"speed {seg.speed} outside 0.1-8"))
+            continue
+        if seg.src_in < 0:
+            issues.append(Issue("error", sid, f"src_in {seg.src_in} is negative"))
+        if seg.src_out > clip.duration:
+            if repair and seg.src_out <= clip.duration + BOUNDS_SLACK:
+                seg.src_out = round(clip.duration, 3)
+            else:
+                issues.append(Issue("error", sid, f"src_out {seg.src_out:.2f}s is past the clip end ({clip.duration:.2f}s)"))
+        if seg.src_out <= seg.src_in:
+            issues.append(Issue("error", sid, "src_out must be after src_in"))
+            continue
+        out_len = (seg.src_out - seg.src_in) / seg.speed
+        if out_len < 0.2:
+            issues.append(Issue("error", sid, f"shot is only {out_len:.2f}s on screen (minimum 0.2s)"))
+        if seg.transition_in.type != "cut" and seg.transition_in.duration <= 0:
+            issues.append(Issue("warning", sid, f"{seg.transition_in.type} transition with zero duration acts as a cut"))
+        if seg.speed < 1 and clip.fps * seg.speed < 0.9 * fps:
+            issues.append(Issue("warning", sid, f"{seg.speed}x slow motion from a {clip.fps:.0f} fps clip will look choppy "
+                                                f"(needs {fps / seg.speed:.0f} fps source)"))
+        if seg.audio.mode == "original" and not clip.has_audio:
+            issues.append(Issue("warning", sid, "audio mode 'original' but the clip has no audio"))
+
+        sig = (signals or {}).get(seg.clip_id)
+        if sig is not None:
+            overlap = 0.0
+            reasons = set()
+            for bad in sig.bad_intervals:
+                o = min(seg.src_out, bad.end) - max(seg.src_in, bad.start)
+                if o > 0:
+                    overlap += o
+                    reasons.add(bad.reason)
+            if overlap / (seg.src_out - seg.src_in) > 0.3:
+                issues.append(Issue("warning", sid, f"{overlap:.1f}s of this shot is {', '.join(sorted(reasons))}"))
+        for start, end, other in used.get(seg.clip_id, []):
+            o = min(seg.src_out, end) - max(seg.src_in, start)
+            if o > 0.5 * min(seg.src_out - seg.src_in, end - start):
+                issues.append(Issue("warning", sid, f"re-uses most of the same footage as {other}"))
+        used.setdefault(seg.clip_id, []).append((seg.src_in, seg.src_out, sid))
+
+    if edl.music is not None and not Path(edl.music.path).is_file():
+        issues.append(Issue("error", None, f"music file not found: {edl.music.path}"))
+    return issues

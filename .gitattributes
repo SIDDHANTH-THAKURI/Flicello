@@ -1,0 +1,5 @@
+* text=auto
+# The Git Bash launcher breaks with Windows line endings
+vido text eol=lf
+*.sh text eol=lf
+*.cmd text eol=crlf
