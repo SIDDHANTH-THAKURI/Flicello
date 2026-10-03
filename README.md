@@ -12,6 +12,22 @@ powershell -ExecutionPolicy Bypass -File scripts\setup.ps1   # Python env in %LO
 
 From Git Bash use `./vido` instead of `.\vido.cmd`.
 
+## In Claude Code
+
+| Say / type | What happens |
+|---|---|
+| `/analyze-footage <clips folder>` | Phase 2: transcripts + contact sheets, `clip-analyst` subagents log every clip, then a catalog (`catalog.html`) of moments and problems |
+
+## Commands (Phase 2: perception)
+
+| Command | What it does |
+|---|---|
+| `vido perceive prep <clips folder>` | Speech transcripts (local Whisper), timestamped contact sheets and a brief per clip; batches for analysts |
+| `vido perceive check <clips folder> [--clip ID]` | Validates the analysts' `analysis.json` files, explaining any problem |
+| `vido inspect <clips folder> <clip> <start> <end>` | Dense timestamped frames of one stretch (exact in/out points) |
+| `vido catalog <clips folder> [--open]` | Builds `catalog.json` + `catalog.html` from measurements and analyses |
+| `vido schema clip-analysis` | JSON schema the analysts follow |
+
 ## Commands (Phase 1)
 
 | Command | What it does |

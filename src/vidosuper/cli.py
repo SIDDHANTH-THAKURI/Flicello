@@ -238,6 +238,104 @@ def _render(edl: EDL, project: Project, cfg: Config, quality: str, out: Path, op
         os.startfile(result.output)  # noqa: S606 - opening the user's own render
 
 
+perceive_app = typer.Typer(no_args_is_help=True, help="Phase 2: material for the clip-analyst subagents.")
+app.add_typer(perceive_app, name="perceive")
+
+
+def _find_clip(project: Project, key: str):
+    clips = project.clips()
+    if key in clips:
+        return clips[key]
+    matches = [c for cid, c in clips.items() if key in cid]
+    if len(matches) != 1:
+        raise typer.BadParameter(f"clip {key!r} matches {len(matches)} clips; use more of the id")
+    return matches[0]
+
+
+@perceive_app.command("prep")
+def perceive_prep(folder: Path = typer.Argument(..., help="Folder with your raw clips"),
+                  force: bool = typer.Option(False, help="Redo transcripts and sheets")) -> None:
+    """Transcribe speech, make contact sheets and a brief per clip, and batch clips for analysts."""
+    from .perceive.prep import format_tasks, prepare_perception
+
+    cfg = load_config()
+    project = _analyze(folder, cfg)
+    usable = [c for c in project.clips().values() if c.usable]
+    with _progress() as progress:
+        task = progress.add_task("Transcripts + contact sheets", total=len(usable))
+        tasks = prepare_perception(project, cfg, force=force, on_clip=lambda _: progress.advance(task))
+    console.print(escape(format_tasks(tasks)))
+    console.print(f"Tasks file: {escape(str(project.root / 'perception' / 'tasks.json'))}")
+
+
+@perceive_app.command("check")
+def perceive_check(folder: Path = typer.Argument(..., help="Folder with your raw clips"),
+                   clip: str | None = typer.Option(None, help="Only this clip (id or unique part of it)")) -> None:
+    """Validate the analysts' analysis.json files."""
+    from .perceive.catalog import check_all
+
+    project = Project(folder, load_config())
+    ids = [_find_clip(project, clip).clip_id] if clip else None
+    results = check_all(project, ids)
+    bad = {cid: probs for cid, probs in results.items() if probs}
+    for cid, probs in bad.items():
+        console.print(f"[red]{escape(cid)}[/]")
+        for p in probs:
+            console.print(f"  - {escape(p)}")
+    console.print(f"{len(results) - len(bad)}/{len(results)} analyses valid")
+    if bad:
+        raise typer.Exit(1)
+
+
+@app.command()
+def inspect(folder: Path = typer.Argument(..., help="Folder with your raw clips"),
+            clip: str = typer.Argument(..., help="Clip id (or a unique part of it)"),
+            start: float = typer.Argument(..., help="Start, clip seconds"),
+            end: float = typer.Argument(..., help="End, clip seconds"),
+            fps: float = typer.Option(4.0, help="Frames per second to show (max 24 frames)")) -> None:
+    """Dense, timestamped frames of one stretch of a clip, for picking exact in/out points."""
+    from .perceive.contact_sheet import build_sheet, grab_frames
+    from .perceive.prep import perception_dir
+
+    project = Project(folder, load_config())
+    info = _find_clip(project, clip)
+    start, end = max(0.0, start), min(info.duration, end)
+    if end <= start:
+        raise typer.BadParameter("end must be after start (and inside the clip)")
+    step = max(1.0 / fps, (end - start) / 24)
+    times = [start + i * step for i in range(int((end - start) / step) + 1)]
+    out = perception_dir(project, info.clip_id) / f"inspect_{start:.2f}-{end:.2f}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    build_sheet(grab_frames(info.proxy, times), tile_long_edge=400, columns=6).save(out, quality=88)
+    console.print(escape(str(out)))
+
+
+@app.command()
+def schema(name: str = typer.Argument(..., help="clip-analysis | edl")) -> None:
+    """Print the JSON schema an agent must follow."""
+    from .schemas import ClipAnalysis
+
+    models = {"clip-analysis": ClipAnalysis, "edl": EDL}
+    if name not in models:
+        raise typer.BadParameter(f"one of: {', '.join(models)}")
+    print(json.dumps(models[name].model_json_schema(), indent=1))
+
+
+@app.command()
+def catalog(folder: Path = typer.Argument(..., help="Folder with your raw clips"),
+            open_file: bool = typer.Option(False, "--open", help="Open the HTML viewer")) -> None:
+    """Assemble the clip catalog (catalog.json + catalog.html) from measurements and analyses."""
+    from .perceive.catalog import build_catalog
+
+    project = Project(folder, load_config())
+    result = build_catalog(project)
+    done = sum(1 for e in result["clips"] if e["analysis"])
+    html_path = project.root / "catalog.html"
+    console.print(f"{done}/{len(result['clips'])} clips analysed\n{escape(str(html_path))}")
+    if open_file and os.name == "nt":
+        os.startfile(html_path)  # noqa: S606 - the user's own report
+
+
 @app.command()
 def sheet(
     video: Path = typer.Argument(..., help="Any video file (a render, a proxy, an original)"),

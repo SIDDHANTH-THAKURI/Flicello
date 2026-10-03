@@ -122,6 +122,48 @@ class ClipSignals(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# AI perception (written by clip-analyst subagents, validated by `vido perceive check`)
+# ---------------------------------------------------------------------------
+
+MomentKind = Literal["action", "reaction", "people", "dialogue", "funny", "scenic", "establishing", "food",
+                     "detail", "motion", "transition", "other"]
+MomentUse = Literal["hook", "opener", "establishing", "highlight", "b-roll", "transition", "closer"]
+
+
+class Moment(BaseModel):
+    """A stretch of a clip worth using, with editor-grade in/out points (clip seconds)."""
+
+    start: float
+    end: float
+    peak: float | None = Field(None, description="The single best instant, if there is one.")
+    kind: MomentKind
+    description: str
+    hook: int = Field(..., ge=1, le=10, description="How well it would grab a viewer in the first 3 seconds.")
+    strength: int = Field(..., ge=1, le=10, description="How good it is on its own.")
+    best_use: MomentUse
+    sound: Literal["keep", "music-only", "either"] = Field(
+        "either", description="keep = the original audio is part of the moment (speech, laugh, splash).")
+    notes: str = ""
+
+
+class ClipAnalysis(BaseModel):
+    clip_id: str
+    summary: str = Field(..., description="One or two sentences: what happens in this clip.")
+    scene: str = Field(..., description="e.g. 'harbour waterfront walk', 'city street from a car'.")
+    location_guess: str = ""
+    subjects: list[str] = Field(default_factory=list)
+    camera: str = Field(..., description="e.g. 'gimbal walking', 'static', 'car mount', 'slow pan'.")
+    mood: str = ""
+    energy: int = Field(..., ge=1, le=5)
+    visual_appeal: int = Field(..., ge=1, le=10)
+    issues: list[str] = Field(default_factory=list, description="Problems with times, e.g. 'A-pillar blocks frame 6.2-7.6s'.")
+    unusable: list[Interval] = Field(default_factory=list)
+    moments: list[Moment] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    speed_ideas: str = Field("", description="e.g. '2x hyperlapse of the walk', '0.5x slow motion of the ferry wake'.")
+
+
+# ---------------------------------------------------------------------------
 # Edit Decision List (the "recipe" the editor writes and the renderer executes)
 # ---------------------------------------------------------------------------
 
