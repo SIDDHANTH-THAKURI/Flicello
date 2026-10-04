@@ -92,6 +92,12 @@ class RenderCfg(_Strict):
     music_duck_db: float = -12.0
 
 
+class MusicCfg(_Strict):
+    mode: Literal["auto", "file", "trending", "none"] = "auto"
+    provider: Literal["auto", "jamendo", "openverse"] = "auto"
+    shortlist: int = 6
+
+
 class AnalysisCfg(_Strict):
     frames_per_second: float = 0.5
     whisper_model: str = "small"
@@ -108,6 +114,7 @@ class Config(_Strict):
     ingest: IngestCfg = Field(default_factory=IngestCfg)
     measure: MeasureCfg = Field(default_factory=MeasureCfg)
     render: RenderCfg = Field(default_factory=RenderCfg)
+    music: MusicCfg = Field(default_factory=MusicCfg)
     analysis: AnalysisCfg = Field(default_factory=AnalysisCfg)
 
     @property

@@ -89,7 +89,14 @@ def test_check_accepts_valid_and_explains_invalid(prepared):
 def test_catalog_lists_analysed_and_missing_clips(prepared):
     project, clips, _ = prepared
     _write_analysis(project, clips["a_stable"])
-    catalog = build_catalog(project)
+    missing = analysis_path(project, clips["d_blurry"].clip_id)
+    backup = missing.read_text(encoding="utf-8") if missing.exists() else None  # other tests may analyse it
+    missing.unlink(missing_ok=True)
+    try:
+        catalog = build_catalog(project)
+    finally:
+        if backup is not None:
+            missing.write_text(backup, encoding="utf-8")
     entries = {e["clip"]["clip_id"]: e for e in catalog["clips"]}
     assert entries[clips["a_stable"].clip_id]["analysis"]["summary"] == "Test pattern."
     assert entries[clips["d_blurry"].clip_id]["analysis"] is None

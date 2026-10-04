@@ -65,7 +65,9 @@ def gpu_prefilter(clip: ClipInfo, width: int, height: int, zoom: float = 1.0) ->
 
 
 def segment_video_filter(clip: ClipInfo, seg: Segment, width: int, height: int, fps: int,
-                         *, from_proxy: bool, blur_sigma: float, gpu: bool = False) -> str:
+                         *, from_proxy: bool, blur_sigma: float, gpu: bool = False,
+                         moving_frames: int | None = None, look: str = "") -> str:
+    """moving_frames: frames of motion to keep before an optional freeze (the last one is then held)."""
     pre = []
     if gpu:
         pre += gpu_prefilter(clip, width, height, seg.zoom)
@@ -75,9 +77,12 @@ def segment_video_filter(clip: ClipInfo, seg: Segment, width: int, height: int, 
         pre.append(crop)
     pre.append(f"setpts=(PTS-STARTPTS)/{seg.speed:.6f}")
     pre.append(f"fps={fps}")
+    if moving_frames is not None and seg.freeze > 0:
+        pre.append(f"trim=end_frame={moving_frames},setpts=PTS-STARTPTS")  # freeze holds *this* last frame
     mode = resolve_framing(seg.framing, clip.width, clip.height, width, height)
-    post = "setsar=1,format=yuv420p,tpad=stop_mode=clone:stop_duration=2"
-    return ",".join(pre) + "," + framing_filter(mode, width, height, blur_sigma) + "," + post
+    post = ([look] if look else []) + [
+        "setsar=1", "format=yuv420p", f"tpad=stop_mode=clone:stop_duration={seg.freeze + 2:.3f}"]
+    return ",".join(pre) + "," + framing_filter(mode, width, height, blur_sigma) + "," + ",".join(post)
 
 
 def atempo_chain(speed: float) -> list[str]:

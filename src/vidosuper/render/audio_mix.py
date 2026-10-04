@@ -14,7 +14,7 @@ from scipy.signal import resample_poly
 
 from ..edit.timeline import Timeline
 from ..ffmpeg import run_ffmpeg
-from ..schemas import EditMeta, MusicSpec
+from ..schemas import EditMeta, MusicSpec, SoundLayer
 from .segments import SegmentOutput
 
 SR = 48000
@@ -89,41 +89,103 @@ def duck_envelope(mask_hops: np.ndarray, total: int, attack: float = 0.15, relea
     return np.interp(np.arange(total), times, smooth).astype(np.float32)
 
 
+def _place(bus: np.ndarray, x: np.ndarray, start: int) -> tuple[int, int]:
+    """Add x into bus at sample `start` (clipping at both ends); returns the covered range."""
+    total = len(bus)
+    lo, hi = max(0, start), min(total, start + len(x))
+    if hi > lo:
+        bus[lo:hi] += x[lo - start:hi - start]
+    return lo, hi
+
+
+def _fade(x: np.ndarray, fade_in: int, fade_out: int) -> np.ndarray:
+    n = len(x)
+    fade_in, fade_out = min(fade_in, n // 2), min(fade_out, n // 2)
+    if fade_in:
+        x[:fade_in] *= _ramp_in(fade_in)[:, None]
+    if fade_out:
+        x[n - fade_out:] *= _ramp_out(fade_out)[:, None]
+    return x
+
+
+def music_bed(music_wav: Path, music: MusicSpec, total: int) -> np.ndarray:
+    """The track as heard on the timeline: start offset, music edits (jumps) with short crossfades,
+    overall fades and gain automation. Ducking is applied later."""
+    data, sr = sf.read(str(music_wav), dtype="float32", always_2d=True)
+    if sr != SR:
+        raise ValueError(f"{music_wav} is {sr} Hz, expected {SR}")
+    if data.shape[1] == 1:
+        data = np.repeat(data, 2, axis=1)
+    data = data[:, :2]
+    pieces: list[tuple[int, int, int]] = []  # (timeline start, music start, crossfade into this piece)
+    pieces.append((0, int(round(music.start * SR)), 0))
+    for jump in sorted(music.jumps, key=lambda j: j.at):
+        at = int(round(jump.at * SR))
+        if pieces[-1][0] < at < total:
+            pieces.append((at, int(round(jump.to * SR)), int(jump.crossfade * SR)))
+    bed = np.zeros((total, 2), np.float32)
+    for k, (t0, m0, xf_in) in enumerate(pieces):
+        t1 = pieces[k + 1][0] if k + 1 < len(pieces) else total
+        xf_out = pieces[k + 1][2] if k + 1 < len(pieces) else 0
+        length = t1 - t0 + xf_out  # run on under the next piece's fade-in
+        chunk = np.zeros((length, 2), np.float32)
+        src = data[max(0, m0):max(0, m0) + length]
+        chunk[:len(src)] = src
+        _place(bed, _fade(chunk, xf_in, xf_out), t0)
+    fi, fo = min(int(music.fade_in * SR), total // 2), min(int(music.fade_out * SR), total // 2)
+    if fi:
+        bed[:fi] *= np.linspace(0, 1, fi, dtype=np.float32)[:, None]
+    if fo:
+        bed[total - fo:] *= np.linspace(1, 0, fo, dtype=np.float32)[:, None]
+    if music.automation:
+        points = sorted(music.automation, key=lambda p: p.t)
+        times = np.array([p.t * SR for p in points])
+        gains = np.array([p.gain_db for p in points])
+        env_db = np.interp(np.arange(total), times, gains)  # holds the first/last value outside the points
+        bed *= db_to_gain(env_db).astype(np.float32)[:, None]
+    return bed
+
+
 def mix_timeline(timeline: Timeline, shots: list[SegmentOutput], meta: EditMeta,
-                 music: MusicSpec | None, music_wav: Path | None, duck_db: float) -> np.ndarray:
+                 music: MusicSpec | None, music_wav: Path | None, duck_db: float,
+                 layers: list[tuple[SoundLayer, Path]] | None = None) -> np.ndarray:
     fps = timeline.fps
     total = frames_to_samples(timeline.total_frames, fps)
-    dialog = np.zeros((total, 2), np.float32)
+    dialog = np.zeros((total, 2), np.float32)  # shot sound that the music makes room for
+    fx = np.zeros((total, 2), np.float32)  # effects/ambience layers that sit with the music
     duck_mask = np.zeros(total, bool)
     items = timeline.items
     for i, (item, shot) in enumerate(zip(items, shots)):
         if shot.audio is None or item.seg.audio.mode == "mute":
             continue
-        start = frames_to_samples(item.start, fps)
-        n = min(frames_to_samples(item.frames, fps), total - start)
-        if n <= 0:
-            continue
+        lead = int(round(shot.audio_lead * SR))
+        tail = int(round(item.seg.audio.tail * SR))
+        n = lead + frames_to_samples(item.frames, fps) + tail
         x = load_wav(shot.audio, n) * np.float32(db_to_gain(item.seg.audio.gain_db))
         nxt = items[i + 1] if i + 1 < len(items) else None
-        fade_in = frames_to_samples(item.trans_frames, fps) if item.trans_frames else CLICK_GUARD
-        fade_out = frames_to_samples(nxt.trans_frames, fps) if nxt is not None and nxt.trans_frames else CLICK_GUARD
-        fade_in, fade_out = min(fade_in, n // 2), min(fade_out, n // 2)
-        if fade_in:
-            x[:fade_in] *= _ramp_in(fade_in)[:, None]
-        if fade_out:
-            x[n - fade_out:] *= _ramp_out(fade_out)[:, None]
-        dialog[start:start + n] += x
+        if lead:
+            fade_in = lead  # J-cut: the sound arrives under the previous shot
+        else:
+            fade_in = frames_to_samples(item.trans_frames, fps) if item.trans_frames else CLICK_GUARD
+        if tail:
+            fade_out = tail  # L-cut: it lingers under the next shot
+        else:
+            fade_out = frames_to_samples(nxt.trans_frames, fps) if nxt is not None and nxt.trans_frames else CLICK_GUARD
+        lo, hi = _place(dialog, _fade(x, fade_in, fade_out), frames_to_samples(item.start, fps) - lead)
         if item.seg.audio.duck_music:
-            duck_mask[start:start + n] = True
+            duck_mask[lo:hi] = True
 
-    out = dialog.copy()
+    for layer, path in layers or []:
+        n = int(round(layer.duration * SR))
+        x = load_wav(path, n, offset=int(round(layer.src_in * SR))) * np.float32(db_to_gain(layer.gain_db))
+        x = _fade(x, int(layer.fade_in * SR), int(layer.fade_out * SR))
+        lo, hi = _place(dialog if layer.duck_music else fx, x, int(round(layer.at * SR)))
+        if layer.duck_music:
+            duck_mask[lo:hi] = True
+
+    out = dialog + fx
     if music is not None and music_wav is not None:
-        bed = load_wav(music_wav, total, offset=int(round(music.start * SR)))
-        fi, fo = min(int(music.fade_in * SR), total // 2), min(int(music.fade_out * SR), total // 2)
-        if fi:
-            bed[:fi] *= np.linspace(0, 1, fi, dtype=np.float32)[:, None]
-        if fo:
-            bed[total - fo:] *= np.linspace(1, 0, fo, dtype=np.float32)[:, None]
+        bed = music_bed(music_wav, music, total)
         hop = int(ENV_HOP * SR)
         speaking = _activity(dialog)
         if len(speaking):

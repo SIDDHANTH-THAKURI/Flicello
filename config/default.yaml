@@ -58,6 +58,14 @@ render:
   blur_pad_sigma: 30
   music_duck_db: -12
 
+music:
+  mode: auto                     # auto: fetch safe-to-post music for the brief (CC0 / CC BY only)
+                                 # file: your own track (--music)  |  none: original sound only
+                                 # trending: a trending sound you supply; renders a no-music POST version
+                                 #           plus a preview (copyright caveat is shown)
+  provider: auto                 # auto (Jamendo if JAMENDO_CLIENT_ID is in .env, else Openverse) | jamendo | openverse
+  shortlist: 6                   # tracks downloaded + analysed per search
+
 analysis:
   frames_per_second: 0.5         # contact-sheet sampling (Phase 2)
   whisper_model: small

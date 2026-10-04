@@ -15,9 +15,10 @@ class TimelineItem:
     index: int
     seg: Segment
     clip: ClipInfo
-    frames: int  # output frames this shot occupies
+    frames: int  # output frames this shot occupies (moving + frozen)
     start: int  # first output frame on the timeline
     trans_frames: int  # overlap with the previous shot (0 for a hard cut)
+    moving_frames: int = 0  # frames of actual motion before any freeze
 
     @property
     def end(self) -> int:
@@ -25,7 +26,7 @@ class TimelineItem:
 
     def src_seconds(self, fps: int) -> float:
         """Source seconds actually consumed (frame-quantised)."""
-        return self.frames * self.seg.speed / fps
+        return self.moving_frames * self.seg.speed / fps
 
 
 @dataclass
@@ -47,7 +48,8 @@ def build_timeline(edl: EDL, clips: dict[str, ClipInfo]) -> Timeline:
     cursor = 0
     for index, seg in enumerate(edl.segments):
         clip = clips[seg.clip_id]
-        frames = max(1, round((seg.src_out - seg.src_in) / seg.speed * fps))
+        moving = max(1, round((seg.src_out - seg.src_in) / seg.speed * fps))
+        frames = moving + round(seg.freeze * fps)
         trans = 0
         if index > 0 and seg.transition_in.type != "cut":
             trans = round(seg.transition_in.duration * fps)
@@ -56,7 +58,8 @@ def build_timeline(edl: EDL, clips: dict[str, ClipInfo]) -> Timeline:
                 notes.append(f"{seg.id}: transition shortened from {trans} to {limit} frames (shots too short)")
                 trans = limit
         start = 0 if index == 0 else cursor - trans
-        items.append(TimelineItem(index=index, seg=seg, clip=clip, frames=frames, start=start, trans_frames=trans))
+        items.append(TimelineItem(index=index, seg=seg, clip=clip, frames=frames, start=start, trans_frames=trans,
+                                  moving_frames=moving))
         cursor = start + frames
     return Timeline(items=items, fps=fps, total_frames=cursor, notes=notes)
 

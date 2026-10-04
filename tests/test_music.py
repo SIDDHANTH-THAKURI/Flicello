@@ -47,11 +47,11 @@ def test_cuts_snap_onto_beats_without_entering_bad_footage(placeholder):
         Segment(id="s3", clip_id="c", src_in=0.0, src_out=1.0),
         Segment(id="s4", clip_id="a", src_in=8.0, src_out=9.0),
     ])
-    notes = snap_to_beats(edl, clips, music.beats, avoid={"a": [Interval(start=3.35, end=4.0, reason="shaky")]})
+    notes = snap_to_beats(edl, clips, music, avoid={"a": [Interval(start=3.35, end=4.0, reason="shaky")]})
     assert any("s1->s2" in n and "could not" in n for n in notes)  # extending s1 would enter shaky footage
     edl.segments[0].src_out = 3.3  # without the shaky range in the way it snaps
-    notes = snap_to_beats(edl, clips, music.beats)
+    notes = snap_to_beats(edl, clips, music)
     assert any("s1->s2" in n and "moved" in n for n in notes)
     assert any("s2->s3" in n and "too far" in n for n in notes)
-    on, total = beat_alignment(edl, clips, music.beats)
-    assert total == 3 and on >= 1
+    on, total, free = beat_alignment(edl, clips, music)
+    assert total == 3 and on >= 1 and free == 0

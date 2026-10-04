@@ -184,6 +184,8 @@ class SegmentAudio(BaseModel):
     mode: Literal["original", "mute"] = "original"
     gain_db: float = 0.0
     duck_music: bool = Field(True, description="Lower the music while this shot's own audio plays.")
+    lead: float = Field(0.0, ge=0.0, le=3.0, description="J-cut: this shot's sound starts this many seconds before its picture.")
+    tail: float = Field(0.0, ge=0.0, le=3.0, description="L-cut: this shot's sound carries on this long after the cut.")
 
 
 class Segment(BaseModel):
@@ -200,16 +202,59 @@ class Segment(BaseModel):
         "edge; 4K sources allow up to 2x at 1080p without softness."))
     zoom_center: tuple[float, float] = Field((0.5, 0.5), description=(
         "Where the punched-in frame is centred, as fractions of the source width and height (0-1)."))
+    freeze: float = Field(0.0, ge=0.0, le=4.0, description="Hold the last frame this many seconds (adds to the shot).")
+    look: str | None = Field(None, description="Override the edit's look for this shot (see meta.look).")
+    out_sync: Literal["beat", "downbeat", "free"] = Field("beat", description=(
+        "How the cut OUT of this shot is timed when there is music: snapped to a beat, to a bar start, or "
+        "left exactly where you put it (cut on motion or sound)."))
     role: str = ""
     rationale: str = ""
 
 
+class GainPoint(BaseModel):
+    t: float = Field(..., description="Timeline seconds.")
+    gain_db: float = Field(..., description="Extra music gain at this point (0 = as mixed, -60 = silent).")
+
+
+class MusicJump(BaseModel):
+    at: float = Field(..., description="Timeline seconds where the music jumps (use a cut on a bar start).")
+    to: float = Field(..., description="Music seconds to continue from (a bar start, e.g. the drop).")
+    crossfade: float = Field(0.04, ge=0.0, le=1.0)
+
+
 class MusicSpec(BaseModel):
-    path: str
+    path: str = ""
     start: float = Field(0.0, description="Offset into the track, seconds.")
     gain_db: float = 0.0
     fade_in: float = 0.5
     fade_out: float = 2.0
+    automation: list[GainPoint] = Field(default_factory=list, description=(
+        "Music level over time (linear in dB between points): dips, drop-outs and swells. Applied on top of "
+        "the automatic ducking under kept shot audio."))
+    jumps: list[MusicJump] = Field(default_factory=list, description="Music edits: skip ahead/back in the track.")
+
+
+class SoundLayer(BaseModel):
+    """Extra sound under the picture: a clip's ambience used as a bridge, or a sound effect."""
+
+    source: str = Field(..., description="'clip:<clip id>' (that clip's own sound), 'sfx:<name>' (built in) or a file path.")
+    at: float = Field(..., description="Timeline start, seconds.")
+    duration: float
+    src_in: float = Field(0.0, description="Seconds into the source.")
+    gain_db: float = 0.0
+    fade_in: float = 0.1
+    fade_out: float = 0.3
+    duck_music: bool = False
+
+
+class TextOverlay(BaseModel):
+    text: str
+    start: float
+    end: float
+    position: Literal["center", "lower-third", "top", "bottom-left", "bottom-right"] = "center"
+    size: Literal["small", "medium", "large"] = "medium"
+    style: Literal["clean", "bold", "serif", "mono"] = "clean"
+    fade: float = 0.3
 
 
 class EditMeta(BaseModel):
@@ -223,6 +268,8 @@ class EditMeta(BaseModel):
     loudness_lufs: float = -14.0
     true_peak_db: float = -1.5
     snap_to_beats: bool = Field(True, description="Nudge hard cuts onto music beats (when there is music).")
+    look: str = Field("natural", description="Colour look: natural, warm, cool, teal-orange, film, faded, punchy, mono.")
+    letterbox: float | None = Field(None, description="Cinematic bars to this aspect ratio, e.g. 2.39 (None = off).")
 
 
 class EDL(BaseModel):
@@ -231,12 +278,28 @@ class EDL(BaseModel):
     meta: EditMeta = Field(default_factory=EditMeta)
     segments: list[Segment]
     music: MusicSpec | None = None
+    sounds: list[SoundLayer] = Field(default_factory=list)
+    texts: list[TextOverlay] = Field(default_factory=list)
     notes: str = ""
 
 
 # ---------------------------------------------------------------------------
 # Edit brief (written by the director subagent)
 # ---------------------------------------------------------------------------
+
+
+class MusicBrief(BaseModel):
+    """What the music should be; the tool searches, downloads and scores tracks against it."""
+
+    mood: list[str] = Field(..., description="Feeling words used for search, e.g. ['reflective', 'hopeful'].")
+    genres: list[str] = Field(..., description="e.g. ['cinematic', 'ambient electronic', 'indie'].")
+    bpm_min: float = 70.0
+    bpm_max: float = 130.0
+    instrumental: bool = True
+    energy_arc: list[float] = Field(default_factory=list, description=(
+        "Wanted musical intensity 0-1 at evenly spaced points across the video (6-12 points), including "
+        "the quiet stretches."))
+    avoid: list[str] = Field(default_factory=list, description="Words that rule a track out, e.g. 'corporate'.")
 
 
 class BriefSection(BaseModel):
@@ -253,6 +316,20 @@ class BriefSection(BaseModel):
 class EditBrief(BaseModel):
     title: str
     logline: str = Field(..., description="One sentence: what this video is and why someone would watch it.")
+    thesis: str = Field("", description=(
+        "The point of view: what this footage is really about. Every shot must serve it, even over a "
+        "'nicer' shot that doesn't."))
+    motifs: list[str] = Field(default_factory=list, description="Recurring visual ideas used on purpose, with moment ids.")
+    juxtapositions: list[str] = Field(default_factory=list, description=(
+        "Planned contrasts (scale, speed, stillness vs motion, noise vs quiet), with moment ids."))
+    dynamics: list[float] = Field(default_factory=list, description=(
+        "Intended intensity 0-1 at evenly spaced points across the video, with deliberate valleys."))
+    rhythm_layers: str = Field("", description=(
+        "How music, ambient sound, motion and cut timing play against each other instead of all "
+        "locking to one beat."))
+    convention_break: str = Field("", description="The expected convention this edit breaks on purpose, and why.")
+    text_plan: str = Field("", description="On-screen text: rare and purposeful, never descriptive; or 'none'.")
+    music_brief: MusicBrief | None = None
     target_seconds: float
     hook: str = Field(..., description="Exactly what the first 1-3 seconds show, and why it grabs attention.")
     structure: list[BriefSection]

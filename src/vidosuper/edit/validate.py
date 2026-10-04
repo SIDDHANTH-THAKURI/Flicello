@@ -104,4 +104,53 @@ def validate_edl(edl: EDL, clips: dict[str, ClipInfo], signals: dict[str, ClipSi
 
     if edl.music is not None and not Path(edl.music.path).is_file():
         issues.append(Issue("error", None, f"music file not found: {edl.music.path}"))
+    issues += _check_extras(edl, clips)
+    return issues
+
+
+def _approx_duration(edl: EDL) -> float:
+    total = sum((s.src_out - s.src_in) / s.speed + s.freeze for s in edl.segments if s.speed > 0)
+    return total - sum(s.transition_in.duration for s in edl.segments[1:] if s.transition_in.type != "cut")
+
+
+def _check_extras(edl: EDL, clips: dict[str, ClipInfo]) -> list[Issue]:
+    from ..render.looks import LOOKS
+    from ..render.sfx import SFX_NAMES
+
+    issues: list[Issue] = []
+    total = _approx_duration(edl)
+    for name, where in [(edl.meta.look, None)] + [(s.look, s.id) for s in edl.segments if s.look]:
+        if name not in LOOKS:
+            issues.append(Issue("error", where, f"unknown look {name!r}; choose from {', '.join(LOOKS)}"))
+    for k, t in enumerate(edl.texts):
+        if not 0 <= t.start < t.end:
+            issues.append(Issue("error", f"text{k + 1}", f"text times {t.start}-{t.end} are invalid"))
+        elif t.end > total + 0.05:
+            issues.append(Issue("warning", f"text{k + 1}", f"ends at {t.end:.1f}s, after the video ends ({total:.1f}s)"))
+        if len(t.text) > 60:
+            issues.append(Issue("warning", f"text{k + 1}", "long text; on-screen words should be few and purposeful"))
+    if len(edl.texts) > 3:
+        issues.append(Issue("warning", None, f"{len(edl.texts)} text overlays; keep text rare (3 or fewer)"))
+    for k, layer in enumerate(edl.sounds):
+        where = f"sound{k + 1}"
+        if layer.duration <= 0 or layer.at < 0:
+            issues.append(Issue("error", where, "sound layers need at >= 0 and duration > 0"))
+        if layer.source.startswith("clip:"):
+            clip = clips.get(layer.source[5:])
+            if clip is None or not clip.has_audio:
+                issues.append(Issue("error", where, f"{layer.source}: unknown clip or the clip has no sound"))
+            elif layer.src_in + layer.duration > clip.duration + 0.05:
+                issues.append(Issue("warning", where, f"{layer.source} runs past the clip's end; the rest is silence"))
+        elif layer.source.startswith("sfx:"):
+            if layer.source[4:] not in SFX_NAMES:
+                issues.append(Issue("error", where, f"unknown effect {layer.source}; available: {', '.join(SFX_NAMES)}"))
+        elif not Path(layer.source).is_file():
+            issues.append(Issue("error", where, f"sound file not found: {layer.source}"))
+    if edl.music is not None:
+        for p in edl.music.automation:
+            if not -80 <= p.gain_db <= 12:
+                issues.append(Issue("error", None, f"music automation gain {p.gain_db} dB at {p.t}s is out of range (-80..12)"))
+        for j in edl.music.jumps:
+            if j.to < 0 or j.at <= 0:
+                issues.append(Issue("error", None, f"music jump at {j.at}s to {j.to}s is invalid"))
     return issues

@@ -7,7 +7,7 @@ from pathlib import Path
 from ..config import Config
 from ..edit.timeline import Timeline
 from ..ffmpeg import run_ffmpeg
-from ..schemas import EditMeta
+from ..schemas import EditMeta, TextOverlay
 from .segments import SegmentOutput
 
 
@@ -26,7 +26,19 @@ def output_encoder(quality: str, cfg: Config) -> list[str]:
 XFADE_NAMES = {"dissolve": "fade"}
 
 
-def assembly_graph(timeline: Timeline, meta: EditMeta) -> str:
+def letterbox_filter(width: int, height: int, aspect: float | None) -> str | None:
+    if not aspect or width / height >= aspect:
+        return None
+    bar = int(round((height - width / aspect) / 2 / 2)) * 2
+    if bar <= 0:
+        return None
+    return (f"drawbox=x=0:y=0:w=iw:h={bar}:color=black:t=fill,"
+            f"drawbox=x=0:y=ih-{bar}:w=iw:h={bar}:color=black:t=fill")
+
+
+def assembly_graph(timeline: Timeline, meta: EditMeta, texts: list[tuple[TextOverlay, Path]] | None = None,
+                   size: tuple[int, int] | None = None) -> str:
+    """Text overlays are extra inputs after the shots: input index len(timeline.items) + k."""
     fps = timeline.fps
     runs: list[list[int]] = []
     for item in timeline.items:
@@ -50,6 +62,18 @@ def assembly_graph(timeline: Timeline, meta: EditMeta) -> str:
         )
         current = f"x{k}"
 
+    if size and (bars := letterbox_filter(size[0], size[1], meta.letterbox)):
+        lines.append(f"[{current}]{bars}[lb]")
+        current = "lb"
+    first_text = len(timeline.items)
+    for k, (overlay, _) in enumerate(texts or []):
+        f = max(0.0, min(overlay.fade, (overlay.end - overlay.start) / 2))
+        alpha = f"fade=t=in:st={overlay.start:.3f}:d={f:.3f}:alpha=1,fade=t=out:st={overlay.end - f:.3f}:d={f:.3f}:alpha=1" \
+            if f > 0 else "null"
+        lines.append(f"[{first_text + k}:v]format=rgba,{alpha}[t{k}]")
+        lines.append(f"[{current}][t{k}]overlay=0:0:enable='between(t,{overlay.start:.3f},{overlay.end:.3f})'[o{k}]")
+        current = f"o{k}"
+
     total = timeline.total_frames / fps
     post = []
     if meta.fade_in > 0:
@@ -63,13 +87,16 @@ def assembly_graph(timeline: Timeline, meta: EditMeta) -> str:
 
 
 def assemble_video(timeline: Timeline, shots: list[SegmentOutput], meta: EditMeta, quality: str,
-                   cfg: Config, out_path: Path, work_dir: Path) -> Path:
+                   cfg: Config, out_path: Path, work_dir: Path,
+                   texts: list[tuple[TextOverlay, Path]] | None = None, size: tuple[int, int] | None = None) -> Path:
     work_dir.mkdir(parents=True, exist_ok=True)
     script = work_dir / f"{out_path.stem}.filter.txt"
-    script.write_text(assembly_graph(timeline, meta), encoding="utf-8")
+    script.write_text(assembly_graph(timeline, meta, texts, size), encoding="utf-8")
     args: list[str] = []
     for shot in shots:
         args += ["-i", str(shot.video)]
+    for _, png in texts or []:
+        args += ["-loop", "1", "-framerate", str(timeline.fps), "-i", str(png)]
     args += ["-/filter_complex", str(script), "-map", "[vout]", "-frames:v", str(timeline.total_frames),
              *output_encoder(quality, cfg), "-r", str(timeline.fps), "-an", "-movflags", "+faststart", str(out_path)]
     run_ffmpeg(args, what="Could not assemble the video")

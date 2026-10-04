@@ -47,6 +47,8 @@ def test_run_refuses_unanalysed_footage(ingested, cfg):
 def test_brief_is_validated(run_setup):
     project, _, run = run_setup
     brief = {"title": "T", "logline": "L", "target_seconds": 8, "hook": "bars", "ending": "fade",
+             "thesis": "colour bars are the whole story", "dynamics": [0.8, 0.3, 0.2, 0.9],
+             "convention_break": "no music drop at all",
              "structure": [{"name": "all", "purpose": "p", "start": 0, "end": 8, "energy": 3,
                             "shot_length": "2 beats", "moments": ["c01#1", "c99#4"]}]}
     run.brief_path.write_text(json.dumps(brief), encoding="utf-8")
@@ -82,6 +84,7 @@ def test_edl_with_short_ids_is_snapped_rendered_and_finalised(run_setup, cfg, mo
     assert submit_edl(run, project, cfg).problems == []
 
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    out = finalize(run, project, cfg)
+    out = finalize(run, project, cfg)[0]
+    assert (tmp_path / 'Videos' / 'VidoSuper' / f'{out.stem}-credits.txt').exists() is False
     video = next(s for s in ffprobe_json(out)["streams"] if s["codec_type"] == "video")
     assert (video["width"], video["height"]) == (1920, 1080) and run.load().stage == "done"

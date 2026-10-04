@@ -20,9 +20,23 @@ from ..workspace import Project, write_text_atomic
 from .assemble import assemble_video
 from .audio_mix import decode_music, mix_timeline, normalize, write_wav
 from .segments import render_segments
+from .sfx import sfx_path
+from .text import render_text_png
 
 
 EncodedPeakCeiling = -0.5  # dBFS: decoded AAC peaks above this risk clipping in some players
+
+
+def resolve_sound(source: str, clips: dict, project: Project) -> Path:
+    """'clip:<id>' → that clip's 48 kHz sound; 'sfx:<name>' → built-in effect; else a file to decode."""
+    if source.startswith("clip:"):
+        clip = clips.get(source[5:])
+        if clip is None or not clip.audio_wav:
+            raise ValueError(f"sound layer {source!r}: no such clip with sound")
+        return Path(clip.audio_wav)
+    if source.startswith("sfx:"):
+        return sfx_path(source[4:], project.root.parent.parent / "sfx")
+    return decode_music(source, project.music)
 
 
 def decoded_peak_db(video: Path, scratch: Path) -> float:
@@ -83,11 +97,16 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
     work = project.tmp / f"render_{int(time.time() * 1000)}"
     work.mkdir(parents=True, exist_ok=True)
 
-    shots = render_segments(timeline, width, height, quality, cfg, project.segments / quality, on_shot)
-    video_only = assemble_video(timeline, shots, meta, quality, cfg, work / "picture.mp4", work)
+    shots = render_segments(timeline, width, height, quality, cfg, project.segments / quality, on_shot,
+                            look_name=meta.look)
+    texts = [(t, render_text_png(t, width, height, work / f"text_{k}.png")) for k, t in enumerate(edl.texts)]
+    video_only = assemble_video(timeline, shots, meta, quality, cfg, work / "picture.mp4", work,
+                                texts=texts, size=(width, height))
 
-    music_wav = decode_music(edl.music.path, project.music) if edl.music else None
-    mix = mix_timeline(timeline, shots, meta, edl.music, music_wav, cfg.render.music_duck_db)
+    music_wav = decode_music(edl.music.path, project.music) if edl.music and edl.music.path else None
+    layers = [(layer, resolve_sound(layer.source, clips, project)) for layer in edl.sounds]
+    mix = mix_timeline(timeline, shots, meta, edl.music if music_wav else None, music_wav,
+                       cfg.render.music_duck_db, layers=layers)
     mix, measured, gain_db = normalize(mix, meta.loudness_lufs, meta.true_peak_db)
     mix_path = work / "mix.wav"
     write_wav(mix_path, mix)

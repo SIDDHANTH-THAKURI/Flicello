@@ -1,7 +1,8 @@
 """Render each shot to a normalised, cached intermediate (same size, fps, format for all shots).
 
-Shots are cached by everything that affects their pixels, so refinement rounds only re-render
-the shots that actually changed.
+Picture and sound are cached separately, by everything that affects them, so refinement rounds
+only re-render what actually changed (a new J-cut doesn't re-encode the picture, a new look
+doesn't re-cut the sound).
 """
 
 from __future__ import annotations
@@ -19,8 +20,10 @@ from ..edit.timeline import Timeline, TimelineItem
 from ..ffmpeg import FFmpegError, run_ffmpeg
 from ..ingest.proxy import gpu_decode_available
 from .framing import atempo_chain, segment_video_filter
+from .looks import look_filter
 
 SEGMENT_CACHE_VERSION = 2
+AUDIO_CACHE_VERSION = 1
 
 
 @dataclass
@@ -28,6 +31,7 @@ class SegmentOutput:
     video: Path
     audio: Path | None
     cached: bool
+    audio_lead: float = 0.0  # seconds of sound placed before the picture starts (J-cut actually available)
 
 
 def intermediate_encoder(quality: str, cfg: Config) -> list[str]:
@@ -38,7 +42,12 @@ def intermediate_encoder(quality: str, cfg: Config) -> list[str]:
             "-pix_fmt", "yuv420p"]
 
 
-def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: str, cfg: Config) -> str:
+def _digest(payload: dict) -> str:
+    return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
+
+
+def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: str, cfg: Config,
+                look: str = "") -> str:
     seg = item.seg
     payload = {
         "v": SEGMENT_CACHE_VERSION,
@@ -54,44 +63,72 @@ def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: 
         "blur": cfg.render.blur_pad_sigma,
         "audio": seg.audio.mode == "original" and item.clip.has_audio,
     }
-    if seg.zoom > 1.0001:  # only part of the key when used, so existing cached shots stay valid
+    # newer options only enter the key when used, so shots cached before they existed stay valid
+    if seg.zoom > 1.0001:
         payload["zoom"] = [round(seg.zoom, 4), [round(v, 4) for v in seg.zoom_center]]
-    return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
+    if seg.freeze > 0:
+        payload["freeze"] = [item.moving_frames, round(seg.freeze, 3)]
+    if look:
+        payload["look"] = look
+    return _digest(payload)
+
+
+def audio_window(item: TimelineItem, fps: int) -> tuple[float, float, float]:
+    """(source start, actual lead seconds, output seconds) for a shot's sound incl. J/L-cut extensions."""
+    seg, clip = item.seg, item.clip
+    wanted_start = seg.src_in - seg.audio.lead * seg.speed
+    start = max(0.0, wanted_start)
+    lead = (seg.src_in - start) / seg.speed
+    seconds = lead + item.frames / fps + seg.audio.tail
+    return start, lead, seconds
+
+
+def audio_key(item: TimelineItem, fps: int) -> str:
+    start, lead, seconds = audio_window(item, fps)
+    return _digest({"v": AUDIO_CACHE_VERSION, "clip": item.clip.fingerprint, "start": round(start, 4),
+                    "seconds": round(seconds, 4), "speed": round(item.seg.speed, 6)})
+
+
+def _render_audio(item: TimelineItem, fps: int, cache_dir: Path) -> tuple[Path, float, bool]:
+    start, lead, seconds = audio_window(item, fps)
+    out = cache_dir / f"a_{audio_key(item, fps)}.wav"
+    if out.exists():
+        return out, lead, True
+    part = out.with_name(out.stem + ".part.wav")
+    af = ",".join([*atempo_chain(item.seg.speed), "apad"])
+    run_ffmpeg(["-ss", f"{start:.4f}", "-t", f"{seconds * item.seg.speed + 0.5:.4f}", "-i", str(item.clip.audio_wav),
+                "-af", af, "-t", f"{seconds:.6f}", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", str(part)],
+               what=f"Could not cut the sound of shot {item.seg.id}")
+    os.replace(part, out)
+    return out, lead, False
 
 
 def render_segment(item: TimelineItem, width: int, height: int, fps: int, quality: str,
-                   cfg: Config, cache_dir: Path) -> SegmentOutput:
+                   cfg: Config, cache_dir: Path, look_name: str | None = None) -> SegmentOutput:
     clip, seg = item.clip, item.seg
-    key = segment_key(item, width, height, fps, quality, cfg)
+    look = look_filter(seg.look or look_name)
+    key = segment_key(item, width, height, fps, quality, cfg, look)
     video = cache_dir / f"{key}.mp4"
     want_audio = seg.audio.mode == "original" and clip.has_audio and bool(clip.audio_wav)
-    audio = cache_dir / f"{key}.wav" if want_audio else None
-    if video.exists() and (audio is None or audio.exists()):
-        return SegmentOutput(video, audio, cached=True)
+    audio, lead, audio_cached = (_render_audio(item, fps, cache_dir) if want_audio else (None, 0.0, True))
+    if video.exists():
+        return SegmentOutput(video, audio, cached=audio_cached, audio_lead=lead)
 
     from_proxy = quality == "draft"
     source = clip.proxy if from_proxy else clip.path
     if not source or not Path(source).exists():
         raise FileNotFoundError(f"Source for {clip.clip_id} is missing: {source}")
-    src_seconds = item.frames * seg.speed / fps
+    src_seconds = item.moving_frames * seg.speed / fps
     window = ["-ss", f"{seg.src_in:.4f}", "-t", f"{src_seconds + 0.5:.4f}"]
     video_part = video.with_name(video.stem + ".part.mp4")
-    audio_part = audio.with_name(audio.stem + ".part.wav") if audio else None
 
     def command(gpu: bool) -> list[str]:
         vf = segment_video_filter(clip, seg, width, height, fps, from_proxy=from_proxy,
-                                  blur_sigma=cfg.render.blur_pad_sigma, gpu=gpu)
+                                  blur_sigma=cfg.render.blur_pad_sigma, gpu=gpu,
+                                  moving_frames=item.moving_frames, look=look)
         hw = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"] if gpu else []
-        args = [*hw, *window, "-i", str(source)]
-        if audio_part:
-            args += [*window, "-i", str(clip.audio_wav)]
-        args += ["-map", "0:v:0", "-vf", vf, "-frames:v", str(item.frames),
-                 *intermediate_encoder(quality, cfg), "-an", str(video_part)]
-        if audio_part:
-            af = ",".join([*atempo_chain(seg.speed), "apad"])
-            args += ["-map", "1:a:0", "-af", af, "-t", f"{item.frames / fps:.6f}",
-                     "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", str(audio_part)]
-        return args
+        return [*hw, *window, "-i", str(source), "-map", "0:v:0", "-vf", vf, "-frames:v", str(item.frames),
+                *intermediate_encoder(quality, cfg), "-an", str(video_part)]
 
     # Originals (4K HEVC etc.) decode on the GPU when possible; proxies are cheap to decode in software.
     attempts = [True, False] if not from_proxy and gpu_decode_available(clip, cfg) else [False]
@@ -105,21 +142,18 @@ def render_segment(item: TimelineItem, width: int, height: int, fps: int, qualit
             error = exc
     if error is not None:
         video_part.unlink(missing_ok=True)
-        if audio_part:
-            audio_part.unlink(missing_ok=True)
         raise error
     os.replace(video_part, video)
-    if audio_part and audio:
-        os.replace(audio_part, audio)
-    return SegmentOutput(video, audio, cached=False)
+    return SegmentOutput(video, audio, cached=False, audio_lead=lead)
 
 
 def render_segments(timeline: Timeline, width: int, height: int, quality: str, cfg: Config,
-                    cache_dir: Path, on_done: Callable[[], None] | None = None) -> list[SegmentOutput]:
+                    cache_dir: Path, on_done: Callable[[], None] | None = None,
+                    look_name: str | None = None) -> list[SegmentOutput]:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     def work(item: TimelineItem) -> SegmentOutput:
-        out = render_segment(item, width, height, timeline.fps, quality, cfg, cache_dir)
+        out = render_segment(item, width, height, timeline.fps, quality, cfg, cache_dir, look_name)
         if on_done:
             on_done()
         return out

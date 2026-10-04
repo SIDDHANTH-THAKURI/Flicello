@@ -341,20 +341,26 @@ def edit_start(folder: Path = typer.Argument(..., help="Folder with your raw cli
                platform: str = typer.Option("youtube", help="youtube | reels | shorts | tiktok | square"),
                duration: float = typer.Option(60.0, help="Target length in seconds"),
                resolution: str = typer.Option("1080p", help="1080p | 4k"),
-               music: Path | None = typer.Option(None, help="Music track (optional)")) -> None:
+               music: Path | None = typer.Option(None, help="Music track (optional)"),
+               music_mode: str | None = typer.Option(None, help="auto | file | trending | none (default: config)"),
+               sound_name: str | None = typer.Option(None, help="Trending mode: the sound's name in the app")) -> None:
     """Start an edit run (needs analysed footage)."""
-    from .loop import RunError, next_step, start_run
+    from .loop import TRENDING_CAVEAT, RunError, next_step, start_run
 
     if platform not in PLATFORM_CANVAS:
         raise typer.BadParameter(f"platform must be one of {', '.join(PLATFORM_CANVAS)}")
+    if music_mode not in (None, "auto", "file", "trending", "none"):
+        raise typer.BadParameter("music-mode must be auto, file, trending or none")
     cfg = load_config()
     try:
         run = start_run(Project(folder, cfg), cfg, intent=intent, platform=platform, target_seconds=duration,
-                        resolution=resolution, music=music)
+                        resolution=resolution, music=music, music_mode=music_mode, sound_name=sound_name)
     except RunError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
     console.print(f"Run: {escape(str(run.dir))}")
+    if run.load().music_mode == "trending":
+        console.print(f"[bold yellow]{escape(TRENDING_CAVEAT)}[/]")
     music_info = run.music()
     if music_info:
         console.print(escape(music_info.summary()))
@@ -430,15 +436,79 @@ def edit_final(run_dir: Path = typer.Argument(..., help="Run folder"),
                iteration: int | None = typer.Option(None, help="Which iteration (default: latest)"),
                open_file: bool = typer.Option(False, "--open", help="Open the result")) -> None:
     """Render the full-quality video from an accepted iteration."""
-    from .loop import Run, finalize
+    from .loop import TRENDING_CAVEAT, Run, finalize
 
     cfg = load_config()
     run = Run(run_dir)
     state = run.load()
-    out = finalize(run, Project(state.clips_dir, cfg), cfg, iteration)
-    console.print(f"[green]Final video:[/] {escape(str(out))}")
+    outputs = finalize(run, Project(state.clips_dir, cfg), cfg, iteration)
+    for out in outputs:
+        console.print(f"[green]Final video:[/] {escape(str(out))}")
+    state = run.load()
+    if state.music_mode == "trending":
+        console.print(f"[bold yellow]{escape(TRENDING_CAVEAT)}[/]")
+    elif state.music_credit:
+        console.print(f"Music credit for the description: {escape(state.music_credit)}")
     if open_file and os.name == "nt":
-        os.startfile(out)  # noqa: S606 - the user's own render
+        os.startfile(outputs[0])  # noqa: S606 - the user's own render
+
+
+@edit_app.command("set-music")
+def edit_set_music(run_dir: Path = typer.Argument(..., help="Run folder"),
+                   track: Path = typer.Argument(..., help="Music file"),
+                   start: float | None = typer.Option(None, help="Start offset in the track (default: first bar)")) -> None:
+    """Use a different track; an existing cut is re-synced to it automatically (new iteration + draft)."""
+    from .loop import Run, change_music, next_step
+
+    cfg = load_config()
+    run = Run(run_dir)
+    state = run.load()
+    result = change_music(run, Project(state.clips_dir, cfg), cfg, track.expanduser().resolve(), start=start)
+    if result is not None:
+        for n in result.notes:
+            console.print(escape(n))
+        for p in result.problems:
+            console.print(f"[red]- {escape(p)}[/]")
+        if result.draft:
+            console.print(f"[green]Re-synced draft:[/] {escape(str(result.draft))}")
+    console.print(escape(next_step(run)))
+
+
+@music_app.command("find")
+def music_find(run_dir: Path = typer.Argument(..., help="Run folder (its brief has the music_brief)"),
+               provider: str = typer.Option("auto", help="auto | jamendo | openverse"),
+               shortlist: int | None = typer.Option(None, help="Tracks to download and analyse"),
+               pick: int | None = typer.Option(None, help="Use candidate N instead of the best")) -> None:
+    """Search safe-to-post music for a run's brief, score candidates, pick the best (re-syncs an existing cut)."""
+    from .loop import Run, RunError, find_music_for_run, next_step
+
+    cfg = load_config()
+    run = Run(run_dir)
+    state = run.load()
+    try:
+        scored = find_music_for_run(run, Project(state.clips_dir, cfg), cfg, provider=provider,
+                                    shortlist=shortlist, pick=pick, log=lambda m: console.print(escape(m)))
+    except RunError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    for i, s in enumerate(scored[:6]):
+        mark = "*" if i == (pick - 1 if pick else 0) else " "
+        console.print(f"{mark} {i + 1}. {escape(s.candidate.title)} - {escape(s.candidate.artist)} "
+                      f"({s.candidate.license.upper()}) score {s.total:.2f}: {escape('; '.join(s.reasons))}")
+    console.print(f"Candidates: {escape(str(run.dir / 'music_candidates.md'))}")
+    console.print(escape(next_step(run)))
+
+
+@app.command()
+def sfx(out_dir: Path | None = typer.Option(None, help="Write the effects here to listen to them")) -> None:
+    """List the built-in sound effects (use them in an EDL as sounds: source 'sfx:<name>')."""
+    from .render.sfx import SFX_NAMES, sfx_path
+
+    for name in SFX_NAMES:
+        line = f"sfx:{name}"
+        if out_dir:
+            line += f"  {sfx_path(name, out_dir.expanduser().resolve())}"
+        console.print(escape(line))
 
 
 @app.command()
