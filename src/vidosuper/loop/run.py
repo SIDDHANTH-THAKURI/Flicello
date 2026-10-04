@@ -62,6 +62,9 @@ class RunState(BaseModel):
     stage: Literal["brief", "music", "edit", "review", "done"] = "brief"
     iteration: int = 0
     final: str | None = None
+    scores: dict[int, float] = Field(default_factory=dict)  # iteration -> weighted critic score
+    best_iteration: int | None = None
+    verdicts: dict[int, str] = Field(default_factory=dict)  # iteration -> first | new | best | inconsistent
     history: list[str] = Field(default_factory=list)
 
 
@@ -204,11 +207,11 @@ def next_step(run: Run) -> str:
         return (f"STAGE edit, iteration {state.iteration}. Editor: read {run.brief_path}, {run.catalog_md}{music}; "
                 f"write {it / 'edl.json'} (format: `vido schema edl`), then run `vido edit submit-edl \"{run.dir}\"`.")
     if state.stage == "review":
+        from ..config import load_config
+
         it = run.iteration_dir(state.iteration)
-        return (f"STAGE review, iteration {state.iteration}. Draft: {it / 'draft.mp4'}; shots: {it}\\shots_*.jpg; "
-                f"notes: {it / 'notes.md'}. Show the user. Approve → `vido edit final \"{run.dir}\"`; "
-                f"changes → `vido edit revise \"{run.dir}\"` then the editor edits the new iteration's edl.json; "
-                f"other music → `vido edit set-music \"{run.dir}\" <file>` (re-syncs the cut automatically).")
+        return (f"STAGE review, iteration {state.iteration}. Draft: {it / 'draft.mp4'}. "
+                f"{loop_status(run, load_config())} (Other music any time: `vido edit set-music \"{run.dir}\" <file>`.)")
     return f"STAGE done. Final video: {state.final}"
 
 
@@ -456,24 +459,119 @@ def submit_edl(run: Run, project: Project, cfg: Config) -> SubmitResult:
         ["# Iteration notes", *summary, "", "## Warnings", *(f"- {w}" for w in result.warnings or ["none"]),
          "", "## Beat snapping", *(f"- {n}" for n in result.notes or ["n/a"])]) + "\n")
     result.notes = summary + result.notes
+    try:  # evidence for the critics; never let it block a draft
+        from .evidence import build_evidence
+
+        brief = EditBrief.model_validate_json(run.brief_path.read_text(encoding="utf-8")) if run.brief_path.exists() else None
+        build_evidence(run.dir, it, project, brief, music, shorts)
+    except Exception as exc:  # noqa: BLE001
+        result.warnings.append(f"evidence pack failed ({type(exc).__name__}: {exc}); run `vido edit evidence` again")
     state.stage = "review"
     run.save(state, f"iteration {state.iteration} rendered: {timeline.duration:.1f}s, {len(lengths)} shots")
     return result
 
 
-def revise(run: Run) -> Path:
+def revise(run: Run, from_iteration: int | None = None) -> Path:
+    """Start the next iteration from an earlier EDL — by default the best one so far (a revision that
+    lost to the best is not built upon)."""
     state = run.load()
     if state.stage not in ("review", "done"):
         raise RunError(f"run is at stage '{state.stage}'; revise starts a new iteration after a review")
-    previous = run.iteration_dir(state.iteration)
+    base = from_iteration or state.best_iteration or state.iteration
+    previous = run.iteration_dir(base)
     state.iteration += 1
     nxt = run.iteration_dir(state.iteration)
     nxt.mkdir(parents=True, exist_ok=True)
     if (previous / "edl.final.json").exists():
         shutil.copyfile(previous / "edl.final.json", nxt / "edl.json")
+    for name in ("review.md", "feedback.md"):  # what the editor must address next
+        for source in (run.iteration_dir(state.iteration - 1) / name, previous / name):
+            if source.exists():
+                shutil.copyfile(source, nxt / f"previous_{name}")
+                break
     state.stage = "edit"
-    run.save(state, f"iteration {state.iteration} started from iteration {state.iteration - 1}")
+    run.save(state, f"iteration {state.iteration} started from iteration {base}")
     return nxt
+
+
+def needs_judgement(state: RunState) -> bool:
+    return (state.best_iteration is not None and state.best_iteration != state.iteration
+            and state.iteration not in state.verdicts)
+
+
+def record_review(run: Run, cfg: Config):
+    from .review import aggregate, missing_critiques
+
+    state = run.load()
+    it = run.iteration_dir(state.iteration)
+    missing = missing_critiques(it)
+    if missing:
+        raise RunError("critiques missing or invalid: " + "; ".join(f"{k}: {v[0]}" for k, v in missing.items()))
+    review = aggregate(it, cfg)
+    state.scores[state.iteration] = review.score
+    if state.best_iteration is None:
+        state.best_iteration = state.iteration
+        state.verdicts[state.iteration] = "first"
+    run.save(state, f"review of iteration {state.iteration}: {review.score:.2f}/10, {review.blockers} blockers, "
+                    f"{review.majors} majors -> {review.decision}")
+    return review
+
+
+def record_judgement(run: Run) -> tuple[str, list[str]]:
+    from .review import decide
+
+    state = run.load()
+    verdict, reasons = decide(run.iteration_dir(state.iteration) / "judge")
+    if verdict is None:
+        raise RunError("judge verdicts missing or invalid: " + "; ".join(reasons))
+    previous_best = state.best_iteration
+    if verdict == "new":
+        state.best_iteration = state.iteration
+    state.verdicts[state.iteration] = verdict
+    run.save(state, f"judge: iteration {state.iteration} vs best {previous_best}: {verdict}")
+    return verdict, reasons
+
+
+def loop_status(run: Run, cfg: Config) -> str:
+    """What the review loop needs next, for the orchestrator."""
+    from .review import ADVERSARY, CRITICS, missing_critiques
+
+    state = run.load()
+    it = run.iteration_dir(state.iteration)
+    if not (it / "evidence.md").exists():
+        return f"Build the evidence pack: `vido edit evidence \"{run.dir}\"`."
+    missing = missing_critiques(it)
+    if missing:
+        names = [n for n in (*CRITICS, ADVERSARY) if n in missing]
+        return (f"Critiques needed for iteration {state.iteration}: {', '.join(names)}. Launch one `critic` subagent per "
+                f"rubric ({', '.join(n for n in names if n != ADVERSARY)}) and the `adversary`, in parallel; each writes "
+                f"{it / 'critiques'}\\<name>.json. Then `vido edit review \"{run.dir}\"`.")
+    if state.iteration not in state.scores:
+        return f"All critiques in: run `vido edit review \"{run.dir}\"`."
+    if needs_judgement(state):
+        jd = it / "judge"
+        todo = [f for f in ("ab.json", "ba.json") if not (jd / f).exists()]
+        if todo:
+            best = run.iteration_dir(state.best_iteration)
+            return (f"Judge needed: iteration {state.iteration} vs best iteration {state.best_iteration}. Launch the `judge` "
+                    f"subagent twice in parallel: ab.json with A = {best}, B = {it}; ba.json with A = {it}, B = {best}; "
+                    f"both written to {jd}. Then `vido edit judge \"{run.dir}\"`.")
+        return f"Both verdicts in: run `vido edit judge \"{run.dir}\"`."
+    review = json.loads((it / "review.json").read_text(encoding="utf-8"))
+    rounds = len(state.scores)
+    recent = [state.verdicts.get(n) for n in sorted(state.verdicts)][-cfg.loop.stop_after_no_gain:]
+    plateau = len(recent) == cfg.loop.stop_after_no_gain and all(v in ("best", "inconsistent") for v in recent)
+    best = state.best_iteration or state.iteration
+    if review["decision"] == "approve" or rounds >= cfg.loop.max_rounds or plateau:
+        why = ("quality bar reached" if review["decision"] == "approve" else
+               f"round limit ({cfg.loop.max_rounds}) reached" if rounds >= cfg.loop.max_rounds else "no gain in the last rounds")
+        return (f"Loop done ({why}). Best is iteration {best} (score {state.scores.get(best, 0):.2f}). Show the user that draft; "
+                f"on approval `vido edit final \"{run.dir}\" --iteration {best}`.")
+    checkpoint = rounds in cfg.loop.checkpoints
+    return ((f"CHECKPOINT: show the user iteration {best}'s draft and review.md, and ask for 👍/👎 + a note before revising. "
+             if checkpoint else "") +
+            f"Revise: `vido edit revise \"{run.dir}\"` (starts from best iteration {best}, copies review.md as "
+            f"previous_review.md), then launch the `editor` with the run folder to address the top issues.")
 
 
 def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = None) -> list[Path]:

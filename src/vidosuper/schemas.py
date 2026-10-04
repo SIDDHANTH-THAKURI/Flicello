@@ -340,6 +340,37 @@ class EditBrief(BaseModel):
     style_notes: str = Field("", description="Transitions, speed changes, slow motion, sound, look.")
 
 
+# ---------------------------------------------------------------------------
+# Review loop (critics, adversary, judge)
+# ---------------------------------------------------------------------------
+
+
+class CritiqueIssue(BaseModel):
+    id: str = Field(..., description="Short id with the critic's prefix, e.g. 'RHY-2'.")
+    severity: Literal["blocker", "major", "minor"]
+    segments: list[str] = Field(default_factory=list, description="Shot ids involved, e.g. ['s04', 's05'].")
+    at: float | None = Field(None, description="Timeline seconds, if it's about a moment.")
+    problem: str
+    evidence: str = Field(..., description="What in the evidence shows it (image, number, line).")
+    fix: str = Field(..., description="A concrete change the editor can make.")
+
+
+class Critique(BaseModel):
+    critic: str
+    scores: dict[str, float] = Field(..., description="Criterion -> 0-10, using the rubric's anchors.")
+    overall: float = Field(..., ge=0, le=10)
+    strengths: list[str] = Field(default_factory=list)
+    issues: list[CritiqueIssue] = Field(default_factory=list)
+
+
+class Judgement(BaseModel):
+    preferred: Literal["A", "B", "tie"]
+    confidence: float = Field(..., ge=0, le=1)
+    reasons: list[str]
+    criteria: dict[str, Literal["A", "B", "tie"]] = Field(default_factory=dict, description=(
+        "Per aspect: point of view, dynamics, rhythm, hook, craft, sound."))
+
+
 PLATFORM_CANVAS: dict[str, tuple[int, int]] = {
     "youtube": (1920, 1080),
     "reels": (1080, 1920),

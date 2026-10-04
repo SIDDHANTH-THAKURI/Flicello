@@ -88,3 +88,20 @@ def test_edl_with_short_ids_is_snapped_rendered_and_finalised(run_setup, cfg, mo
     assert (tmp_path / 'Videos' / 'VidoSuper' / f'{out.stem}-credits.txt').exists() is False
     video = next(s for s in ffprobe_json(out)["streams"] if s["codec_type"] == "video")
     assert (video["width"], video["height"]) == (1920, 1080) and run.load().stage == "done"
+
+
+def test_evidence_pack(run_setup, cfg):
+    from vidosuper.loop.evidence import build_evidence
+    from vidosuper.schemas import EditBrief
+
+    project, clips, run = run_setup
+    state = run.load()
+    it = run.iteration_dir(state.iteration)
+    brief = EditBrief.model_validate_json(run.brief_path.read_text(encoding="utf-8"))
+    shorts = {e["clip"]["clip_id"]: e["short"] for e in
+              json.loads((project.root / "catalog.json").read_text(encoding="utf-8"))["clips"]}
+    out = build_evidence(run.dir, it, project, brief, run.music(), shorts)
+    text = out.read_text(encoding="utf-8")
+    assert "shots" in text and "| all |" in text
+    for name in ("hook.jpg", "dynamics.png", "cuts_01.jpg"):
+        assert (it / name).exists(), name

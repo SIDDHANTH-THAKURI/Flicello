@@ -25,7 +25,7 @@ limits:
   max_minutes: 180               # active work time (usage-limit pauses don't count)
   max_usd: 15                    # API mode only
 
-critic_weights: {hook: 0.20, story: 0.25, pacing: 0.25, technical: 0.15, style: 0.10, taste: 0.05}
+critic_weights: {story: 0.25, rhythm: 0.25, hook: 0.20, craft: 0.15, sound: 0.15}
 
 output:
   platform: youtube              # youtube | reels | shorts | tiktok | square

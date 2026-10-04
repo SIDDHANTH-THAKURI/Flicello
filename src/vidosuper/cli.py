@@ -421,13 +421,68 @@ def edit_submit_edl(run_dir: Path = typer.Argument(..., help="Run folder")) -> N
 
 
 @edit_app.command("revise")
-def edit_revise(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
-    """Start the next iteration from the current EDL."""
+def edit_revise(run_dir: Path = typer.Argument(..., help="Run folder"),
+                from_iteration: int | None = typer.Option(None, "--from", help="Start from this iteration (default: best)")) -> None:
+    """Start the next iteration from the best EDL so far (copies its review as previous_review.md)."""
     from .loop import Run, next_step, revise
 
     run = Run(run_dir)
-    path = revise(run)
+    path = revise(run, from_iteration)
     console.print(f"New iteration: {escape(str(path))}")
+    console.print(escape(next_step(run)))
+
+
+@edit_app.command("check-critique")
+def edit_check_critique(run_dir: Path = typer.Argument(..., help="Run folder"),
+                        name: str = typer.Argument(..., help="story | rhythm | hook | craft | sound | adversary")) -> None:
+    """Validate one critique file of the current iteration."""
+    from .loop import Run
+    from .loop.review import critiques_dir, load_critique
+
+    run = Run(run_dir)
+    path = critiques_dir(run.iteration_dir(run.load().iteration)) / f"{name}.json"
+    _, problems = load_critique(path)
+    for p in problems:
+        console.print(f"[red]- {escape(p)}[/]")
+    if problems:
+        raise typer.Exit(1)
+    console.print(f"[green]{escape(name)} critique valid[/]")
+
+
+@edit_app.command("review")
+def edit_review(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
+    """Aggregate the critiques: weighted score, ranked issues (review.md), approve or revise."""
+    from .loop import Run, RunError, next_step
+    from .loop.run import record_review
+
+    cfg = load_config()
+    run = Run(run_dir)
+    try:
+        review = record_review(run, cfg)
+    except RunError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    it = run.iteration_dir(run.load().iteration)
+    console.print(f"Score {review.score:.2f}/10, {review.blockers} blocker(s), {review.majors} major -> {review.decision}")
+    console.print(f"Review: {escape(str(it / 'review.md'))}")
+    console.print(escape(next_step(run)))
+
+
+@edit_app.command("judge")
+def edit_judge(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
+    """Record the judge's two verdicts (order swapped): the new iteration replaces the best only if it wins both."""
+    from .loop import Run, RunError, next_step
+    from .loop.run import record_judgement
+
+    run = Run(run_dir)
+    try:
+        verdict, reasons = record_judgement(run)
+    except RunError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    console.print(f"Verdict: {verdict}")
+    for r in reasons[:6]:
+        console.print(f"  - {escape(r)}")
     console.print(escape(next_step(run)))
 
 
@@ -451,6 +506,27 @@ def edit_final(run_dir: Path = typer.Argument(..., help="Run folder"),
         console.print(f"Music credit for the description: {escape(state.music_credit)}")
     if open_file and os.name == "nt":
         os.startfile(outputs[0])  # noqa: S606 - the user's own render
+
+
+@edit_app.command("evidence")
+def edit_evidence(run_dir: Path = typer.Argument(..., help="Run folder"),
+                  iteration: int | None = typer.Option(None, help="Which iteration (default: latest)")) -> None:
+    """Evidence pack for critics: cut pairs, opening frames, dynamics chart, stats."""
+    from .loop import Run
+    from .loop.evidence import build_evidence
+    from .schemas import EditBrief
+
+    cfg = load_config()
+    run = Run(run_dir)
+    state = run.load()
+    project = Project(state.clips_dir, cfg)
+    it = run.iteration_dir(iteration or state.iteration)
+    brief = EditBrief.model_validate_json(run.brief_path.read_text(encoding="utf-8")) if run.brief_path.exists() else None
+    shorts = {e["clip"]["clip_id"]: e["short"] for e in
+              json.loads((project.root / "catalog.json").read_text(encoding="utf-8"))["clips"]}
+    out = build_evidence(run.dir, it, project, brief, run.music(), shorts)
+    console.print(escape(out.read_text(encoding="utf-8")))
+    console.print(f"Evidence in {escape(str(it))}")
 
 
 @edit_app.command("set-music")
@@ -512,11 +588,12 @@ def sfx(out_dir: Path | None = typer.Option(None, help="Write the effects here t
 
 
 @app.command()
-def schema(name: str = typer.Argument(..., help="clip-analysis | edit-brief | edl")) -> None:
+def schema(name: str = typer.Argument(..., help="clip-analysis | edit-brief | edl | critique | judgement")) -> None:
     """Print the JSON schema an agent must follow."""
-    from .schemas import ClipAnalysis, EditBrief
+    from .schemas import ClipAnalysis, Critique, EditBrief, Judgement
 
-    models = {"clip-analysis": ClipAnalysis, "edit-brief": EditBrief, "edl": EDL}
+    models = {"clip-analysis": ClipAnalysis, "edit-brief": EditBrief, "edl": EDL, "critique": Critique,
+              "judgement": Judgement}
     if name not in models:
         raise typer.BadParameter(f"one of: {', '.join(models)}")
     print(json.dumps(models[name].model_json_schema(), indent=1))
