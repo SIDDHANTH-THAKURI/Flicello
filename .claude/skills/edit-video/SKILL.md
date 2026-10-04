@@ -1,6 +1,6 @@
 ---
 name: edit-video
-description: VidoSuper - turn a folder of raw clips into an edited video. Analyses the footage if needed, has a director subagent plan the story and an editor subagent cut a beat-synced draft, shows the draft for review, then renders the final. Use when the user asks to edit or make a video from their footage.
+description: VidoSuper - turn a folder of raw clips into an edited video with a point of view. Analyses the footage if needed, a director subagent plans the story (thesis, dynamics, motifs, convention break), safe-to-post music is fetched automatically, an editor subagent cuts it with separate rhythms and a dynamic mix, the user reviews, then the final renders. Use when the user asks to edit or make a video from their footage.
 ---
 
 # Edit video
@@ -9,29 +9,38 @@ Run every command from the repository root (`./vido` in Bash, `.\vido.cmd` in Po
 
 ## Inputs (ask only for what's missing; otherwise use the defaults)
 - clips folder (required)
-- intent: what kind of video, the vibe, anything that must be in or out (default: "a fun highlight
-  reel of the day")
-- platform: `youtube` (16:9), `reels` / `shorts` / `tiktok` (9:16) or `square` (default `youtube`)
+- intent: what kind of video, the feeling, anything that must be in or out (default: "a short film of
+  the day with a point of view")
+- platform: `youtube` (16:9) or `reels` / `shorts` / `tiktok` (9:16) or `square` (default `youtube`)
 - length in seconds (default 60)
-- music file (optional; without it the edit uses the original sound)
+- music: by default (`auto`) it is fetched automatically: safe-to-post Creative Commons music matched
+  to the director's music brief. Or a file the user gives (`--music`), `none`, or `trending` (a
+  trending sound the user supplies; the tool prints a copyright caveat and the final is rendered as
+  a no-music POST version plus a preview — tell the user this plainly).
 
 ## Steps
-1. **Footage analysed?** `./vido perceive check "<folder>"`. If anything is missing or invalid, run
-   the /analyze-footage steps first.
-2. **Start the run:** `./vido edit start "<folder>" --intent "<intent>" --platform <p> --duration <s>
-   [--music "<file>"]`. Note the run folder it prints.
-3. **Director:** launch one `director` subagent with the run folder. When it's done,
-   `./vido edit status "<run>"` must report STAGE edit.
-4. **Editor:** launch one `editor` subagent with the run folder. When it's done, status must report
-   STAGE review.
-5. **Checkpoint — the user's taste decides.** Show the draft (`iterations/NN/draft.mp4`), the shot
-   sheet(s) and a short description: hook, structure, ending, length, cuts on the beat. Ask for
-   👍 / 👎 and a note.
-   - 👍 → `./vido edit final "<run>" --open`; give the user the final video's path (it goes to their
-     Videos\VidoSuper folder).
-   - A note or 👎 → save the feedback to `<run>/iterations/NN/feedback.md`, run
-     `./vido edit revise "<run>"` and launch the editor again with the run folder and the feedback
-     file. If the story itself is wrong, have the director revise `brief.json` first.
+1. **Footage analysed?** `./vido perceive check "<folder>"`; if anything is missing or invalid, run the
+   /analyze-footage steps first.
+2. **Start:** `./vido edit start "<folder>" --intent "<intent>" --platform <p> --duration <s>
+   [--music-mode auto|file|trending|none] [--music "<file>"] [--sound-name "<name in the app>"]`.
+   Note the run folder. In trending mode, relay the caveat it prints.
+3. **Director:** launch one `director` subagent with the run folder. Afterwards
+   `./vido edit status "<run>"` reports STAGE music (auto mode) or STAGE edit.
+4. **Music (auto mode):** `./vido music find "<run>"` searches, downloads a shortlist, scores each
+   track against the music brief and picks the best (alternatives in `music_candidates.md`). Tell
+   the user which track was chosen and its credit line.
+5. **Editor:** launch one `editor` subagent with the run folder. Afterwards status reports STAGE review.
+6. **Checkpoint — the user's taste decides.** Show the draft (`iterations/NN/draft.mp4`), the shot
+   sheets and a short description: thesis, dynamics, the convention break, musical vs free cuts,
+   sound design, length. Ask for 👍 / 👎 and a note.
+   - 👍 → `./vido edit final "<run>" --open`. Give the user the output path(s) in Videos\VidoSuper and,
+     with fetched music, the credit line for the video description (also saved as a -credits.txt).
+   - A note or 👎 → save it to `<run>/iterations/NN/feedback.md`, run `./vido edit revise "<run>"`, and
+     launch the editor again with the run folder and the feedback file. If the point of view itself is
+     wrong, have the director revise `brief.json` first.
+   - Other music → `./vido music find "<run>" --pick N` (a listed candidate) or
+     `./vido edit set-music "<run>" "<file>"`: the cut is re-synced to the new track automatically
+     (every cut keeps its beat) and a new draft is rendered.
 
 Phase 4 (critic panel, adversary and judge looping automatically) is not built yet; until then the
 checkpoint above is the review.

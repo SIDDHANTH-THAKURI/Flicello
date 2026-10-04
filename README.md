@@ -23,6 +23,9 @@ From Git Bash use `./vido` instead of `.\vido.cmd`.
 
 | Command | What it does |
 |---|---|
+| `vido music find <run> [--provider auto\|jamendo\|openverse] [--pick N]` | Searches safe-to-post music (CC0 / CC BY only) for the brief's music brief, downloads a shortlist, scores tempo + energy-arc fit, picks the best; re-syncs an existing cut |
+| `vido edit set-music <run> <file>` | Use a different track; the cut is re-timed so every cut keeps its beat, and a new draft renders |
+| `vido sfx [--out-dir DIR]` | Built-in synthesised sound effects (whoosh, riser, impact, subdrop, swell, tick, shutter) |
 | `vido music analyze <track>` | Tempo, beat grid, bar starts, sections (intro/build/peak/break/outro), drops |
 | `vido music placeholder <out.wav>` | Synthesised license-free placeholder track for testing beat-synced edits |
 | `vido edit start <clips folder> --intent "..." [--platform youtube] [--duration 60] [--music track]` | Starts an edit run (folder with run.json, catalog.md, music.json) |

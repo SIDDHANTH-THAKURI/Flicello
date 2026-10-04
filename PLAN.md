@@ -361,6 +361,18 @@ I pause for your review after Phases 1, 2, and 3.
 - **2026-10-04:** Phase 2 on the Sydney footage: 16/16 clips logged by Sonnet analysts. The vision pass corrected local labels; for example, digital zoom jumps had been mislabeled as shake.
 - **2026-10-04:** Phase 3 on the same footage: the director and editor (Opus) produced a 60 s cut with 28 shots and all 26 cuts on the beat. The editor's draft review found a renderer bug ("dissolve" was a speckled pixel dissolve), now mapped to a smooth crossfade. The director asked for punch-ins, which now exist (zoom up to 2.5×). Loudness ceiling is now −1.5 dBTP, checked after AAC encoding.
 - **2026-10-04:** Until you supply music, edits use a synthesised placeholder track at 100 BPM. Real music needs a re-cut because tempo and sections change.
+- **2026-10-04 (your direction): music is fetched automatically.**
+  - Pixabay has no music API; its public API covers images and videos only, and scraping the site would break its terms. So the default is **Jamendo** (free client id in `.env`) with **Openverse** as a no-key fallback.
+  - Both are plain REST calls. Only CC0 and CC BY tracks are accepted: both allow commercial use and editing. CC BY needs a credit line, which the tool writes next to every final.
+  - Changing the track re-times the cut automatically: every cut keeps its beat.
+- **2026-10-04 (your direction): trending mode is a config toggle with a copyright caveat.**
+  - There is no free, official API for TikTok trending sounds. TikTok's Creative Center data needs signed anti-bot headers, which we won't reverse-engineer.
+  - You supply the trending sound. The tool cuts to it and renders a **POST** version without the track, which you upload while adding the sound in the app, plus a **PREVIEW** with it.
+  - Automatic trending lists would need a paid third-party API, or Higgsfield's TikTok connector (which posts to TikTok directly). That's your call.
+- **2026-10-04 (your direction): edits get a point of view.**
+  - The director now commits to a thesis, real dynamics with quiet valleys, motifs, juxtapositions, separate rhythm layers, anticipation cuts, rare purposeful text and a deliberate convention break.
+  - The engine gained what that needs: per-cut sync (beat / bar / free), J/L cuts, music automation and edits, ambience bridges, built-in effects, freeze frames, looks, letterbox and text.
+  - 4K output waits until the edits themselves are right.
 
 ## Glossary
 - **EDL (Edit Decision List):** the recipe for the video: which clip, from which second to which second, in what order, with what transitions, music, and text.

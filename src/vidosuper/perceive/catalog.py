@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from ..schemas import ClipAnalysis, ClipInfo
 from ..workspace import Project, write_text_atomic
 from .contact_sheet import format_time
+from .motion import describe_motion
 from .prep import analysis_path, load_transcript, perception_dir
 
 BOUND_SLACK = 0.1
@@ -86,6 +87,8 @@ def build_catalog(project: Project) -> dict:
             "problems": problems,
             "speech": transcript.as_lines(only_confident=True) if transcript else [],
             "sheets": sheets,
+            "motion": [describe_motion(project.signals_npz(clip.clip_id), m.start, m.end)
+                       for m in sorted(analysis.moments, key=lambda m: m.start)] if analysis and not problems else [],
         })
     catalog = {"clips_dir": str(project.clips_dir), "clips": entries}
     write_text_atomic(project.root / "catalog.json", json.dumps(catalog, indent=1))
@@ -129,8 +132,10 @@ def render_markdown(catalog: dict) -> str:
         for n, m in enumerate(sorted(a["moments"], key=lambda m: m["start"])):
             peak = f" peak {m['peak']:.1f}" if m.get("peak") is not None else ""
             notes = f" [{m['notes']}]" if m.get("notes") else ""
+            motion = e.get("motion") or []
+            moving = f" · {motion[n]}" if n < len(motion) and motion[n] else ""
             lines.append(f"- {e['short']}#{n + 1} {m['start']:.1f}-{m['end']:.1f}{peak} · {m['kind']} · hook {m['hook']} · "
-                         f"str {m['strength']} · {m['best_use']} · sound {m['sound']} — {m['description']}{notes}")
+                         f"str {m['strength']} · {m['best_use']} · sound {m['sound']}{moving} — {m['description']}{notes}")
         if e["speech"]:
             lines.append("Speech: " + " / ".join(e["speech"][:6]))
         if a.get("speed_ideas"):
