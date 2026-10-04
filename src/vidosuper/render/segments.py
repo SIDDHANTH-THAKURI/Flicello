@@ -46,13 +46,21 @@ def _digest(payload: dict) -> str:
     return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
 
 
+def uses_proxy(item: TimelineItem, quality: str) -> bool:
+    """Drafts render from the 30 fps proxies, except real slow motion: a 0.5x shot from a 60 fps clip
+    needs the original's frames, or the draft shows doubled frames (judder) that the final won't have."""
+    if quality != "draft":
+        return False
+    return not (item.seg.speed < 0.99 and item.clip.fps >= 47)
+
+
 def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: str, cfg: Config,
                 look: str = "") -> str:
     seg = item.seg
     payload = {
         "v": SEGMENT_CACHE_VERSION,
         "clip": item.clip.fingerprint,
-        "proxy": quality == "draft",
+        "proxy": uses_proxy(item, quality),
         "in": round(seg.src_in, 4),
         "frames": item.frames,
         "speed": round(seg.speed, 6),
@@ -114,7 +122,7 @@ def render_segment(item: TimelineItem, width: int, height: int, fps: int, qualit
     if video.exists():
         return SegmentOutput(video, audio, cached=audio_cached, audio_lead=lead)
 
-    from_proxy = quality == "draft"
+    from_proxy = uses_proxy(item, quality)
     source = clip.proxy if from_proxy else clip.path
     if not source or not Path(source).exists():
         raise FileNotFoundError(f"Source for {clip.clip_id} is missing: {source}")

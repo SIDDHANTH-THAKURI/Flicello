@@ -104,3 +104,16 @@ def test_punch_in_shows_the_requested_part_of_the_frame(ingested, cfg, tmp_path)
     err_quarter = float(np.mean((zoomed.astype(float) - quarter) ** 2))
     err_whole = float(np.mean((zoomed.astype(float) - whole) ** 2))
     assert err_quarter < err_whole / 4, (err_quarter, err_whole)
+
+
+def test_draft_slow_motion_uses_original_frames(ingested):
+    from vidosuper.render.segments import uses_proxy
+
+    project, clips, _ = ingested
+    edl = EDL(project_dir=str(project.clips_dir), meta=EditMeta(fps=30), segments=[
+        Segment(id="slow", clip_id=clips["f_portrait60"].clip_id, src_in=1.0, src_out=2.0, speed=0.5),
+        Segment(id="normal", clip_id=clips["f_portrait60"].clip_id, src_in=2.0, src_out=3.0),
+        Segment(id="slow30", clip_id=clips["a_stable"].clip_id, src_in=1.0, src_out=2.0, speed=0.5)])
+    items = build_timeline(edl, project.clips()).items
+    assert [uses_proxy(i, "draft") for i in items] == [False, True, True]  # 30 fps slow-mo can't do better
+    assert not any(uses_proxy(i, "final") for i in items)
