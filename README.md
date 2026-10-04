@@ -36,6 +36,18 @@ From Git Bash use `./vido` instead of `.\vido.cmd`.
 | `vido edit final <run> [--open]` | Full-quality render to `%USERPROFILE%\Videos\VidoSuper\` |
 | `vido schema edit-brief` / `vido schema edl` | Formats the agents follow |
 
+## Commands (Phase 4: review loop)
+
+| Command | What it does |
+|---|---|
+| `vido edit evidence <run>` | Evidence pack (built automatically after each draft): cut pairs, opening frames, shot sheets, dynamics chart, stats |
+| `vido edit check-critique <run> <name>` | Validates one critic's JSON (story, rhythm, hook, craft, sound, adversary) |
+| `vido edit review <run>` | Weighted score, ranked issues (`review.md`), approve or revise |
+| `vido edit judge <run>` | Records the judge's two verdicts (order swapped); a revision replaces the best only if it wins both |
+| `vido edit revise <run> [--from N]` | Next iteration from the best cut, carrying the review and your feedback |
+
+Critic rubrics are plain English in `config/rubrics/` — edit them to change what the panel cares about.
+
 ## Commands (Phase 2: perception)
 
 | Command | What it does |
