@@ -46,5 +46,10 @@ Run every command from the repository root (`./vido` in Bash, `.\vido.cmd` in Po
 Other music at any point: `./vido music find "<run>" --pick N` or `./vido edit set-music "<run>" "<file>"`
 re-times the current cut to the new track (every cut keeps its beat) and renders a new draft.
 
+**Always show, don't just tell:** whenever a draft, a review checkpoint or a final is ready, open it
+on the user's screen — `./vido edit report "<run>" --open` (browser page with the video, point of
+view, critic scores, issues and charts; add `--video <file>` to show a full-quality render) and
+`./vido edit final "<run>" --open` for finals.
+
 Keep the user informed in short lines between steps (what ran, score, what's next); their Pro usage
 pays for the subagents, so don't launch extra rounds beyond what status asks for.

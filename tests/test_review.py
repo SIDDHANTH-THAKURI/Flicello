@@ -87,3 +87,15 @@ def test_loop_status_walks_the_review_cycle(run):
     verdict, _ = record_judgement(run)
     assert verdict == "new" and run.load().best_iteration == 2
     assert "Revise" in loop_status(run, cfg)
+
+
+def test_report_page_includes_video_scores_and_issues(run):
+    from vidosuper.loop.report import iteration_report
+
+    cfg = load_config()
+    it = run.iteration_dir(1)
+    _write_critiques(it, overall=6.0)
+    record_review(run, cfg)
+    (it / "draft.mp4").write_bytes(b"\x00")  # placeholder; the page only links to it
+    page = iteration_report(run, 1).read_text(encoding="utf-8")
+    assert "<video" in page and "6.00" in page and "Fix next" in page

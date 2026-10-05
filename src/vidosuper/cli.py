@@ -508,6 +508,22 @@ def edit_final(run_dir: Path = typer.Argument(..., help="Run folder"),
         os.startfile(outputs[0])  # noqa: S606 - the user's own render
 
 
+@edit_app.command("report")
+def edit_report(run_dir: Path = typer.Argument(..., help="Run folder"),
+                iteration: int | None = typer.Option(None, help="Which iteration (default: latest)"),
+                video: Path | None = typer.Option(None, help="Video to show (default: the iteration's draft)"),
+                open_file: bool = typer.Option(False, "--open", help="Open it in the browser")) -> None:
+    """One-page review of an iteration (video, point of view, critic scores, issues, evidence)."""
+    from .loop import Run
+    from .loop.report import iteration_report, open_in_browser
+
+    run = Run(run_dir)
+    out = iteration_report(run, iteration or run.load().iteration, video.expanduser().resolve() if video else None)
+    console.print(escape(str(out)))
+    if open_file:
+        open_in_browser(out)
+
+
 @edit_app.command("evidence")
 def edit_evidence(run_dir: Path = typer.Argument(..., help="Run folder"),
                   iteration: int | None = typer.Option(None, help="Which iteration (default: latest)")) -> None:
