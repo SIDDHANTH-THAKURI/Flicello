@@ -489,14 +489,17 @@ def edit_judge(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
 @edit_app.command("final")
 def edit_final(run_dir: Path = typer.Argument(..., help="Run folder"),
                iteration: int | None = typer.Option(None, help="Which iteration (default: latest)"),
+               resolution: str | None = typer.Option(None, help="1080p | 4k (default: the run's)"),
                open_file: bool = typer.Option(False, "--open", help="Open the result")) -> None:
     """Render the full-quality video from an accepted iteration."""
     from .loop import TRENDING_CAVEAT, Run, finalize
 
+    if resolution not in (None, "1080p", "4k"):
+        raise typer.BadParameter("resolution must be 1080p or 4k")
     cfg = load_config()
     run = Run(run_dir)
     state = run.load()
-    outputs = finalize(run, Project(state.clips_dir, cfg), cfg, iteration)
+    outputs = finalize(run, Project(state.clips_dir, cfg), cfg, iteration, resolution)
     for out in outputs:
         console.print(f"[green]Final video:[/] {escape(str(out))}")
     state = run.load()

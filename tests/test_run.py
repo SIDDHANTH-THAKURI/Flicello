@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -88,6 +89,16 @@ def test_edl_with_short_ids_is_snapped_rendered_and_finalised(run_setup, cfg, mo
     assert (tmp_path / 'Videos' / 'VidoSuper' / f'{out.stem}-credits.txt').exists() is False
     video = next(s for s in ffprobe_json(out)["streams"] if s["codec_type"] == "video")
     assert (video["width"], video["height"]) == (1920, 1080) and run.load().stage == "done"
+
+    seen = {}
+
+    def fake_render(edl, project, cfg, quality, out_path):
+        seen.update(size=(edl.meta.width, edl.meta.height), name=out_path.name)
+        return SimpleNamespace(output=str(out_path))
+
+    monkeypatch.setattr("vidosuper.loop.run.render_edl", fake_render)
+    finalize(run, project, cfg, resolution="4k")
+    assert seen["size"] == (3840, 2160) and seen["name"].endswith("-4k.mp4")
 
 
 def test_evidence_pack(run_setup, cfg):

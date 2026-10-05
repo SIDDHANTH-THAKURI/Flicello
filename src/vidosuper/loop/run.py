@@ -574,8 +574,10 @@ def loop_status(run: Run, cfg: Config) -> str:
             f"previous_review.md), then launch the `editor` with the run folder to address the top issues.")
 
 
-def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = None) -> list[Path]:
-    """Full-quality render(s) into Videos\\VidoSuper, plus a credits file when the music needs one."""
+def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = None,
+             resolution: str | None = None) -> list[Path]:
+    """Full-quality render(s) into Videos\\VidoSuper, plus a credits file when the music needs one.
+    resolution '4k' renders the same cut at 3840x2160 (2160x3840 vertical) from the 4K originals."""
     state = run.load()
     n = iteration or state.iteration
     edl_path = run.iteration_dir(n) / "edl.final.json"
@@ -584,8 +586,10 @@ def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = No
     edl = EDL.model_validate_json(edl_path.read_text(encoding="utf-8"))
     edl.meta.loudness_lufs = cfg.output.loudness_lufs  # delivery settings follow the current config
     edl.meta.true_peak_db = cfg.output.true_peak_db
+    if resolution:
+        edl.meta.width, edl.meta.height = canvas_for(state.platform, resolution)
     out_dir = Path.home() / "Videos" / "VidoSuper"
-    stem = f"{project.clips_dir.name}-{state.run_id}-v{n}"
+    stem = f"{project.clips_dir.name}-{state.run_id}-v{n}" + (f"-{resolution}" if resolution else "")
     outputs: list[Path] = []
     if state.music_mode == "trending" and edl.music is not None:
         post = edl.model_copy(deep=True)
