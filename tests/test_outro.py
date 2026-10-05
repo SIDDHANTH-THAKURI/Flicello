@@ -16,7 +16,7 @@ from vidosuper.outro.tail import build_tail, music_time_at_end, outro_audio
 from vidosuper.render import render_edl
 from vidosuper.schemas import EditMeta, MusicJump, MusicSpec
 
-STATS = RunStats(clips=16, raw_seconds=475.3, uhd=True, measured_frames=4755, moments=56, acts=5, drafts=4, shots=18,
+STATS = RunStats(clips=16, raw_seconds=475.3, uhd=True, measured_frames=4755, moments=56, acts=5, drafts=4, reviewed=2, shots=18,
                  final_seconds=57.6, critic_notes=54, adversary_notes=7, verdicts=2, score_trail=[6.38, 6.88],
                  panel=[("story", "7.2"), ("rhythm", "7"), ("hook", "5.8"), ("craft", "6.5"), ("sound", "8")],
                  code_lines=8000, music_credit='"Dream keeper" by zero-project is licensed under CC BY 3.0. To view '
@@ -40,7 +40,7 @@ def test_stats_come_from_the_run(ingested, tmp_path):
 
     s = collect_stats(run, project, 2)
     assert s.clips == len(clips) and s.raw_seconds > 0 and s.measured_frames > 0
-    assert (s.acts, s.drafts, s.critic_notes, s.adversary_notes, s.verdicts) == (3, 2, 2, 1, 1)
+    assert (s.acts, s.drafts, s.reviewed, s.critic_notes, s.adversary_notes, s.verdicts) == (3, 2, 1, 2, 1, 1)
     assert s.score_trail == [6.5] and s.panel == [("story", "7")] and s.code_lines > 1000
     # who appears is decided by what actually ran: no edit yet, so no editor
     assert "editor" not in {m.key for m in crew_for(s)} and "judge" in {m.key for m in crew_for(s)}

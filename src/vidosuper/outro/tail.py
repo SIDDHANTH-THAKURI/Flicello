@@ -21,7 +21,7 @@ from ..render.sfx import synthesize
 from ..schemas import MusicSpec
 from .card import Outro
 
-OUTRO_VERSION = 1
+OUTRO_VERSION = 2
 OUTRO_LUFS = -20.0  # a little quieter than the film: credits, not a second video
 MUSIC_FADE_IN = 1.0
 MUSIC_FADE_OUT = 1.6

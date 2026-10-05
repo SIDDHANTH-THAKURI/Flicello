@@ -24,6 +24,7 @@ class RunStats:
     moments: int = 0  # moments the clip analysts logged
     acts: int = 0  # sections in the director's plan
     drafts: int = 0
+    reviewed: int = 0  # drafts the critic panel actually reviewed
     shots: int = 0
     final_seconds: float = 0.0
     critic_notes: int = 0
@@ -90,7 +91,9 @@ def collect_stats(run_dir: Path, project: Project, iteration: int) -> RunStats:
         s.final_seconds = build_timeline(edl, clips).duration
 
     for it in iterations:
-        for path in sorted((it / "critiques").glob("*.json")):
+        critiques = sorted((it / "critiques").glob("*.json"))
+        s.reviewed += bool(critiques)
+        for path in critiques:
             issues = len(_json(path).get("issues") or [])
             if path.stem == "adversary":
                 s.adversary_notes += issues

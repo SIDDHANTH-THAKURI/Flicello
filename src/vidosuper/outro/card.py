@@ -59,7 +59,8 @@ def crew_for(stats: RunStats) -> list[Member]:
                     f"logged {stats.moments} moments" if stats.moments else ""),
         "director": (stats.acts > 0, "found the story", f"planned {stats.acts} acts"),
         "editor": (stats.shots > 0, f"cut {stats.shots} shots", f"over {stats.drafts} drafts" if stats.drafts > 1 else ""),
-        "critics": (bool(stats.panel), "scored every draft", f"{stats.critic_notes} notes" if stats.critic_notes else ""),
+        "critics": (bool(stats.panel), f"scored {stats.reviewed} draft{'s' if stats.reviewed != 1 else ''}",
+                    f"{stats.critic_notes} notes" if stats.critic_notes else ""),
         "adversary": (stats.adversary_notes > 0, "picked it apart", f"{stats.adversary_notes} harsh notes"),
         "judge": (stats.verdicts > 0, "picked the winner", f"{stats.verdicts} head-to-heads"),
     }
@@ -80,7 +81,8 @@ def tiles_for(stats: RunStats) -> list[Tile]:
         tiles.append(Tile(stats.measured_frames, "frames checked for\nshake, blur and light"))
     notes = stats.critic_notes + stats.adversary_notes
     if notes:
-        tiles.append(Tile(notes, f"critic notes\nover {stats.drafts} drafts", trail=tuple(stats.score_trail)))
+        rounds = f"{stats.reviewed} review round{'s' if stats.reviewed != 1 else ''}"
+        tiles.append(Tile(notes, f"critic notes over\n{rounds}", trail=tuple(stats.score_trail)))
     if stats.code_lines:
         tiles.append(Tile(stats.code_lines, "lines of code,\nzero by a human"))
     return tiles
