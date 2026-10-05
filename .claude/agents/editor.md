@@ -82,7 +82,10 @@ in for you; the music path too (music.start defaults to the suggested start in m
    shots by the overlap so later cuts keep their place on the music. The user called unmotivated hard
    cuts "sudden" and asked for smooth transitions. No short sped-up inserts that don't belong (a 1.4 s
    1.5x glass-tower whip was "a fast cut, not fitting"), and no shot under ~2 s outside the peak (a
-   1.1 s tram cut-in was "quite fast"); one continuous action is one shot, not three cuts. Never use the catalog's *Avoid* ranges. For the hook, the main reveal
+   1.1 s tram cut-in was "quite fast"); one continuous action is one shot, not three cuts. Smooth must
+   still be on the beat: keep dissolves short (~10 frames) and centred on the beat or bar (a long
+   dissolve smears the beat; the user said "music beat not syncing"). Any rhythmic sound you add
+   (ticks, steps, a clock) goes on the music's beat grid; `submit-edl` warns when one drifts. Never use the catalog's *Avoid* ranges. For the hook, the main reveal
    and the last shot, check exact frames: `./vido inspect "<clips folder>" <clip> <start> <end>`.
 9. **Break the convention** the brief names — visibly.
    **The user's taste (from their reviews):** never go A → B → back to A (e.g. tram → boat → tram),

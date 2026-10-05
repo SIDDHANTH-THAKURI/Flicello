@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Config
 from ..edit.resync import resync_edl
+from ..edit.rhythm import rhythm_warnings
 from ..edit.snap import beat_alignment, snap_to_beats
 from ..edit.timeline import Timeline, build_timeline, choose_fps
 from ..edit.validate import validate_edl
@@ -30,6 +31,7 @@ from ..perceive.catalog import build_catalog, check_analysis
 from ..perceive.contact_sheet import build_sheet, format_time, grab_frames
 from ..render import render_edl
 from ..render.audio_mix import decode_music, write_wav
+from ..render.render import resolve_sound
 from ..schemas import EDL, ClipAnalysis, EditBrief, Interval, MusicSpec, canvas_for
 from ..workspace import Project, write_model, write_text_atomic
 
@@ -446,6 +448,9 @@ def submit_edl(run: Run, project: Project, cfg: Config) -> SubmitResult:
     result.warnings = [str(i) for i in issues if i.level == "warning"]
 
     timeline = build_timeline(edl, clips)
+    if music is not None and edl.music is not None:
+        result.warnings += rhythm_warnings(edl, music, timeline.duration,
+                                           lambda source: resolve_sound(source, clips, project))
     write_model(it / "edl.final.json", edl)
     write_text_atomic(it / "edl.md", edl_markdown(edl, timeline, shorts))
     render = render_edl(edl, project, cfg, quality="draft", out_path=it / "draft.mp4")
