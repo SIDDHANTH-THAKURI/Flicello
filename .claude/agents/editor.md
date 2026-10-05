@@ -76,8 +76,12 @@ in for you; the music path too (music.start defaults to the suggested start in m
    the brief calls for it. Text only as the brief's text plan allows — short, purposeful, rare.
 8. **Other tools.** `freeze` (hold a frame for emphasis), `zoom`/`zoom_center` (punch in up to 2× on
    4K to hide an obstruction or tighten), `speed` (2–4× to compress travel, 0.5× only on clips marked
-   "2x slow-mo ok" where something moves), transitions (hard cuts by default; at most one or two
-   `dissolve`/`fadeblack`). Never use the catalog's *Avoid* ranges. For the hook, the main reveal
+   "2x slow-mo ok" where something moves). **Transitions:** a hard cut must be motivated (a beat drop,
+   an action, a release, a match); where nothing motivates it — calm or waiting stretches, two views of
+   the same subject — use a `dissolve` of about one beat, centred on the bar or beat, and lengthen both
+   shots by the overlap so later cuts keep their place on the music. The user called unmotivated hard
+   cuts "sudden" and asked for smooth transitions. No short sped-up inserts that don't belong (a 1.4 s
+   1.5x glass-tower whip was "a fast cut, not fitting"). Never use the catalog's *Avoid* ranges. For the hook, the main reveal
    and the last shot, check exact frames: `./vido inspect "<clips folder>" <clip> <start> <end>`.
 9. **Break the convention** the brief names — visibly.
    **The user's taste (from their reviews):** never go A → B → back to A (e.g. tram → boat → tram),

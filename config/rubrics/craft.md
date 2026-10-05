@@ -7,8 +7,10 @@ You judge execution. Read the shot sheets, `cuts_*.jpg` (the frames either side 
 - **clean_frames** — no obstructions (car pillars, phone mounts, fingers), blur, shake or exposure
   problems on screen unless deliberate.
 - **cuts** — no accidental jump cuts (same view, slightly moved), no jarring framing collisions;
-  match cuts and screen-direction continuity where it helps.
-  3 = several jarring cuts; 7 = one rough cut; 9 = every cut feels intended.
+  match cuts and screen-direction continuity where it helps. Every hard cut is motivated (beat, action,
+  release, match); calm stretches and same-subject neighbours flow with dissolves instead of sudden
+  cuts (the user's explicit preference).
+  3 = several jarring or unmotivated sudden cuts; 7 = one rough cut; 9 = every cut feels intended.
 - **visual_consistency** — colour and exposure don't jump unintentionally between neighbours; the
   look serves the piece.
 - **text_and_graphics** — text (if any) is legible, well placed, on screen long enough, and sparing.
@@ -17,4 +19,5 @@ You judge execution. Read the shot sheets, `cuts_*.jpg` (the frames either side 
 
 ## Typical issues
 A pillar or mount visible at the frame edge; two near-identical framings cut together; a whip pan
-cut mid-blur that reads as a glitch; an unmotivated dissolve; text over a busy background.
+cut mid-blur that reads as a glitch; a sudden hard cut in a calm stretch where a dissolve would flow;
+a short sped-up insert that doesn't fit its neighbours; text over a busy background.
