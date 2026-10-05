@@ -41,7 +41,10 @@ Your task message gives you the run folder. Read:
 - **anticipation** — in `style_notes`, name the moments where the editor should cut away a beat
   *before* the action resolves (the viewer leans in) rather than after it completes.
 - **text_plan** — on-screen text is rare and purposeful, never descriptive (no "Sydney Opera House"
-  labels). One short line that adds meaning, irony or time — or none at all.
+  labels) and never a two-word title or slogan (the user found "GIVE WAY" lame). Only a line that adds
+  meaning the picture can't, or none at all.
+- **No back-and-forth.** Plan sections so a subject or place isn't left and then returned to
+  (tram → boat → tram confused the user) unless the return is an unmistakable callback.
 - **convention_break** — at least one expected convention you break on purpose, and why it serves
   the thesis. For example: silence where the drop should hit, a freeze frame instead of the money
   shot, holding one shot far longer than expected, ending mid-motion, letterboxing only the last
