@@ -12,6 +12,7 @@ Providers (plain REST calls, no extra services):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,8 @@ from ..workspace import write_text_atomic
 USER_AGENT = "VidoSuper/0.1 (personal video editor; +https://github.com)"
 SAFE_LICENSES = {"cc0", "by"}
 SEARCH_CACHE_SECONDS = 24 * 3600
+JAMENDO_PAGES = 3  # most Jamendo tracks are non-commercial; page until enough CC BY ones turn up
+JAMENDO_RETRIES = 4
 
 
 class TrackCandidate(BaseModel):
@@ -70,7 +73,9 @@ def _get_json(url: str, cache_dir: Path | None) -> dict:
     cache = None
     if cache_dir is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        cache = cache_dir / (re.sub(r"[^A-Za-z0-9]+", "_", url)[-150:] + ".json")
+        keyless = re.sub(r"client_id=[^&]*&?", "", url)  # the API key never ends up in a file name
+        digest = hashlib.sha1(keyless.encode()).hexdigest()[:12]
+        cache = cache_dir / (re.sub(r"[^A-Za-z0-9]+", "_", keyless)[-100:] + f"_{digest}.json")
         if cache.exists() and time.time() - cache.stat().st_mtime < SEARCH_CACHE_SECONDS:
             return json.loads(cache.read_text(encoding="utf-8"))
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
@@ -81,7 +86,7 @@ def _get_json(url: str, cache_dir: Path | None) -> dict:
         if exc.code == 429:
             raise RuntimeError("Music search is rate limited right now (too many searches); try again in a minute") from exc
         raise RuntimeError(f"Music search failed: HTTP {exc.code} from {urllib.parse.urlsplit(url).netloc}") from exc
-    if cache is not None:
+    if cache is not None and data.get("results"):  # an empty answer may be a hiccup; ask again next time
         write_text_atomic(cache, json.dumps(data))
     return data
 
@@ -122,22 +127,41 @@ class JamendoProvider:
         self.cache_dir = cache_dir
 
     def search(self, query: MusicQuery) -> list[TrackCandidate]:
+        # Jamendo separates multiple values with a literal '+' (sent as %2B); a space or '+' as a space
+        # silently matches nothing. 'ccnc'/'ccnd' false drop non-commercial and no-derivatives tracks on
+        # the server ('ccsa=false' is broken there, so share-alike is filtered below with the rest).
+        tags = [w for kw in query.keywords for w in re.split(r"[\s,+]+", kw.lower()) if w]
         params = {
-            "client_id": self.client_id, "format": "json", "limit": str(min(query.limit, 50)),
-            "fuzzytags": " ".join(query.keywords), "include": "musicinfo licenses",
-            "audioformat": "mp32", "audiodlformat": "mp32", "boost": "popularity_total",
+            "client_id": self.client_id, "format": "json", "limit": "50",
+            "fuzzytags": "+".join(tags), "include": "musicinfo+licenses",
+            "audioformat": "mp32", "audiodlformat": "mp32", "boost": "popularity_month",
             "durationbetween": f"{int(query.min_duration)}_{int(query.max_duration)}",
+            "ccnc": "false", "ccnd": "false",
         }
         if query.instrumental:
             params["vocalinstrumental"] = "instrumental"
         if query.speed:
-            params["speed"] = query.speed
-        data = _get_json(self.base + "?" + urllib.parse.urlencode(params), self.cache_dir)
-        status = (data.get("headers") or {}).get("status")
-        if status not in (None, "success"):
-            raise RuntimeError(f"Jamendo said: {(data.get('headers') or {}).get('error_message') or status}")
+            params["speed"] = "+".join(query.speed.split())
+        out: list[TrackCandidate] = []
+        for page in range(JAMENDO_PAGES):
+            url = self.base + "?" + urllib.parse.urlencode({**params, "offset": str(50 * page)})
+            for attempt in range(JAMENDO_RETRIES):  # Jamendo randomly answers a good query with nothing
+                data = _get_json(url, self.cache_dir)
+                status = (data.get("headers") or {}).get("status")
+                if status not in (None, "success"):
+                    raise RuntimeError(f"Jamendo said: {(data.get('headers') or {}).get('error_message') or status}")
+                if data.get("results") or attempt == JAMENDO_RETRIES - 1:
+                    break
+                time.sleep(0.5)
+            results = data.get("results", [])
+            out += self._safe(results)
+            if len(out) >= query.limit or len(results) < 50:
+                break
+        return out[:query.limit]
+
+    def _safe(self, results: list[dict]) -> list[TrackCandidate]:
         out = []
-        for r in data.get("results", []):
+        for r in results:
             lic = license_from_url(r.get("license_ccurl") or "")
             url = r.get("audiodownload") if r.get("audiodownload_allowed") else None
             if lic not in SAFE_LICENSES or not (url or r.get("audio")):

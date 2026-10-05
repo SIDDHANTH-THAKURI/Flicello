@@ -42,12 +42,28 @@ def test_jamendo_parsing_and_licence_filter(monkeypatch):
         {"id": "12", "name": "StreamOnly", "artist_name": "Z", "duration": 200, "license_ccurl":
          "http://creativecommons.org/licenses/by/4.0/", "audiodownload_allowed": False, "audio": "https://s/12"},
     ]}
-    monkeypatch.setattr(sources, "_get_json", lambda url, cache: fake)
-    found = JamendoProvider("key").search(MusicQuery(keywords=["calm"]))
+    urls = []
+    monkeypatch.setattr(sources, "_get_json", lambda url, cache: urls.append(url) or fake)
+    found = JamendoProvider("key").search(MusicQuery(keywords=["calm", "lo fi"], speed="low medium"))
+    # multiple values need a literal '+' (%2B); spaces silently match nothing on Jamendo
+    assert "fuzzytags=calm%2Blo%2Bfi" in urls[0] and "include=musicinfo%2Blicenses" in urls[0]
+    assert "speed=low%2Bmedium" in urls[0] and "ccnc=false" in urls[0]
+    assert len(urls) == 1  # a short page means no more results
     assert [c.title for c in found] == ["Drift", "StreamOnly"]
     assert found[0].download_url == "https://j/10" and found[1].download_url == "https://s/12"
     assert "CC BY 3.0" in found[0].attribution and found[0].instrumental is True
     assert license_from_url("https://creativecommons.org/publicdomain/zero/1.0/") == "cc0"
+
+
+def test_jamendo_retries_random_empty_answers(monkeypatch):
+    track = {"id": "1", "name": "T", "artist_name": "A", "duration": 200, "audiodownload_allowed": True,
+             "license_ccurl": "http://creativecommons.org/licenses/by/3.0/", "audiodownload": "https://j/1"}
+    answers = iter([{"headers": {"status": "success"}, "results": []},
+                    {"headers": {"status": "success"}, "results": [track] * 50},
+                    {"headers": {"status": "success"}, "results": [track] * 50}])
+    monkeypatch.setattr(sources, "_get_json", lambda url, cache: next(answers))
+    monkeypatch.setattr(sources.time, "sleep", lambda s: None)
+    assert len(JamendoProvider("key").search(MusicQuery(keywords=["calm"], limit=60))) == 60  # retried, then page 2
 
 
 @pytest.fixture(scope="module")
