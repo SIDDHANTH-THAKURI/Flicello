@@ -48,7 +48,9 @@ in for you; the music path too (music.start defaults to the suggested start in m
 1. **Serve the thesis.** Every shot earns its place; leave out beautiful shots that don't serve it.
    Put the motifs where the brief says and let them return. Place the planned juxtapositions side by
    side (scale cuts, speed cuts, sound cuts).
-2. **Separate rhythms.** Mark each shot's `out_sync`: `beat` or `downbeat` when the music should
+2. **Separate rhythms.** `music.md` lists the stretches of the track with no audible beat on the
+   grid: don't place musical cuts there (they won't feel on the music; the user noticed); cut free
+   there or move the music so the beat-driven part sits under it. Mark each shot's `out_sync`: `beat` or `downbeat` when the music should
    punctuate the cut, `free` when the cut follows motion (cut as movement crosses frame or exits),
    sound or a look. A cut that only ever lands on the beat feels templated: a good share of cuts —
    often a third or more — should be free. Musical cuts are snapped onto the beat/bar automatically

@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from ..schemas import MusicBrief
-from .analysis import MusicAnalysis, load_or_analyze
+from .analysis import MusicAnalysis, load_or_analyze, pulse_score
 from .sources import MusicQuery, TrackCandidate, download
 
 
@@ -25,6 +25,7 @@ class ScoredTrack:
     relevance: float
     total: float
     reasons: list[str] = field(default_factory=list)
+    pulse: float = 0.0  # how audible the beat is where the edit would use the track
 
 
 def speed_class(bpm_min: float, bpm_max: float) -> str:
@@ -67,7 +68,7 @@ def arc_fit(analysis: MusicAnalysis, target: float, arc: list[float]) -> tuple[f
     energy = np.asarray(analysis.energy, dtype=float)
     starts = [d for d in (analysis.downbeats or [0.0]) if d + target <= analysis.duration - 0.5] or [0.0]
     want = np.asarray(arc, dtype=float) if arc else None
-    best = (-1.0, 0.0, 0.0)
+    best, best_rank = (-1.0, 0.0, 0.0), -np.inf
     for start in starts:
         window = energy[int(start):int(start + target) + 1]
         if len(window) < 4:
@@ -79,8 +80,11 @@ def arc_fit(analysis: MusicAnalysis, target: float, arc: list[float]) -> tuple[f
             score = min(1.0, float(np.std(window)) / 0.25)  # no plan: prefer windows with real dynamics
         changes = sum(1 for s in analysis.sections if start < s.start < start + target)
         structure = min(1.0, changes / 3.0)
-        if score + 0.1 * structure > best[0] + 0.1 * best[2]:
-            best = (score, start, structure)
+        # where the beat is audible matters as much as the energy shape: cuts on a beat nobody hears
+        # don't feel on the music
+        rank = score + 0.1 * structure + 0.25 * pulse_score(analysis, start, target)
+        if rank > best_rank:
+            best, best_rank = (score, start, structure), rank
     return max(best[0], 0.0), best[1], best[2]
 
 
@@ -121,11 +125,14 @@ def find_music(brief: MusicBrief, target_seconds: float, providers: list, librar
         t_score, t_used = tempo_fit(analysis.tempo, brief.bpm_min, brief.bpm_max)
         a_score, offset, structure = arc_fit(analysis, target_seconds, brief.energy_arc)
         rel, avoided = relevance(cand, brief)
-        total = 0.35 * a_score + 0.25 * t_score + 0.15 * structure + 0.25 * rel - (0.3 if avoided else 0.0)
+        pulse = pulse_score(analysis, offset, target_seconds)
+        total = (0.3 * a_score + 0.2 * t_score + 0.1 * structure + 0.2 * rel + 0.2 * pulse
+                 - (0.3 if avoided else 0.0))
         reasons = [f"{t_used:.0f} BPM ({'in' if t_score == 1 else 'outside'} {brief.bpm_min:.0f}-{brief.bpm_max:.0f})",
                    f"energy fit {a_score:.2f} starting at {offset:.1f}s", f"{structure * 3:.0f} section changes in the window",
-                   f"keyword match {rel:.2f}"] + (["matches an avoid word"] if avoided else [])
-        scored.append(ScoredTrack(cand, path, analysis, offset, t_score, a_score, structure, rel, total, reasons))
+                   f"beat clarity {pulse:.2f}", f"keyword match {rel:.2f}"] + (["matches an avoid word"] if avoided else [])
+        scored.append(ScoredTrack(cand, path, analysis, offset, t_score, a_score, structure, rel, total, reasons,
+                                  pulse=pulse))
         log(f"  analysed {cand.title!r} by {cand.artist}: score {total:.2f}")
     return sorted(scored, key=lambda s: s.total, reverse=True)
 

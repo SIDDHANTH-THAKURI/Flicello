@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
-MUSIC_VERSION = 1
+MUSIC_VERSION = 2  # 2: beat clarity (pulse)
 SR = 22050
 HOP = 512
+PULSE_CHUNK = 8.0
 
 
 class MusicSection(BaseModel):
@@ -33,6 +34,9 @@ class MusicAnalysis(BaseModel):
     energy: list[float] = Field(description="0-1 loudness/intensity per second")
     sections: list[MusicSection]
     drops: list[float] = Field(default_factory=list, description="Bar starts where intensity jumps up sharply")
+    pulse: list[float] = Field(default_factory=list, description=(
+        f"Beat clarity per {PULSE_CHUNK:.0f} s: onset strength on the beats / on the half-beats (1.4+ clear, "
+        "~1 or less: no audible beat on the grid there)"))
 
     def beats_between(self, start: float, end: float) -> list[float]:
         return [b for b in self.beats if start <= b <= end]
@@ -40,9 +44,24 @@ class MusicAnalysis(BaseModel):
     def summary(self) -> str:
         secs = ", ".join(f"{s.label} {s.start:.1f}-{s.end:.1f}s (energy {s.energy:.2f})" for s in self.sections)
         drops = ", ".join(f"{d:.1f}s" for d in self.drops) or "none"
+        weak = self.weak_beat_stretches()
+        weak_txt = (" No audible beat on the grid (cut free there, not on the beat): "
+                    + ", ".join(f"{a:.0f}-{b:.0f}s" for a, b in weak) + ".") if weak else ""
         return (f"{Path(self.path).name}: {self.duration:.1f}s, {self.tempo:.0f} BPM "
                 f"(beat every {60 / self.tempo:.3f}s, bar every {240 / self.tempo:.2f}s), "
-                f"{len(self.beats)} beats. Sections: {secs}. Drops: {drops}.")
+                f"{len(self.beats)} beats. Sections: {secs}. Drops: {drops}.{weak_txt}")
+
+    def weak_beat_stretches(self, below: float = 1.15) -> list[tuple[float, float]]:
+        """Track time ranges where the beat grid has no clear accent (merged PULSE_CHUNK pieces)."""
+        out: list[tuple[float, float]] = []
+        for k, d in enumerate(self.pulse):
+            if d < below:
+                a, b = k * PULSE_CHUNK, min(self.duration, (k + 1) * PULSE_CHUNK)
+                if out and abs(out[-1][1] - a) < 1e-6:
+                    out[-1] = (out[-1][0], b)
+                else:
+                    out.append((a, b))
+        return out
 
 
 def fingerprint_file(path: Path) -> str:
@@ -208,7 +227,39 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
         path=str(path), fingerprint=fingerprint_file(path), duration=round(duration, 3), tempo=round(tempo, 2),
         beats=[round(float(b), 3) for b in beats], downbeats=[round(float(b), 3) for b in downbeats],
         energy=[round(float(e), 3) for e in energy], sections=sections, drops=drops,
+        pulse=beat_dominance(onset_env, beats, duration),
     )
+
+
+def beat_dominance(onset_env: np.ndarray, beats: np.ndarray, duration: float) -> list[float]:
+    """Per PULSE_CHUNK seconds: onset strength on the beats over onset strength on the half-beats.
+    ~1 or less means no audible beat on the grid (pads, or accents on the off-beat), so cuts placed
+    "on the beat" there don't feel on the music; 1.4+ is a clear beat. Onsets may sit up to ~35 ms
+    before the grid (attack vs perceived beat)."""
+    if len(beats) < 4:
+        return []
+    times = np.arange(len(onset_env)) * HOP / SR
+    half = float(np.median(np.diff(beats))) / 2
+
+    def strength(points: np.ndarray) -> float:
+        idx = np.searchsorted(times, points).clip(0, len(onset_env) - 1)
+        lo = max(1, int(round(0.035 * SR / HOP)))
+        return float(np.mean([onset_env[max(0, i - lo): i + 2].max() for i in idx]))
+
+    out = []
+    for c0 in np.arange(0.0, duration, PULSE_CHUNK):
+        b = beats[(beats >= c0) & (beats < c0 + PULSE_CHUNK)]
+        out.append(round(strength(b) / max(strength(b + half), 1e-9), 2) if len(b) >= 4 else 1.0)
+    return out
+
+
+def pulse_score(analysis: "MusicAnalysis", start: float, length: float) -> float:
+    """0-1 for the stretch an edit would use: mostly the average beat clarity, partly its weakest chunk."""
+    if not analysis.pulse:
+        return 0.5  # analysed before this existed: neutral
+    first, last = int(start // PULSE_CHUNK), int((start + length) // PULSE_CHUNK)
+    chunk = [min(1.0, max(0.0, (d - 1.0) / 0.5)) for d in analysis.pulse[first:last + 1]]
+    return 0.7 * float(np.mean(chunk)) + 0.3 * min(chunk) if chunk else 0.5
 
 
 def load_or_analyze(path: str | Path, cache_dir: Path) -> MusicAnalysis:

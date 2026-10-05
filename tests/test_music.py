@@ -33,6 +33,17 @@ def test_sections_follow_the_arrangement(placeholder):
     assert abs(peaks[0].start - 19.2) < 1.3 and abs(peaks[1].start - 48.0) < 1.3
 
 
+def test_beat_clarity_finds_the_drumless_stretches(placeholder):
+    from vidosuper.music.analysis import pulse_score
+
+    _, music = placeholder
+    weak = music.weak_beat_stretches()
+    assert weak[0][0] == 0.0 and weak[0][1] <= 19.2  # the drum-less intro and build
+    assert any(a >= 38.0 and b <= 48.5 for a, b in weak)  # the break
+    assert pulse_score(music, 19.2, 16) > pulse_score(music, 0.0, 16) + 0.4
+    assert "No audible beat on the grid" in music.summary()
+
+
 def _clip(cid, duration=20.0):
     return ClipInfo(clip_id=cid, path=cid, rel_path=cid, fingerprint=cid, duration=duration, width=1920,
                     height=1080, fps=60, has_audio=True)
