@@ -18,8 +18,14 @@ hook (first seconds), craft (clean frames, intentional cuts), sound design (mix 
 swells, as far as the measurements show). Prefer the version a thoughtful viewer would rather
 watch and share, not the one with more effects.
 
-Write the verdict (format: `./vido schema judgement`): `preferred` = "A", "B" or "tie" (only if
-genuinely indistinguishable), `confidence` 0–1, `reasons` (3–6 specific, evidence-based sentences),
-and `criteria` with a winner for each aspect above.
+Write the verdict as JSON (you have no shell, so here is the exact format):
+```json
+{"preferred": "A", "confidence": 0.7,
+ "reasons": ["specific, evidence-based sentence", "..."],
+ "criteria": {"point_of_view": "A", "dynamics": "B", "rhythm": "A", "hook": "tie", "craft": "A", "sound": "B"}}
+```
+`preferred` is "A", "B" or "tie" (only if genuinely indistinguishable); `confidence` 0–1; 3–6
+`reasons`; a winner ("A", "B" or "tie") for each aspect in `criteria`. Create the folder of the
+verdict file if it doesn't exist (the Write tool does this).
 
 Reply with: preferred, confidence, one-line reason.
