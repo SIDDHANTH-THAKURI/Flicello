@@ -85,20 +85,24 @@ def test_edl_with_short_ids_is_snapped_rendered_and_finalised(run_setup, cfg, mo
     assert submit_edl(run, project, cfg).problems == []
 
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    out = finalize(run, project, cfg)[0]
+    out = finalize(run, project, cfg, outro="short")[0]
     assert (tmp_path / 'Videos' / 'VidoSuper' / f'{out.stem}-credits.txt').exists() is False
-    video = next(s for s in ffprobe_json(out)["streams"] if s["codec_type"] == "video")
+    probe = ffprobe_json(out)
+    video = next(s for s in probe["streams"] if s["codec_type"] == "video")
     assert (video["width"], video["height"]) == (1920, 1080) and run.load().stage == "done"
+    film = json.loads((nxt / "edl.final.json").read_text(encoding="utf-8"))
+    film_seconds = sum((s["src_out"] - s["src_in"]) / s.get("speed", 1.0) for s in film["segments"])
+    assert float(probe["format"]["duration"]) > film_seconds + 7  # the short outro follows the film
 
     seen = {}
 
-    def fake_render(edl, project, cfg, quality, out_path):
-        seen.update(size=(edl.meta.width, edl.meta.height), name=out_path.name)
+    def fake_render(edl, project, cfg, quality, out_path, tail=None):
+        seen.update(size=(edl.meta.width, edl.meta.height), name=out_path.name, tail=tail)
         return SimpleNamespace(output=str(out_path))
 
     monkeypatch.setattr("vidosuper.loop.run.render_edl", fake_render)
-    finalize(run, project, cfg, resolution="4k")
-    assert seen["size"] == (3840, 2160) and seen["name"].endswith("-4k.mp4")
+    finalize(run, project, cfg, resolution="4k", outro="none")
+    assert seen["size"] == (3840, 2160) and seen["name"].endswith("-4k.mp4") and seen["tail"] is None
 
 
 def test_evidence_pack(run_setup, cfg):

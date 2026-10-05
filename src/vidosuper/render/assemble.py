@@ -37,8 +37,9 @@ def letterbox_filter(width: int, height: int, aspect: float | None) -> str | Non
 
 
 def assembly_graph(timeline: Timeline, meta: EditMeta, texts: list[tuple[TextOverlay, Path]] | None = None,
-                   size: tuple[int, int] | None = None) -> str:
-    """Text overlays are extra inputs after the shots: input index len(timeline.items) + k."""
+                   size: tuple[int, int] | None = None, tail: bool = False) -> str:
+    """Text overlays are extra inputs after the shots: input index len(timeline.items) + k. A tail (the
+    outro) is the last input and plays after the film's own fade-out."""
     fps = timeline.fps
     runs: list[list[int]] = []
     for item in timeline.items:
@@ -82,22 +83,32 @@ def assembly_graph(timeline: Timeline, meta: EditMeta, texts: list[tuple[TextOve
         d = min(meta.fade_out, total / 2)
         post.append(f"fade=t=out:st={total - d:.6f}:d={d:.3f}")
     post.append("format=yuv420p")
-    lines.append(f"[{current}]{','.join(post)}[vout]")
+    if not tail:
+        lines.append(f"[{current}]{','.join(post)}[vout]")
+        return ";\n".join(lines)
+    lines.append(f"[{current}]{','.join(post)},settb=AVTB,setsar=1[vfilm]")
+    lines.append(f"[{first_text + len(texts or [])}:v]settb=AVTB,fps={fps},format=yuv420p,setsar=1[vtail]")
+    lines.append("[vfilm][vtail]concat=n=2:v=1:a=0[vout]")
     return ";\n".join(lines)
 
 
 def assemble_video(timeline: Timeline, shots: list[SegmentOutput], meta: EditMeta, quality: str,
                    cfg: Config, out_path: Path, work_dir: Path,
-                   texts: list[tuple[TextOverlay, Path]] | None = None, size: tuple[int, int] | None = None) -> Path:
+                   texts: list[tuple[TextOverlay, Path]] | None = None, size: tuple[int, int] | None = None,
+                   tail: tuple[Path, int] | None = None) -> Path:
+    """tail: (video, frames) played after the film, e.g. the outro."""
     work_dir.mkdir(parents=True, exist_ok=True)
     script = work_dir / f"{out_path.stem}.filter.txt"
-    script.write_text(assembly_graph(timeline, meta, texts, size), encoding="utf-8")
+    script.write_text(assembly_graph(timeline, meta, texts, size, tail=tail is not None), encoding="utf-8")
     args: list[str] = []
     for shot in shots:
         args += ["-i", str(shot.video)]
     for _, png in texts or []:
         args += ["-loop", "1", "-framerate", str(timeline.fps), "-i", str(png)]
-    args += ["-/filter_complex", str(script), "-map", "[vout]", "-frames:v", str(timeline.total_frames),
+    if tail is not None:
+        args += ["-i", str(tail[0])]
+    frames = timeline.total_frames + (tail[1] if tail else 0)
+    args += ["-/filter_complex", str(script), "-map", "[vout]", "-frames:v", str(frames),
              *output_encoder(quality, cfg), "-r", str(timeline.fps), "-an", "-movflags", "+faststart", str(out_path)]
     run_ffmpeg(args, what="Could not assemble the video")
     return out_path

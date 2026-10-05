@@ -34,6 +34,7 @@ output:
   loudness_lufs: -14
   true_peak_db: -1.5             # headroom for AAC encoding overshoot
   captions: auto                 # auto (on for vertical) | on | off
+  outro: full                    # full (~12 s) | short (~8 s) | none: the agent crew + real numbers after the film
 
 ingest:
   extensions: [.mp4, .mov, .m4v, .mkv, .avi, .mts, .m2ts, .3gp, .webm]

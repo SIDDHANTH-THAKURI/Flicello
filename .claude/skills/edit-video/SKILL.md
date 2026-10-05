@@ -41,7 +41,10 @@ Run every command from the repository root (`./vido` in Bash, `.\vido.cmd` in Po
      feedback), then the `editor` again.
 7. **Final:** when the loop is done and the user approves, `./vido edit final "<run>" --iteration <best>
    --open`. Give the output path(s) in Videos\VidoSuper and, with fetched music, the credit line for
-   the video description (also saved as -credits.txt).
+   the video description (also saved as -credits.txt). The final ends with the outro (config
+   `output.outro`: the agent crew as characters and the run's real numbers); `--outro short|none`
+   changes that. Then ask the user to rate the video 1-10 (above 5 = the level of creators they
+   admire, 10 = beyond what they imagined) with a note.
 
 Other music at any point: `./vido music find "<run>" --pick N` or `./vido edit set-music "<run>" "<file>"`
 re-times the current cut to the new track (every cut keeps its beat) and renders a new draft.

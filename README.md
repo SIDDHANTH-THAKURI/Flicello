@@ -33,7 +33,8 @@ From Git Bash use `./vido` instead of `.\vido.cmd`.
 | `vido edit submit-brief <run>` | Validates the director's brief.json |
 | `vido edit submit-edl <run>` | Validates the editor's edl.json, snaps cuts to beats, renders the draft + shot sheets + notes |
 | `vido edit revise <run>` | Starts the next iteration from the current EDL |
-| `vido edit final <run> [--open]` | Full-quality render to `%USERPROFILE%\Videos\VidoSuper\` |
+| `vido edit final <run> [--resolution 1080p\|4k] [--outro full\|short\|none] [--open]` | Full-quality render to `%USERPROFILE%\Videos\VidoSuper\`, with the outro (the agent crew + the run's real numbers) after the film |
+| `vido edit outro <run> [--style full\|short] [--open]` | Just the outro as its own clip (a preview, or a second slide) |
 | `vido schema edit-brief` / `vido schema edl` | Formats the agents follow |
 
 ## Commands (Phase 4: review loop)

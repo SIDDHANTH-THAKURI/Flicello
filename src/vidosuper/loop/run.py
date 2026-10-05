@@ -21,10 +21,15 @@ from ..edit.resync import resync_edl
 from ..edit.snap import beat_alignment, snap_to_beats
 from ..edit.timeline import Timeline, build_timeline, choose_fps
 from ..edit.validate import validate_edl
+from ..ffmpeg import run_ffmpeg
 from ..music import MusicAnalysis, load_or_analyze
+from ..outro.card import Outro
+from ..outro.stats import collect_stats
+from ..outro.tail import Tail, build_tail, music_time_at_end
 from ..perceive.catalog import build_catalog, check_analysis
 from ..perceive.contact_sheet import build_sheet, format_time, grab_frames
 from ..render import render_edl
+from ..render.audio_mix import decode_music, write_wav
 from ..schemas import EDL, ClipAnalysis, EditBrief, Interval, MusicSpec, canvas_for
 from ..workspace import Project, write_model, write_text_atomic
 
@@ -574,12 +579,8 @@ def loop_status(run: Run, cfg: Config) -> str:
             f"previous_review.md), then launch the `editor` with the run folder to address the top issues.")
 
 
-def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = None,
-             resolution: str | None = None) -> list[Path]:
-    """Full-quality render(s) into Videos\\VidoSuper, plus a credits file when the music needs one.
-    resolution '4k' renders the same cut at 3840x2160 (2160x3840 vertical) from the 4K originals."""
+def _final_edl(run: Run, cfg: Config, n: int, resolution: str | None) -> EDL:
     state = run.load()
-    n = iteration or state.iteration
     edl_path = run.iteration_dir(n) / "edl.final.json"
     if not edl_path.exists():
         raise RunError(f"iteration {n} has no accepted EDL")
@@ -588,15 +589,61 @@ def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = No
     edl.meta.true_peak_db = cfg.output.true_peak_db
     if resolution:
         edl.meta.width, edl.meta.height = canvas_for(state.platform, resolution)
+    return edl
+
+
+def outro_tail(run: Run, project: Project, cfg: Config, edl: EDL, n: int, style: str, *,
+               with_music: bool = True) -> Tail:
+    """The outro for iteration n at the EDL's size: the crew and the run's real numbers, with the film's
+    track carrying on softly underneath (unless with_music is False)."""
+    card = Outro(collect_stats(run.dir, project, n), edl.meta.width, edl.meta.height, edl.meta.fps, style)
+    music_wav, music_from = None, 0.0
+    if with_music and edl.music is not None and edl.music.path:
+        music_wav = decode_music(edl.music.path, project.music)
+        music_from = music_time_at_end(edl.music, build_timeline(edl, project.clips()).duration)
+    return build_tail(card, project.segments / "outro", "final", cfg, music_wav, music_from)
+
+
+def render_outro_clip(run: Run, project: Project, cfg: Config, iteration: int | None = None, style: str = "full",
+                      resolution: str | None = None) -> Path:
+    """Just the outro as its own video (a preview, or a second slide next to the film)."""
+    state = run.load()
+    n = iteration or state.best_iteration or state.iteration
+    edl = _final_edl(run, cfg, n, resolution)
+    tail = outro_tail(run, project, cfg, edl, n, style)
+    out = Path.home() / "Videos" / "VidoSuper" / (
+        f"{project.clips_dir.name}-{state.run_id}-v{n}-outro-{style}" + (f"-{resolution}" if resolution else "") + ".mp4")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wav = project.tmp / f"outro_{state.run_id}.wav"
+    project.tmp.mkdir(parents=True, exist_ok=True)
+    write_wav(wav, tail.audio)
+    run_ffmpeg(["-i", str(tail.video), "-i", str(wav), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                "-c:a", "aac", "-b:a", cfg.render.audio_bitrate, "-shortest", "-movflags", "+faststart", str(out)],
+               what="Could not write the outro clip")
+    wav.unlink(missing_ok=True)
+    return out
+
+
+def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = None,
+             resolution: str | None = None, outro: str | None = None) -> list[Path]:
+    """Full-quality render(s) into Videos\\VidoSuper, plus a credits file when the music needs one.
+    resolution '4k' renders the same cut at 3840x2160 (2160x3840 vertical) from the 4K originals.
+    outro: full | short | none (default: config output.outro) - the crew and numbers after the film."""
+    state = run.load()
+    n = iteration or state.iteration
+    edl = _final_edl(run, cfg, n, resolution)
+    style = outro or cfg.output.outro
     out_dir = Path.home() / "Videos" / "VidoSuper"
     stem = f"{project.clips_dir.name}-{state.run_id}-v{n}" + (f"-{resolution}" if resolution else "")
     outputs: list[Path] = []
     if state.music_mode == "trending" and edl.music is not None:
         post = edl.model_copy(deep=True)
         post.music = None
-        outputs.append(Path(render_edl(post, project, cfg, quality="final",
+        tail = outro_tail(run, project, cfg, edl, n, style, with_music=False) if style != "none" else None
+        outputs.append(Path(render_edl(post, project, cfg, quality="final", tail=tail,
                                        out_path=out_dir / f"{stem}-POST-add-sound-in-app.mp4").output))
-        outputs.append(Path(render_edl(edl, project, cfg, quality="final",
+        tail = outro_tail(run, project, cfg, edl, n, style) if style != "none" else None
+        outputs.append(Path(render_edl(edl, project, cfg, quality="final", tail=tail,
                                        out_path=out_dir / f"{stem}-PREVIEW-ONLY-with-sound.mp4").output))
         sound = state.sound_name or Path(state.music or "").stem
         write_text_atomic(out_dir / f"{stem}-how-to-post.txt", (
@@ -604,7 +651,9 @@ def finalize(run: Run, project: Project, cfg: Config, iteration: int | None = No
             f"\"{sound}\" from the app's library and set its start to {edl.music.start:.1f}s into the song, so the "
             "cuts land on the music as edited.\n"))
     else:
-        outputs.append(Path(render_edl(edl, project, cfg, quality="final", out_path=out_dir / f"{stem}.mp4").output))
+        tail = outro_tail(run, project, cfg, edl, n, style) if style != "none" else None
+        outputs.append(Path(render_edl(edl, project, cfg, quality="final", tail=tail,
+                                       out_path=out_dir / f"{stem}.mp4").output))
         if state.music_credit:
             write_text_atomic(out_dir / f"{stem}-credits.txt",
                               f"Music: {state.music_credit}\n\n(Paste this line into your video's description.)\n")

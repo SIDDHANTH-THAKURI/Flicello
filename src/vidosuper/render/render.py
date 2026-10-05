@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import soundfile as sf
@@ -18,10 +19,13 @@ from ..ffmpeg import ffprobe_json, run_ffmpeg
 from ..schemas import EDL
 from ..workspace import Project, write_text_atomic
 from .assemble import assemble_video
-from .audio_mix import decode_music, mix_timeline, normalize, write_wav
+from .audio_mix import decode_music, frames_to_samples, mix_timeline, normalize, write_wav
 from .segments import render_segments
 from .sfx import sfx_path
 from .text import render_text_png
+
+if TYPE_CHECKING:
+    from ..outro.tail import Tail
 
 
 EncodedPeakCeiling = -0.5  # dBFS: decoded AAC peaks above this risk clipping in some players
@@ -76,7 +80,9 @@ def draft_canvas(width: int, height: int, short_side: int) -> tuple[int, int]:
 
 
 def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft",
-               out_path: Path | None = None, on_shot: Callable[[], None] | None = None) -> RenderResult:
+               out_path: Path | None = None, on_shot: Callable[[], None] | None = None,
+               tail: Tail | None = None) -> RenderResult:
+    """tail: something to play after the film (the outro), already rendered at this size and fps."""
     if quality not in ("draft", "final"):
         raise ValueError("quality must be 'draft' or 'final'")
     started = time.perf_counter()
@@ -101,13 +107,18 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
                             look_name=meta.look)
     texts = [(t, render_text_png(t, width, height, work / f"text_{k}.png")) for k, t in enumerate(edl.texts)]
     video_only = assemble_video(timeline, shots, meta, quality, cfg, work / "picture.mp4", work,
-                                texts=texts, size=(width, height))
+                                texts=texts, size=(width, height),
+                                tail=(tail.video, tail.frames) if tail else None)
 
     music_wav = decode_music(edl.music.path, project.music) if edl.music and edl.music.path else None
     layers = [(layer, resolve_sound(layer.source, clips, project)) for layer in edl.sounds]
     mix = mix_timeline(timeline, shots, meta, edl.music if music_wav else None, music_wav,
                        cfg.render.music_duck_db, layers=layers)
     mix, measured, gain_db = normalize(mix, meta.loudness_lufs, meta.true_peak_db)
+    if tail is not None:  # the outro's sound has its own level; it just follows the film
+        tail_audio = np.zeros((frames_to_samples(tail.frames, timeline.fps), 2), np.float32)
+        tail_audio[: len(tail.audio)] = tail.audio[: len(tail_audio)]
+        mix = np.concatenate([mix, tail_audio])
     mix_path = work / "mix.wav"
     write_wav(mix_path, mix)
 
@@ -128,7 +139,7 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
     duration = float((probe.get("format") or {}).get("duration") or 0.0)
     result = RenderResult(
         output=str(out_path), quality=quality, width=width, height=height, fps=timeline.fps,
-        frames=timeline.total_frames, duration=round(duration, 3), shots=len(shots),
+        frames=timeline.total_frames + (tail.frames if tail else 0), duration=round(duration, 3), shots=len(shots),
         shots_rendered=sum(1 for s in shots if not s.cached), seconds=round(time.perf_counter() - started, 1),
         loudness_measured=None if measured is None else round(measured, 1),
         loudness_gain_db=None if gain_db is None else round(gain_db, 1),

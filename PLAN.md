@@ -192,7 +192,11 @@ Round 3  (score 7.4 → 8.1; judge prefers v3 in both orders)
 - It learns things like "you keep most food shots but cut static landscapes longer than 3 s" or "you like faster pacing than the critics suggest."
 - Used three ways: as guidance for the director and editor, as the basis for a taste critic, and as a small boost or penalty when ranking moments.
 
-## 8. Reference videos (optional, 1–3)
+## 8. Reference videos (dropped)
+*Dropped on 2026-10-05: the user won't supply references (copying feels uncreative). Their 1–10 rating of
+each final is the target instead (above 5 = the level of creators they admire, 10 = beyond imagination).
+The original idea is kept below for the record.*
+
 - The tool detects every shot cut, then measures the shot-length distribution and its shape over time, hook length, cuts per minute, transition types, use of text and captions, color and look, music tempo, and how often cuts land on the beat.
 - A subagent reviews frames from each shot and writes a style guide, including signature moves (e.g. "speed-ramps into the drop", "location title cards at 0:03").
 - The result is a **style profile**, a concrete target for the director, editor, pacing critic, and style-match critic.
@@ -373,6 +377,15 @@ I pause for your review after Phases 1, 2, and 3.
   - The director now commits to a thesis, real dynamics with quiet valleys, motifs, juxtapositions, separate rhythm layers, anticipation cuts, rare purposeful text and a deliberate convention break.
   - The engine gained what that needs: per-cut sync (beat / bar / free), J/L cuts, music automation and edits, ambience bridges, built-in effects, freeze frames, looks, letterbox and text.
   - 4K output waits until the edits themselves are right.
+- **2026-10-05 (your direction): no reference videos; your 1–10 rating is the bar.** Above 5 means the
+  level of creators you admire; 10 means beyond what you imagined.
+- **2026-10-05:** Jamendo key added. Jamendo needs `+`-joined tags, randomly answers ~40% of good
+  queries with nothing, and is mostly non-commercial music; search now retries, pages and filters
+  server-side, and finds ~20 CC BY tracks per query.
+- **2026-10-05 (your idea): every final ends with an outro.** "I didn't edit this", then the crew
+  (cute characters for each agent, labelled with what it did), the real numbers from the run, and
+  "Made with Claude" with the music credit. All drawn in code (Pillow, two OFL fonts), so it costs
+  nothing. ~12 s full, ~8 s short, or none.
 
 ## Glossary
 - **EDL (Edit Decision List):** the recipe for the video: which clip, from which second to which second, in what order, with what transitions, music, and text.

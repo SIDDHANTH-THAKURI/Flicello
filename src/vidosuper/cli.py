@@ -490,16 +490,19 @@ def edit_judge(run_dir: Path = typer.Argument(..., help="Run folder")) -> None:
 def edit_final(run_dir: Path = typer.Argument(..., help="Run folder"),
                iteration: int | None = typer.Option(None, help="Which iteration (default: latest)"),
                resolution: str | None = typer.Option(None, help="1080p | 4k (default: the run's)"),
+               outro: str | None = typer.Option(None, help="full | short | none (default: config output.outro)"),
                open_file: bool = typer.Option(False, "--open", help="Open the result")) -> None:
     """Render the full-quality video from an accepted iteration."""
     from .loop import TRENDING_CAVEAT, Run, finalize
 
     if resolution not in (None, "1080p", "4k"):
         raise typer.BadParameter("resolution must be 1080p or 4k")
+    if outro not in (None, "full", "short", "none"):
+        raise typer.BadParameter("outro must be full, short or none")
     cfg = load_config()
     run = Run(run_dir)
     state = run.load()
-    outputs = finalize(run, Project(state.clips_dir, cfg), cfg, iteration, resolution)
+    outputs = finalize(run, Project(state.clips_dir, cfg), cfg, iteration, resolution, outro)
     for out in outputs:
         console.print(f"[green]Final video:[/] {escape(str(out))}")
     state = run.load()
@@ -509,6 +512,27 @@ def edit_final(run_dir: Path = typer.Argument(..., help="Run folder"),
         console.print(f"Music credit for the description: {escape(state.music_credit)}")
     if open_file and os.name == "nt":
         os.startfile(outputs[0])  # noqa: S606 - the user's own render
+
+
+@edit_app.command("outro")
+def edit_outro(run_dir: Path = typer.Argument(..., help="Run folder"),
+               iteration: int | None = typer.Option(None, help="Which iteration's numbers (default: the best)"),
+               style: str = typer.Option("full", help="full | short"),
+               resolution: str | None = typer.Option(None, help="1080p | 4k (default: the run's)"),
+               open_file: bool = typer.Option(False, "--open", help="Open the result")) -> None:
+    """Render just the outro - the agent crew and the run's real numbers - as its own clip."""
+    from .loop import Run, render_outro_clip
+
+    if style not in ("full", "short"):
+        raise typer.BadParameter("style must be full or short")
+    if resolution not in (None, "1080p", "4k"):
+        raise typer.BadParameter("resolution must be 1080p or 4k")
+    cfg = load_config()
+    run = Run(run_dir)
+    out = render_outro_clip(run, Project(run.load().clips_dir, cfg), cfg, iteration, style, resolution)
+    console.print(f"[green]Outro:[/] {escape(str(out))}")
+    if open_file and os.name == "nt":
+        os.startfile(out)  # noqa: S606 - the user's own render
 
 
 @edit_app.command("report")

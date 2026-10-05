@@ -49,6 +49,7 @@ class OutputCfg(_Strict):
     loudness_lufs: float = -14.0
     true_peak_db: float = -1.5
     captions: Literal["auto", "on", "off"] = "auto"
+    outro: Literal["full", "short", "none"] = "full"  # the crew + behind-the-scenes numbers after the film
 
 
 class IngestCfg(_Strict):
