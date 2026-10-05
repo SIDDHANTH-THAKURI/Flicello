@@ -31,6 +31,11 @@ def _is_complete(clip: ClipInfo) -> bool:
     return not clip.has_audio or bool(clip.audio_wav and Path(clip.audio_wav).exists())
 
 
+def _name_rank(path: Path) -> tuple[bool, int, str]:
+    """Among identical files, prefer one not named like a copy, then the shortest name."""
+    return "copy" in path.stem.lower(), len(path.name), path.name
+
+
 def ingest_folder(
     clips_dir: str | Path,
     cfg: Config,
@@ -49,8 +54,17 @@ def ingest_folder(
     ready: list[ClipInfo] = []
     todo: list[tuple[Path, str, str]] = []
 
+    # the same footage twice (e.g. "clip - Copy.MP4") is one clip: keep the original-looking name
+    prints = {path: fingerprint(path) for path in files}
+    chosen: dict[str, Path] = {}
+    for path, fp in prints.items():
+        if fp not in chosen or _name_rank(path) < _name_rank(chosen[fp]):
+            chosen[fp] = path
+
     for path in files:
-        fp = fingerprint(path)
+        fp = prints[path]
+        if chosen[fp] != path:
+            continue
         rel = str(path.relative_to(project.clips_dir))
         old = previous.get(fp)
         if old and not force and _is_complete(old):

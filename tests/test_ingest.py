@@ -58,3 +58,13 @@ def test_reingest_uses_cache(media, cfg, ingested):
     _, again = ingest_folder(media / "clips", cfg)
     after = {Path(c.rel_path).stem: os.path.getmtime(c.proxy) for c in again}
     assert before == after
+
+
+def test_a_copied_file_is_one_clip(media, cfg, tmp_path):
+    folder = tmp_path / "trip"
+    (folder / "sub").mkdir(parents=True)
+    original = (media / "clips" / "a_stable.mp4").read_bytes()
+    (folder / "sub" / "DJI_0153_D - Copy.MP4").write_bytes(original)
+    (folder / "DJI_0153_D.MP4").write_bytes(original)
+    _, clips = ingest_folder(folder, cfg)
+    assert [c.rel_path for c in clips] == ["DJI_0153_D.MP4"]
