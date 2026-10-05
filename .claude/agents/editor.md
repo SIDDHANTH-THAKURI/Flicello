@@ -80,8 +80,9 @@ in for you; the music path too (music.start defaults to the suggested start in m
    `dissolve`/`fadeblack`). Never use the catalog's *Avoid* ranges. For the hook, the main reveal
    and the last shot, check exact frames: `./vido inspect "<clips folder>" <clip> <start> <end>`.
 9. **Break the convention** the brief names — visibly.
-   **The user's taste (from their reviews):** never go A → B → back to A (e.g. tram → boat → tram)
-   unless the return is an unmistakable, motivated callback; don't cut a shot that is still
+   **The user's taste (from their reviews):** never go A → B → back to A (e.g. tram → boat → tram),
+   and no flash-forward cold open that returns later; every subject (even a different tram) lives in
+   one contiguous stretch — check your shot list for this before submitting; don't cut a shot that is still
    working just to keep pace — cut only when the next shot adds something; on-screen text must add
    meaning a viewer can't get from the picture (never a two-word title or slogan) or be left out.
 10. **Length** within ±10% of the target; a rationale on every shot (moment id + why).

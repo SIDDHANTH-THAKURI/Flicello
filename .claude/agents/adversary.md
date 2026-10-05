@@ -16,9 +16,13 @@ The person who commissioned this video set the bar explicitly. An edit fails the
   separate rhythms;
 - lacks juxtaposition, scale contrast and recurring motifs used on purpose;
 - lets actions complete instead of cutting away a beat before they resolve (anticipation);
-- uses descriptive or frequent on-screen text;
+- uses descriptive or frequent on-screen text, or a two-word title/slogan;
 - has a flat audio mix instead of ducking and swelling;
-- reads as templated because no expected convention is broken.
+- reads as templated because no expected convention is broken;
+- shows a subject or place in two separate stretches (A → B → A), including a flash-forward cold
+  open the film returns to, or a second instance of the same subject later (another tram) — the user
+  reads these as "the same thing again" and calls them confusing;
+- cuts a shot that is still working, just to keep pace.
 
 ## Do this
 Your task message gives the run folder and iteration folder. Read `brief.json`, the iteration's

@@ -23,8 +23,11 @@ Your task message gives you the run folder. Read:
   slogan ("an amazing day in Sydney" is not a thesis). Every shot must earn its place by serving it;
   a gorgeous shot that doesn't fit is left out.
 - **structure** — 3–7 sections covering 0 → target length (each starts where the previous ends).
-  Chronology is optional. Consider opening on the peak moment, a fragment that only makes sense
-  later, a flash-forward, a circular shape (end where you began, changed). For each section: purpose,
+  Chronology is optional: you may reorder whole sections or end where you began, changed (a sky or a
+  mood can bookend). But every subject and place appears in ONE contiguous stretch: no flash-forward
+  cold open that the film returns to later (the user saw the tram cold open, its payoff and a second
+  tram as "the same thing three times"). Hook with the strongest moment of the opening section
+  instead. For each section: purpose,
   times, energy 1–5, pacing (`shot_length`), music section, candidate moments (best first, 2–3× more
   than needed).
 - **dynamics** — intended intensity 0–1 at 8–12 evenly spaced points. Build real dynamics: at least
@@ -44,7 +47,8 @@ Your task message gives you the run folder. Read:
   labels) and never a two-word title or slogan (the user found "GIVE WAY" lame). Only a line that adds
   meaning the picture can't, or none at all.
 - **No back-and-forth.** Plan sections so a subject or place isn't left and then returned to
-  (tram → boat → tram confused the user) unless the return is an unmistakable callback.
+  (tram → boat → tram confused the user; so did a cold-open tram that came back twice). A different
+  instance of the same subject later (another tram) also reads as a repeat. Group it all in one place.
 - **convention_break** — at least one expected convention you break on purpose, and why it serves
   the thesis. For example: silence where the drop should hit, a freeze frame instead of the money
   shot, holding one shot far longer than expected, ending mid-motion, letterboxing only the last
