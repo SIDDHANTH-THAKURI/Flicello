@@ -86,7 +86,9 @@ def assembly_graph(timeline: Timeline, meta: EditMeta, texts: list[tuple[TextOve
     if not tail:
         lines.append(f"[{current}]{','.join(post)}[vout]")
         return ";\n".join(lines)
-    lines.append(f"[{current}]{','.join(post)},settb=AVTB,setsar=1[vfilm]")
+    # end the film exactly on its last frame: a looped text image would otherwise keep the overlay (and
+    # so the film) running forever, and the tail would never be reached
+    lines.append(f"[{current}]{','.join(post)},trim=end_frame={timeline.total_frames},settb=AVTB,setsar=1[vfilm]")
     lines.append(f"[{first_text + len(texts or [])}:v]settb=AVTB,fps={fps},format=yuv420p,setsar=1[vtail]")
     lines.append("[vfilm][vtail]concat=n=2:v=1:a=0[vout]")
     return ";\n".join(lines)
@@ -103,8 +105,9 @@ def assemble_video(timeline: Timeline, shots: list[SegmentOutput], meta: EditMet
     args: list[str] = []
     for shot in shots:
         args += ["-i", str(shot.video)]
-    for _, png in texts or []:
-        args += ["-loop", "1", "-framerate", str(timeline.fps), "-i", str(png)]
+    for _, png in texts or []:  # a still looped for exactly the film's length, never forever
+        args += ["-loop", "1", "-framerate", str(timeline.fps), "-t", f"{timeline.total_frames / timeline.fps:.3f}",
+                 "-i", str(png)]
     if tail is not None:
         args += ["-i", str(tail[0])]
     frames = timeline.total_frames + (tail[1] if tail else 0)

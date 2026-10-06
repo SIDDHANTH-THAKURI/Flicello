@@ -7,14 +7,16 @@ import json
 import numpy as np
 
 from vidosuper.edit import baseline_edl, build_timeline
-from vidosuper.ffmpeg import ffprobe_json
+from PIL import Image
+
+from vidosuper.ffmpeg import ffprobe_json, run_ffmpeg
 from vidosuper.ingest.chapters import chronological
 from vidosuper.outro.card import STYLES, Outro, crew_for, tiles_for
 from vidosuper.outro.draw import text_sprite
 from vidosuper.outro.stats import RunStats, collect_stats, short_credit
 from vidosuper.outro.tail import build_tail, music_time_at_end, outro_audio
 from vidosuper.render import render_edl
-from vidosuper.schemas import EditMeta, MusicJump, MusicSpec
+from vidosuper.schemas import EditMeta, MusicJump, MusicSpec, TextOverlay
 
 STATS = RunStats(clips=16, raw_seconds=475.3, uhd=True, measured_frames=4755, moments=56, acts=5, drafts=4, reviewed=2, shots=18,
                  final_seconds=57.6, critic_notes=54, adversary_notes=7, verdicts=2, score_trail=[6.38, 6.88],
@@ -81,6 +83,9 @@ def test_outro_is_appended_after_the_film(ingested, cfg, media, tmp_path):
     meta = EditMeta(width=1920, height=1080, fps=30)
     edl = baseline_edl(chronological(list(clips.values())), signals, project_dir=str(project.clips_dir), meta=meta,
                        target_seconds=6, shot_seconds=2.0, music=MusicSpec(path=str(media / "music.wav"), gain_db=-6))
+    # on-screen text is a looped still: it must not keep the film running over the outro (it did once,
+    # leaving the whole outro black)
+    edl.texts = [TextOverlay(text="How do you zoom?", start=1.0, end=2.5, position="lower-third")]
     film = build_timeline(edl, project.clips())
     outro = Outro(STATS, 960, 540, 30, "short")  # draft size
     tail = build_tail(outro, tmp_path / "outro", "draft", cfg)
@@ -89,3 +94,6 @@ def test_outro_is_appended_after_the_film(ingested, cfg, media, tmp_path):
     video = next(s for s in ffprobe_json(result.output)["streams"] if s["codec_type"] == "video")
     assert int(video["nb_frames"]) == film.total_frames + outro.frames == result.frames
     assert abs(result.duration - (film.total_frames + outro.frames) / 30) < 0.1
+    still = tmp_path / "crew.png"  # the crew is on screen ~4 s into the short outro
+    run_ffmpeg(["-ss", f"{film.total_frames / 30 + 4.0:.2f}", "-i", result.output, "-frames:v", "1", str(still)])
+    assert np.asarray(Image.open(still).convert("L"), dtype=np.float32).mean() > 8
