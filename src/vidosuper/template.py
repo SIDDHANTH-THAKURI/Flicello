@@ -29,6 +29,9 @@ class Slot(BaseModel):
     start: float = Field(..., description="Timeline seconds where this shot is fully on screen (a beat/bar).")
     end: float
     want: str = Field("", description="What belongs here, for whoever picks the clip: 'wide epic reveal'.")
+    keywords: list[str] = Field(default_factory=list, description="Words a placeholder moment should mention.")
+    clip: str | None = Field(None, description="A chosen clip (catalog short id like c40, or full id) instead of a placeholder.")
+    src_in: float | None = Field(None, description="Where the chosen clip starts (source seconds).")
     energy: int = Field(3, ge=1, le=5)
     speed: float = 1.0
     ramp: list[RampPoint] = Field(default_factory=list)
@@ -69,6 +72,14 @@ def _moments(project: Project) -> list[dict]:
     return out
 
 
+def _short_ids(project: Project) -> dict[str, str]:
+    path = project.root / "catalog.json"
+    if not path.exists():
+        return {}
+    catalog = json.loads(path.read_text(encoding="utf-8"))
+    return {c["short"]: c["clip"]["clip_id"] for c in catalog.get("clips", [])}
+
+
 def _span(slot: Slot, seconds_on_screen: float) -> float:
     """Source seconds a slot needs to fill seconds_on_screen."""
     if not slot.ramp:
@@ -79,31 +90,50 @@ def _span(slot: Slot, seconds_on_screen: float) -> float:
 
 def autofill(template: Template, project: Project, fps: int = 30, width: int = 1920, height: int = 1080) -> EDL:
     """An EDL with placeholder footage in every slot; transitions are centred on the slot boundaries."""
-    pool = sorted(_moments(project), key=lambda m: -m["score"])
+    pool = _moments(project)
     used: set[tuple[str, float]] = set()
+    clips = project.clips()
+    shorts = _short_ids(project)
     slots = template.slots
-    segments = []
-    last_clip = None
-    for k, slot in enumerate(slots):
+    chosen: dict[int, dict] = {}
+    # the most important slots (high energy, long holds) choose first, so the best action lands on the drop
+    order = sorted(range(len(slots)), key=lambda k: (-slots[k].energy, -(slots[k].end - slots[k].start)))
+    for k in order:
+        slot = slots[k]
         d_in = slot.transition_in.duration if k and slot.transition_in.type != "cut" else 0.0
         d_out = slots[k + 1].transition_in.duration if k + 1 < len(slots) and \
             slots[k + 1].transition_in.type != "cut" else 0.0
         on_screen = (slot.end - slot.start) + d_in / 2 + d_out / 2
         need = _span(slot, on_screen)
         slow = min([p.speed for p in slot.ramp] or [slot.speed]) < 0.95
+        if slot.clip:  # chosen by hand
+            clip = clips[shorts.get(slot.clip, slot.clip)]
+            start = slot.src_in or 0.0
+            chosen[k] = {"clip": clip, "start": start, "end": start + need, "text": f"chosen: {slot.want}", "need": need}
+            used.add((clip.clip_id, start))
+            continue
+        def fit(m: dict) -> float:
+            hits = sum(1 for w in slot.keywords if w.lower() in m["text"].lower())
+            calm = m["kind"] in ("scenic", "establishing")
+            return m["score"] + 3 * hits + (2 if (slot.energy <= 2) == calm else 0)
+
         pick = None
-        for m in pool:
+        neighbours = {chosen[j]["clip"].clip_id for j in (k - 1, k + 1) if j in chosen}
+        for m in sorted(pool, key=fit, reverse=True):
             key = (m["clip"].clip_id, m["start"])
             if key in used or (slow and m["clip"].fps < 50) or m["clip"].duration < need:
                 continue
-            if m["clip"].clip_id == last_clip and len(pool) > len(slots):
+            if m["clip"].clip_id in neighbours and len(pool) > len(slots):
                 continue
             pick = m
             break
         if pick is None:
             raise ValueError(f"no footage long enough for slot {slot.id} ({need:.1f}s of source)")
         used.add((pick["clip"].clip_id, pick["start"]))
-        last_clip = pick["clip"].clip_id
+        chosen[k] = {**pick, "need": need}
+    segments = []
+    for k, slot in enumerate(slots):
+        pick, need = chosen[k], chosen[k]["need"]
         start = pick["start"]
         if pick["end"] - start < need:  # widen around the moment, inside the clip
             start = max(0.0, min(pick["clip"].duration - need, pick["start"] - (need - (pick["end"] - start)) / 2))
@@ -112,7 +142,8 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
             speed=slot.speed, ramp=slot.ramp, push=slot.push, fx=slot.fx,
             transition_in=slot.transition_in if k else Transition(), out_sync="free",
             audio=SegmentAudio(mode="mute"), role=f"energy {slot.energy}",
-            rationale=f"PLACEHOLDER for '{slot.want}': {pick['text'][:90]}"))
+            rationale=(pick["text"] if pick["text"].startswith("chosen") else
+                       f"PLACEHOLDER for '{slot.want}': {pick['text'][:90]}")))
     meta = EditMeta(title=template.name, width=width, height=height, fps=fps, look=template.look,
                     fade_in=template.fade_in, fade_out=template.fade_out, snap_to_beats=False)
     return EDL(project_dir=str(project.clips_dir), meta=meta, segments=segments, music=template.music)
