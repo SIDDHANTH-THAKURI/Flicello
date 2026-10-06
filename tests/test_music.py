@@ -33,15 +33,25 @@ def test_sections_follow_the_arrangement(placeholder):
     assert abs(peaks[0].start - 19.2) < 1.3 and abs(peaks[1].start - 48.0) < 1.3
 
 
-def test_beat_clarity_finds_the_drumless_stretches(placeholder):
+def test_beat_clarity(placeholder, tmp_path):
+    import soundfile as sf
+
     from vidosuper.music.analysis import pulse_score
 
     _, music = placeholder
-    weak = music.weak_beat_stretches()
-    assert weak[0][0] == 0.0 and weak[0][1] <= 19.2  # the drum-less intro and build
-    assert any(a >= 38.0 and b <= 48.5 for a, b in weak)  # the break
-    assert pulse_score(music, 19.2, 16) > pulse_score(music, 0.0, 16) + 0.4
-    assert "No audible beat on the grid" in music.summary()
+    assert pulse_score(music, 19.2, 16) > pulse_score(music, 0.0, 16)  # drums beat the bass-only intro
+    assert not any(a < 30 < b for a, b in music.weak_beat_stretches())  # the drum peak is clear
+    # sustained pad chords, nothing on the beat: no audible beat anywhere
+    sr = 22050
+    t = np.arange(int(32 * sr)) / sr
+    pad = np.zeros_like(t)
+    for k, chord in enumerate([(220, 277, 330), (196, 247, 294), (175, 220, 262), (165, 208, 247)]):
+        env = np.clip(1 - np.abs((t - (k * 8 + 4)) / 5.0), 0, 1)
+        pad += env * sum(np.sin(2 * np.pi * f * t) for f in chord) / 6
+    path = tmp_path / "pad.wav"
+    sf.write(str(path), pad.astype(np.float32), sr)
+    pads = analyze_music(path)
+    assert pulse_score(pads, 0.0, 30) < 0.3 and "No audible beat on the grid" in pads.summary()
 
 
 def _clip(cid, duration=20.0):

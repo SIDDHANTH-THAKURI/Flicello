@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
-MUSIC_VERSION = 2  # 2: beat clarity (pulse)
+MUSIC_VERSION = 3  # 2: beat clarity (pulse); 3: kick-band clarity too
 SR = 22050
 HOP = 512
 PULSE_CHUNK = 8.0
@@ -227,7 +227,11 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
         path=str(path), fingerprint=fingerprint_file(path), duration=round(duration, 3), tempo=round(tempo, 2),
         beats=[round(float(b), 3) for b in beats], downbeats=[round(float(b), 3) for b in downbeats],
         energy=[round(float(e), 3) for e in energy], sections=sections, drops=drops,
-        pulse=beat_dominance(onset_env, beats, duration),
+        # dance music puts loud hi-hats on the off-beats, so also listen to the kick drum's band alone
+        pulse=[max(a, b) for a, b in zip(
+            beat_dominance(onset_env, beats, duration),
+            beat_dominance(librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP, fmax=200, n_mels=24),
+                           beats, duration))],
     )
 
 
