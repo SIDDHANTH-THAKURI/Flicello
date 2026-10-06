@@ -12,6 +12,7 @@ import numpy as np
 from ..music import MusicAnalysis
 from ..schemas import EDL, ClipInfo, Interval, MusicSpec
 from .timeline import build_timeline
+from .speed import end_speed, out_duration
 
 
 def _overlaps(start: float, end: float, ranges: list[Interval]) -> bool:
@@ -66,11 +67,11 @@ def snap_to_beats(edl: EDL, clips: dict[str, ClipInfo], analysis: MusicAnalysis,
                          "left alone (too far)")
             continue
         clip = clips[seg.clip_id]
-        new_out = seg.src_out + delta * seg.speed
+        new_out = seg.src_out + delta * end_speed(seg)
         reason = ""
         if new_out > clip.duration:
             reason = "clip ends"
-        elif (new_out - seg.src_in) / seg.speed < min_shot:
+        elif out_duration(seg.model_copy(update={"src_out": new_out})) < min_shot:
             reason = "shot would get too short"
         elif delta > 0 and _overlaps(seg.src_out, new_out, avoid.get(seg.clip_id, [])):
             reason = "would extend into bad footage"

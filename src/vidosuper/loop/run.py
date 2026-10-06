@@ -376,9 +376,12 @@ def edl_markdown(edl: EDL, timeline: Timeline, shorts: dict[str, str]) -> str:
         s = item.seg
         trans = s.transition_in.type if s.transition_in.type == "cut" else f"{s.transition_in.type} {s.transition_in.duration:.1f}s"
         extras = "".join([f" zoom {s.zoom:g}" if s.zoom > 1 else "", f" freeze {s.freeze:g}s" if s.freeze else "",
-                          f" J{s.audio.lead:g}" if s.audio.lead else "", f" L{s.audio.tail:g}" if s.audio.tail else ""])
+                          f" J{s.audio.lead:g}" if s.audio.lead else "", f" L{s.audio.tail:g}" if s.audio.tail else "",
+                          f" push {s.push:+g}" if s.push else "",
+                          "".join(f" {f.type}@{f.at:g}s" for f in s.fx)])
+        speed = "→".join(f"{p.speed:g}x" for p in s.ramp) if s.ramp else f"{s.speed:g}x"
         rows.append(f"| {s.id} | {format_time(item.start / fps)}–{format_time(item.end / fps)} | {shorts.get(s.clip_id, s.clip_id)} | "
-                    f"{s.src_in:.2f}–{s.src_out:.2f}{extras} | {s.speed:g}x | {trans} | {s.out_sync} | {s.audio.mode} | "
+                    f"{s.src_in:.2f}–{s.src_out:.2f}{extras} | {speed} | {trans} | {s.out_sync} | {s.audio.mode} | "
                     f"{s.role} | {s.rationale} |")
     if edl.texts:
         rows += ["", "Text: " + "; ".join(f"{t.start:.1f}-{t.end:.1f}s \"{t.text}\"" for t in edl.texts)]

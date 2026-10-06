@@ -703,3 +703,29 @@ def validate(edl_file: Path = typer.Argument(..., help="EDL JSON file")) -> None
 
 if __name__ == "__main__":
     app()
+
+
+template_app = typer.Typer(no_args_is_help=True, help="Templates: design an edit's rhythm and effects on a song first.")
+app.add_typer(template_app, name="template")
+
+
+@template_app.command("preview")
+def template_preview(template_file: Path = typer.Argument(..., help="template.json"),
+                     clips_dir: Path = typer.Argument(..., help="Folder with the raw clips (analysed)"),
+                     open_file: bool = typer.Option(False, "--open", help="Open the preview")) -> None:
+    """Fill every slot with placeholder footage and render a quick preview on the song."""
+    from .render import render_edl
+    from .template import autofill, load_template, save_preview_edl, template_markdown
+
+    cfg = load_config()
+    project = Project(clips_dir, cfg)
+    template = load_template(template_file)
+    edl = autofill(template, project)
+    out_dir = Path(template_file).parent
+    stem = Path(template_file).stem
+    save_preview_edl(edl, out_dir / f"{stem}.preview-edl.json")
+    (out_dir / f"{stem}.md").write_text(template_markdown(template), encoding="utf-8")
+    result = render_edl(edl, project, cfg, quality="draft", out_path=out_dir / f"{stem}-preview.mp4")
+    console.print(f"[green]Preview:[/] {escape(result.output)} ({result.duration:.1f}s, {result.shots} slots)")
+    if open_file and os.name == "nt":
+        os.startfile(result.output)  # noqa: S606 - the user's own render

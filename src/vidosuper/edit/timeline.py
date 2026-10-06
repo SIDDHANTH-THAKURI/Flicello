@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from ..schemas import EDL, ClipInfo, Segment
+from .speed import out_duration, source_time
 
 STANDARD_FPS = (24, 25, 30)
 
@@ -26,7 +27,7 @@ class TimelineItem:
 
     def src_seconds(self, fps: int) -> float:
         """Source seconds actually consumed (frame-quantised)."""
-        return self.moving_frames * self.seg.speed / fps
+        return source_time(self.seg, self.moving_frames / fps) if self.seg.ramp else self.moving_frames * self.seg.speed / fps
 
 
 @dataclass
@@ -48,7 +49,7 @@ def build_timeline(edl: EDL, clips: dict[str, ClipInfo]) -> Timeline:
     cursor = 0
     for index, seg in enumerate(edl.segments):
         clip = clips[seg.clip_id]
-        moving = max(1, round((seg.src_out - seg.src_in) / seg.speed * fps))
+        moving = max(1, round(out_duration(seg) * fps))
         frames = moving + round(seg.freeze * fps)
         trans = 0
         if index > 0 and seg.transition_in.type != "cut":

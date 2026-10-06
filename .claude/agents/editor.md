@@ -75,7 +75,8 @@ in for you; the music path too (music.start defaults to the suggested start in m
    section. Timeline time = music time − music.start (before any jump).
 7. **Look and text.** `meta.look` (natural, warm, cool, teal-orange, film, faded, punchy, mono) only
    if it serves the thesis; per-shot `look` for a deliberate shift. `meta.letterbox` (e.g. 2.39) if
-   the brief calls for it. Text only as the brief's text plan allows — short, purposeful, rare.
+   the brief calls for it. No on-screen text: the user has rejected every text so far ("texts in
+   between are so bad"); only if they ask for it.
 8. **Other tools.** `freeze` (hold a frame for emphasis), `zoom`/`zoom_center` (punch in up to 2× on
    4K to hide an obstruction or tighten), `speed` (2–4× to compress travel, 0.5× only on clips marked
    "2x slow-mo ok" where something moves). **Transitions:** a hard cut must be motivated (a beat drop,
@@ -83,12 +84,25 @@ in for you; the music path too (music.start defaults to the suggested start in m
    the same subject — use a `dissolve` of about one beat, centred on the bar or beat, and lengthen both
    shots by the overlap so later cuts keep their place on the music. The user called unmotivated hard
    cuts "sudden" and asked for smooth transitions. No short sped-up inserts that don't belong (a 1.4 s
-   1.5x glass-tower whip was "a fast cut, not fitting"), and no shot under ~2 s outside the peak (a
-   1.1 s tram cut-in was "quite fast"); one continuous action is one shot, not three cuts. Smooth must
+   1.5x glass-tower whip was "a fast cut, not fitting"); a stray fast cut in a calm stretch reads as a
+   mistake (a 1.1 s tram cut-in was "quite fast"), while fast cuts in a build or drop are wanted; one
+   continuous action is one shot, not three cuts. Smooth must
    still be on the beat: keep dissolves short (~10 frames) and centred on the beat or bar (a long
    dissolve smears the beat; the user said "music beat not syncing"). Any rhythmic sound you add
    (ticks, steps, a clock) goes on the music's beat grid; `submit-edl` warns when one drifts. Never use the catalog's *Avoid* ranges. For the hook, the main reveal
    and the last shot, check exact frames: `./vido inspect "<clips folder>" <clip> <start> <end>`.
+   **Wow kit (the user wants energy: "visual effects, motions, crazy transitions, fast cuts, slow cuts"):**
+   - `ramp`: speed keyframes in source seconds after `src_in`, e.g. `[{"at":0,"speed":2},{"at":1.2,"speed":0.35}]`
+     rushes in and sinks into slow motion on the hit (slow parts need a 60 fps clip). Ramped shots are silent;
+     carry their sound with a `clip:` sound layer.
+   - `push`: animated zoom over the shot (0.1-0.2 in, negative to pull out) so static shots move.
+   - `fx`: hits at seconds into the shot, on beats/drops: `pulse` (zoom bump), `shake` (0.2-0.5 s), `flash`
+     (white lift, 0.15-0.3 s). Use them on the music's accents, not everywhere.
+   - transitions: `zoomin` (zoom-through), `smoothleft/right` (whip-like slide, 0.2-0.35 s), `fadewhite`
+     (flash cut), `hblur`, `slideleft/right`, `dissolve` — short, on the beat, matched to the motion.
+   - fast cuts (0.3-1 s on beats/half-beats) are welcome in builds and drops; slow holds and slow motion
+     in the breathers. The contrast is the point.
+   **The user's hard no's:** shots from inside a car / through a windshield, on-screen text, stray voices.
 9. **Break the convention** the brief names — visibly.
    **The user's taste (from their reviews):** never go A → B → back to A (e.g. tram → boat → tram),
    and no flash-forward cold open that returns later; every subject (even a different tram) lives in

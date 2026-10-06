@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from ..schemas import EDL, ClipInfo, ClipSignals, Interval
+from .speed import out_duration, speeds
 
 BOUNDS_SLACK = 0.05  # seconds past the end of a clip we silently clamp
 
@@ -64,14 +65,17 @@ def validate_edl(edl: EDL, clips: dict[str, ClipInfo], signals: dict[str, ClipSi
         if seg.src_out <= seg.src_in:
             issues.append(Issue("error", sid, "src_out must be after src_in"))
             continue
-        out_len = (seg.src_out - seg.src_in) / seg.speed
+        out_len = out_duration(seg)
         if out_len < 0.2:
             issues.append(Issue("error", sid, f"shot is only {out_len:.2f}s on screen (minimum 0.2s)"))
         if seg.transition_in.type != "cut" and seg.transition_in.duration <= 0:
             issues.append(Issue("warning", sid, f"{seg.transition_in.type} transition with zero duration acts as a cut"))
-        if seg.speed < 1 and clip.fps * seg.speed < 0.9 * fps:
-            issues.append(Issue("warning", sid, f"{seg.speed}x slow motion from a {clip.fps:.0f} fps clip will look choppy "
-                                                f"(needs {fps / seg.speed:.0f} fps source)"))
+        slowest = min(speeds(seg))
+        if slowest < 1 and clip.fps * slowest < 0.9 * fps:
+            issues.append(Issue("warning", sid, f"{slowest}x slow motion from a {clip.fps:.0f} fps clip will look choppy "
+                                                f"(needs {fps / slowest:.0f} fps source)"))
+        if seg.ramp and seg.audio.mode == "original":
+            issues.append(Issue("warning", sid, "a ramped shot plays without its own sound; lay it as a sound layer if you need it"))
         if seg.zoom > 1.0001:
             short_side = min(clip.width, clip.height) / seg.zoom
             if short_side < 0.75 * min(edl.meta.width, edl.meta.height):
@@ -109,7 +113,7 @@ def validate_edl(edl: EDL, clips: dict[str, ClipInfo], signals: dict[str, ClipSi
 
 
 def _approx_duration(edl: EDL) -> float:
-    total = sum((s.src_out - s.src_in) / s.speed + s.freeze for s in edl.segments if s.speed > 0)
+    total = sum(out_duration(s) + s.freeze for s in edl.segments if s.speed > 0)
     return total - sum(s.transition_in.duration for s in edl.segments[1:] if s.transition_in.type != "cut")
 
 

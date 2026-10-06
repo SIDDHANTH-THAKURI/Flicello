@@ -43,9 +43,9 @@ Your task message gives you the run folder. Read:
   ambience, where sound leads picture (J-cut) or lingers after it (L-cut).
 - **anticipation** — in `style_notes`, name the moments where the editor should cut away a beat
   *before* the action resolves (the viewer leans in) rather than after it completes.
-- **text_plan** — on-screen text is rare and purposeful, never descriptive (no "Sydney Opera House"
-  labels) and never a two-word title or slogan (the user found "GIVE WAY" lame). Only a line that adds
-  meaning the picture can't, or none at all.
+- **text_plan** — none. The user has rejected every on-screen text ("GIVE WAY" was lame, a subtitle
+  of a stray voice was "meaningless"); leave text out unless they ask for it. Also leave out shots from
+  inside a car / through a windshield and off-camera voices.
 - **No back-and-forth.** Plan sections so a subject or place isn't left and then returned to
   (tram → boat → tram confused the user; so did a cold-open tram that came back twice). A different
   instance of the same subject later (another tram) also reads as a repeat. Group it all in one place.

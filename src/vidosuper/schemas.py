@@ -188,6 +188,20 @@ class SegmentAudio(BaseModel):
     tail: float = Field(0.0, ge=0.0, le=3.0, description="L-cut: this shot's sound carries on this long after the cut.")
 
 
+class RampPoint(BaseModel):
+    at: float = Field(..., ge=0.0, description="Source seconds after src_in where the shot plays at this speed.")
+    speed: float = Field(..., ge=0.1, le=8.0, description="0.3 = slow motion, 2.0 = double speed.")
+
+
+class Fx(BaseModel):
+    """A hit inside a shot, timed to the music: a flash, a camera shake or a zoom pulse."""
+
+    type: Literal["flash", "shake", "pulse"]
+    at: float = Field(..., ge=0.0, description="Seconds into the shot (output time), e.g. on a beat or drop.")
+    duration: float = Field(0.3, gt=0.0, le=2.0, description="How long the hit lasts (it decays over this).")
+    strength: float = Field(1.0, gt=0.0, le=2.0, description="1 = normal, 0.5 = subtle, 2 = heavy.")
+
+
 class Segment(BaseModel):
     id: str
     clip_id: str
@@ -203,6 +217,13 @@ class Segment(BaseModel):
     zoom_center: tuple[float, float] = Field((0.5, 0.5), description=(
         "Where the punched-in frame is centred, as fractions of the source width and height (0-1)."))
     freeze: float = Field(0.0, ge=0.0, le=4.0, description="Hold the last frame this many seconds (adds to the shot).")
+    ramp: list[RampPoint] = Field(default_factory=list, description=(
+        "Speed ramp (replaces speed): keyframes in source seconds after src_in; speed changes smoothly "
+        "between them and holds before the first / after the last. E.g. [{at:0,speed:2},{at:1.2,speed:0.3}] "
+        "rushes in, then sinks into slow motion. Ramped shots play without their own sound."))
+    push: float = Field(0.0, ge=-0.4, le=0.4, description=(
+        "Animated zoom over the shot: 0.15 pushes in 15% (eased), -0.15 starts 15% tight and pulls out."))
+    fx: list[Fx] = Field(default_factory=list, description="Hits inside the shot: flash, shake, pulse.")
     look: str | None = Field(None, description="Override the edit's look for this shot (see meta.look).")
     out_sync: Literal["beat", "downbeat", "free"] = Field("beat", description=(
         "How the cut OUT of this shot is timed when there is music: snapped to a beat, to a bar start, or "

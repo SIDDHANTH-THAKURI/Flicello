@@ -15,6 +15,7 @@ from ..music import MusicAnalysis
 from ..schemas import EDL, ClipInfo, GainPoint, MusicSpec
 from .snap import timeline_grid
 from .timeline import build_timeline
+from .speed import source_time
 
 
 def _beat_map(grid: np.ndarray) -> tuple[Callable[[float], float], Callable[[float], float], float]:
@@ -66,7 +67,7 @@ def resync_edl(edl: EDL, clips: dict[str, ClipInfo], old: MusicAnalysis, new: Mu
         overlap = items[i + 1].trans_frames / fps * new_period / old_period if i + 1 < len(items) else 0.0
         on_screen = starts[i + 1] - starts[i] + overlap
         moving = max(0.3, on_screen - seg.freeze)
-        new_out = seg.src_in + moving * seg.speed
+        new_out = seg.src_in + (source_time(seg, moving) if seg.ramp else moving * seg.speed)
         clip = clips[seg.clip_id]
         if new_out > clip.duration:
             overflow = new_out - clip.duration

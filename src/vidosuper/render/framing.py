@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 from ..ingest.proxy import tonemap_filter
+from ..edit.speed import setpts_expr
 from ..schemas import ClipInfo, Segment
 
 
@@ -75,14 +76,50 @@ def segment_video_filter(clip: ClipInfo, seg: Segment, width: int, height: int, 
         pre.append(tonemap_filter(clip))
     if (crop := zoom_filter(seg)) is not None:
         pre.append(crop)
-    pre.append(f"setpts=(PTS-STARTPTS)/{seg.speed:.6f}")
+    pre.append(setpts_expr(seg))
     pre.append(f"fps={fps}")
     if moving_frames is not None and seg.freeze > 0:
         pre.append(f"trim=end_frame={moving_frames},setpts=PTS-STARTPTS")  # freeze holds *this* last frame
     mode = resolve_framing(seg.framing, clip.width, clip.height, width, height)
-    post = ([look] if look else []) + [
+    motion = motion_filter(seg, width, height, (moving_frames or 0) / fps)
+    post = ([motion] if motion else []) + ([look] if look else []) + [
         "setsar=1", "format=yuv420p", f"tpad=stop_mode=clone:stop_duration={seg.freeze + 2:.3f}"]
     return ",".join(pre) + "," + framing_filter(mode, width, height, blur_sigma) + "," + ",".join(post)
+
+
+def motion_filter(seg: Segment, width: int, height: int, seconds: float) -> str | None:
+    """Push-in/out over the shot plus its hits, as one per-frame scale+crop (and a brightness lift for
+    flashes). t is seconds into the shot. A pulse is a quick zoom bump that decays; a shake jitters the
+    frame inside a few percent of zoom margin; a flash lifts brightness and decays."""
+    zoom_terms, dx_terms, dy_terms, flash_terms = [], [], [], []
+    if seg.push and seconds > 0:
+        ease = f"(0.5-0.5*cos(PI*min(1,t/{seconds:.4f})))"
+        zoom_terms.append(f"(1+{seg.push:.4f}*{ease})" if seg.push > 0 else f"(1+{-seg.push:.4f}*(1-{ease}))")
+    for f in seg.fx:
+        a, d, s = f.at, f.duration, f.strength
+        env = f"if(between(t,{a:.4f},{a + d:.4f}),1-(t-{a:.4f})/{d:.4f},0)"
+        if f.type == "pulse":
+            zoom_terms.append(f"(1+{0.07 * s:.4f}*if(gte(t,{a:.4f}),exp(-(t-{a:.4f})/{max(d / 3, 0.02):.4f}),0))")
+        elif f.type == "shake":
+            amp = 0.012 * s * width
+            zoom_terms.append(f"(1+{0.03 * s:.4f}*{env})")
+            dx_terms.append(f"{amp:.2f}*sin(2*PI*17*(t-{a:.4f}))*{env}")
+            dy_terms.append(f"{amp * 0.8:.2f}*cos(2*PI*13*(t-{a:.4f}))*{env}")
+        else:  # flash
+            flash_terms.append(f"{0.75 * s:.4f}*{env}")
+    if not (zoom_terms or flash_terms):
+        return None
+    parts = []
+    if zoom_terms:
+        z = "*".join(zoom_terms)
+        dx = "+".join(dx_terms) or "0"
+        dy = "+".join(dy_terms) or "0"
+        parts.append(f"scale=w='2*trunc({width}*{z}/2)':h='2*trunc({height}*{z}/2)':eval=frame:flags=bicubic")
+        parts.append(f"crop=w={width}:h={height}:x='max(0,min(iw-{width},(iw-{width})/2+{dx}))'"
+                     f":y='max(0,min(ih-{height},(ih-{height})/2+{dy}))'")
+    if flash_terms:
+        parts.append(f"eq=brightness='min(1,{'+'.join(flash_terms)})':eval=frame")
+    return ",".join(parts)
 
 
 def atempo_chain(speed: float) -> list[str]:

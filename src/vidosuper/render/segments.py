@@ -21,6 +21,7 @@ from ..ffmpeg import FFmpegError, run_ffmpeg
 from ..ingest.proxy import gpu_decode_available
 from .framing import atempo_chain, segment_video_filter
 from .looks import look_filter
+from ..edit.speed import speeds
 
 SEGMENT_CACHE_VERSION = 2
 AUDIO_CACHE_VERSION = 1
@@ -51,7 +52,7 @@ def uses_proxy(item: TimelineItem, quality: str) -> bool:
     needs the original's frames, or the draft shows doubled frames (judder) that the final won't have."""
     if quality != "draft":
         return False
-    return not (item.seg.speed < 0.99 and item.clip.fps >= 47)
+    return not (min(speeds(item.seg)) < 0.99 and item.clip.fps >= 47)
 
 
 def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: str, cfg: Config,
@@ -64,6 +65,9 @@ def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: 
         "in": round(seg.src_in, 4),
         "frames": item.frames,
         "speed": round(seg.speed, 6),
+        **({"ramp": [[round(p.at, 4), round(p.speed, 4)] for p in seg.ramp]} if seg.ramp else {}),
+        **({"push": round(seg.push, 4)} if seg.push else {}),
+        **({"fx": [f.model_dump() for f in seg.fx]} if seg.fx else {}),
         "framing": seg.framing,
         "size": [width, height],
         "fps": fps,
@@ -117,7 +121,7 @@ def render_segment(item: TimelineItem, width: int, height: int, fps: int, qualit
     look = look_filter(seg.look or look_name)
     key = segment_key(item, width, height, fps, quality, cfg, look)
     video = cache_dir / f"{key}.mp4"
-    want_audio = seg.audio.mode == "original" and clip.has_audio and bool(clip.audio_wav)
+    want_audio = seg.audio.mode == "original" and clip.has_audio and bool(clip.audio_wav) and not seg.ramp
     audio, lead, audio_cached = (_render_audio(item, fps, cache_dir) if want_audio else (None, 0.0, True))
     if video.exists():
         return SegmentOutput(video, audio, cached=audio_cached, audio_lead=lead)
@@ -126,7 +130,7 @@ def render_segment(item: TimelineItem, width: int, height: int, fps: int, qualit
     source = clip.proxy if from_proxy else clip.path
     if not source or not Path(source).exists():
         raise FileNotFoundError(f"Source for {clip.clip_id} is missing: {source}")
-    src_seconds = item.moving_frames * seg.speed / fps
+    src_seconds = item.src_seconds(fps)
     window = ["-ss", f"{seg.src_in:.4f}", "-t", f"{src_seconds + 0.5:.4f}"]
     video_part = video.with_name(video.stem + ".part.mp4")
 
