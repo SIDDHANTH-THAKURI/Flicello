@@ -16,6 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from .edit.speed import source_time
+from .music.analysis import MusicAnalysis
 from .perceive.prep import analysis_path
 from .schemas import EDL, ClipAnalysis, EditMeta, Fx, MusicSpec, RampPoint, Segment, SegmentAudio, Transition
 from .workspace import Project
@@ -164,3 +165,60 @@ def template_markdown(template: Template) -> str:
 
 def save_preview_edl(edl: EDL, path: Path) -> None:
     Path(path).write_text(json.dumps(edl.model_dump(mode="json"), indent=2), encoding="utf-8")
+
+
+def retarget(template: Template, old: MusicAnalysis, new: MusicAnalysis, new_path: str,
+             anchor: str | None = None) -> tuple[Template, list[str]]:
+    """The same edit on another song. Every slot keeps its place in beats counted from the anchor slot
+    (default: the one that hits the old song's drop), and the anchor lands on the new song's drop, so
+    the shots, speeds and hits stay where they were in the music. Hits are rescaled to the new tempo;
+    slots past the new song's end are shortened or dropped."""
+    import numpy as np
+
+    old_period = float(np.median(np.diff(old.beats)))
+    new_beats = np.asarray(new.beats, dtype=float)
+    new_period = float(np.median(np.diff(new_beats)))
+    if anchor is not None:
+        anchor_slot = next((s for s in template.slots if s.id == anchor), None)
+        if anchor_slot is None:
+            raise ValueError(f"no slot {anchor!r} in the template")
+    else:
+        if not old.drops:
+            raise ValueError("the old song has no drop to line up; name an anchor slot")
+        old_drop = old.drops[0] - template.music.start
+        anchor_slot = min(template.slots, key=lambda s: abs(s.start - old_drop))
+    if not new.drops:
+        raise ValueError("the new song has no drop to line up with")
+    drop_beat = int(np.argmin(np.abs(new_beats - new.drops[0])))
+
+    def music_time(t: float) -> float:
+        """Timeline seconds on the template -> seconds into the new song, by beats from the anchor."""
+        pos = drop_beat + round((t - anchor_slot.start) / old_period * 2) / 2
+        if pos <= 0:
+            return float(new_beats[0] + pos * new_period)
+        if pos >= len(new_beats) - 1:
+            return float(new_beats[-1] + (pos - len(new_beats) + 1) * new_period)
+        return float(np.interp(pos, np.arange(len(new_beats)), new_beats))
+
+    start = music_time(template.slots[0].start)
+    if start < 0:
+        raise ValueError(f"the new song reaches its drop {-start:.1f}s too early for this template")
+    end = new.duration - start
+    scale = new_period / old_period
+    notes, slots = [], []
+    for slot in template.slots:
+        full = music_time(slot.end) - start
+        s0, s1 = music_time(slot.start) - start, min(full, end)
+        if s1 < full - 0.01:
+            if s1 - s0 < 1.0:
+                notes.append(f"{slot.id}: dropped, the new song ends at {end:.1f}s")
+                if slots:
+                    slots[-1] = slots[-1].model_copy(update={"end": round(end, 3)})
+                continue
+            notes.append(f"{slot.id}: shortened to end with the song ({s1 - s0:.1f}s)")
+        fx = [f.model_copy(update={"at": round(f.at * scale, 3)}) for f in slot.fx]
+        slots.append(slot.model_copy(update={"start": round(s0, 3), "end": round(s1, 3), "fx": fx}))
+    music = template.music.model_copy(update={"path": new_path, "start": round(start, 3)})
+    notes.insert(0, f"{anchor_slot.id} on the drop at {new.drops[0]:.2f}s; the song starts at {start:.2f}s; "
+                    f"tempo {60 / old_period:.1f} -> {60 / new_period:.1f} BPM")
+    return template.model_copy(update={"music": music, "slots": slots}), notes

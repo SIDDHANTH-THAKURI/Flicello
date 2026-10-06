@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
-MUSIC_VERSION = 3  # 2: beat clarity (pulse); 3: kick-band clarity too
+MUSIC_VERSION = 4  # 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum
 SR = 22050
 HOP = 512
 PULSE_CHUNK = 8.0
@@ -144,6 +144,28 @@ def _label_sections(bounds: list[float], energy: np.ndarray, duration: float) ->
     return sections
 
 
+def _kick_on_the_beat(beats: np.ndarray, kick_env: np.ndarray, duration: float) -> np.ndarray:
+    """Dance music puts loud open hi-hats on the off-beats, and the grid fit can lock onto them. The
+    beat is where the kick drum is: if the kick band hits clearly harder half a beat later than on the
+    grid, move the grid there."""
+    if len(beats) < 8:
+        return beats
+    half = float(np.median(np.diff(beats))) / 2
+    if _strength_at(kick_env, beats + half) <= 1.3 * _strength_at(kick_env, beats):
+        return beats
+    shifted = np.concatenate([beats - half, [beats[-1] + half]])
+    return shifted[(shifted >= 0) & (shifted < duration)]
+
+
+def _strength_at(onset_env: np.ndarray, points: np.ndarray) -> float:
+    """Mean onset strength at these times; onsets may sit up to ~35 ms before the grid (attack vs
+    perceived beat)."""
+    times = np.arange(len(onset_env)) * HOP / SR
+    idx = np.searchsorted(times, points).clip(0, len(onset_env) - 1)
+    lo = max(1, int(round(0.035 * SR / HOP)))
+    return float(np.mean([onset_env[max(0, i - lo): i + 2].max() for i in idx])) if len(idx) else 0.0
+
+
 def _align_to_attacks(y: np.ndarray, sr: int, beats: np.ndarray) -> np.ndarray:
     """Shift the grid onto the actual attacks: onset envelopes peak a frame or two after a drum hit."""
     import librosa
@@ -176,6 +198,11 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
     tempo, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr, hop_length=HOP)
     detected = librosa.frames_to_time(np.asarray(beat_frames, dtype=int), sr=sr, hop_length=HOP)
     beats = _beat_grid(detected, duration, onset_env / (onset_env.max() + 1e-9))
+    # the kick drum alone: low band of the percussive part (bass lines and pads removed)
+    low_band = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP, fmax=200, n_mels=24)
+    kick_env = librosa.onset.onset_strength(y=librosa.effects.percussive(y, margin=2.0), sr=sr, hop_length=HOP,
+                                            fmax=200, n_mels=24)
+    beats = _kick_on_the_beat(beats, kick_env, duration)
     beats = _align_to_attacks(y, sr, beats)
     beats = beats[(beats >= 0) & (beats < duration)]
     if len(beats) >= 2:
@@ -227,33 +254,26 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
         path=str(path), fingerprint=fingerprint_file(path), duration=round(duration, 3), tempo=round(tempo, 2),
         beats=[round(float(b), 3) for b in beats], downbeats=[round(float(b), 3) for b in downbeats],
         energy=[round(float(e), 3) for e in energy], sections=sections, drops=drops,
-        # dance music puts loud hi-hats on the off-beats, so also listen to the kick drum's band alone
-        pulse=[max(a, b) for a, b in zip(
-            beat_dominance(onset_env, beats, duration),
-            beat_dominance(librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP, fmax=200, n_mels=24),
-                           beats, duration))],
+        # dance music puts loud hi-hats on the off-beats and busy bass lines in the low band, so also
+        # listen to the low band and to the kick drum alone
+        pulse=[max(a, b, c) for a, b, c in zip(
+            beat_dominance(onset_env, beats, duration), beat_dominance(low_band, beats, duration),
+            beat_dominance(kick_env, beats, duration))],
     )
 
 
 def beat_dominance(onset_env: np.ndarray, beats: np.ndarray, duration: float) -> list[float]:
     """Per PULSE_CHUNK seconds: onset strength on the beats over onset strength on the half-beats.
     ~1 or less means no audible beat on the grid (pads, or accents on the off-beat), so cuts placed
-    "on the beat" there don't feel on the music; 1.4+ is a clear beat. Onsets may sit up to ~35 ms
-    before the grid (attack vs perceived beat)."""
+    "on the beat" there don't feel on the music; 1.4+ is a clear beat."""
     if len(beats) < 4:
         return []
-    times = np.arange(len(onset_env)) * HOP / SR
     half = float(np.median(np.diff(beats))) / 2
-
-    def strength(points: np.ndarray) -> float:
-        idx = np.searchsorted(times, points).clip(0, len(onset_env) - 1)
-        lo = max(1, int(round(0.035 * SR / HOP)))
-        return float(np.mean([onset_env[max(0, i - lo): i + 2].max() for i in idx]))
-
     out = []
     for c0 in np.arange(0.0, duration, PULSE_CHUNK):
         b = beats[(beats >= c0) & (beats < c0 + PULSE_CHUNK)]
-        out.append(round(strength(b) / max(strength(b + half), 1e-9), 2) if len(b) >= 4 else 1.0)
+        out.append(round(_strength_at(onset_env, b) / max(_strength_at(onset_env, b + half), 1e-9), 2)
+                   if len(b) >= 4 else 1.0)
     return out
 
 

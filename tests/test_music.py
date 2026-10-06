@@ -54,6 +54,30 @@ def test_beat_clarity(placeholder, tmp_path):
     assert pulse_score(pads, 0.0, 30) < 0.3 and "No audible beat on the grid" in pads.summary()
 
 
+def test_grid_follows_the_kick_not_offbeat_hats(tmp_path):
+    """House music: kick on every beat, louder open hi-hats on every off-beat. The beat is the kick."""
+    import soundfile as sf
+
+    sr, period, first = 22050, 60 / 122, 0.5
+    t = np.arange(int(32 * sr)) / sr
+    y = np.zeros_like(t)
+    rng = np.random.default_rng(1)
+    kick_n, hat_n = int(0.25 * sr), int(0.12 * sr)
+    kt = np.arange(kick_n) / sr
+    kick = np.sin(2 * np.pi * np.cumsum(50 + 90 * np.exp(-kt / 0.03)) / sr) * np.exp(-kt / 0.12)
+    hat = np.diff(rng.standard_normal(hat_n + 1)) * np.exp(-np.arange(hat_n) / sr / 0.05)
+    for k in range(int((32 - first) / period) - 1):
+        b = int((first + k * period) * sr)
+        y[b:b + kick_n] += 0.5 * kick
+        h = int((first + (k + 0.5) * period) * sr)
+        y[h:h + hat_n] += 0.6 * hat
+    path = tmp_path / "house.wav"
+    sf.write(str(path), (y / np.abs(y).max() * 0.9).astype(np.float32), sr)
+    beats = np.array(analyze_music(path).beats)
+    phase = ((beats - first) / period) % 1.0
+    assert np.minimum(phase, 1 - phase).max() < 0.08  # every grid beat sits on a kick, none on a hat
+
+
 def _clip(cid, duration=20.0):
     return ClipInfo(clip_id=cid, path=cid, rel_path=cid, fingerprint=cid, duration=duration, width=1920,
                     height=1080, fps=60, has_audio=True)

@@ -701,9 +701,6 @@ def validate(edl_file: Path = typer.Argument(..., help="EDL JSON file")) -> None
         raise typer.Exit(1)
 
 
-if __name__ == "__main__":
-    app()
-
 
 template_app = typer.Typer(no_args_is_help=True, help="Templates: design an edit's rhythm and effects on a song first.")
 app.add_typer(template_app, name="template")
@@ -731,3 +728,42 @@ def template_preview(template_file: Path = typer.Argument(..., help="template.js
     console.print(f"[green]Preview:[/] {escape(result.output)} ({result.duration:.1f}s, {result.shots} slots)")
     if open_file and os.name == "nt":
         os.startfile(result.output)  # noqa: S606 - the user's own render
+
+
+@template_app.command("retarget")
+def template_retarget(template_file: Path = typer.Argument(..., help="template.json"),
+                      music: Path = typer.Argument(..., help="The new song"),
+                      out: Path = typer.Option(None, help="New template (default: <template>-<song>.json)"),
+                      anchor: str | None = typer.Option(None, help="Slot that hits the drop (default: found)")) -> None:
+    """Move a template onto another song: same shots and hits, counted in beats from the drop."""
+    from .music.analysis import analyze_music
+    from .template import load_template, retarget
+
+    template = load_template(template_file)
+    new_template, notes = retarget(template, analyze_music(template.music.path), analyze_music(music),
+                                   str(Path(music).resolve()), anchor)
+    song = "-".join("".join(c if c.isalnum() else " " for c in Path(music).stem.lower()).split())
+    out = out or Path(template_file).with_name(f"{Path(template_file).stem}-{song}.json")
+    out.write_text(new_template.model_dump_json(indent=1, exclude_defaults=True), encoding="utf-8")
+    for note in notes:
+        console.print(escape(note))
+    console.print(f"[green]Template:[/] {escape(str(out))} ({new_template.slots[-1].end:.1f}s)")
+
+
+@music_app.command("compose")
+def music_compose(plan_file: Path = typer.Argument(..., help="ElevenLabs composition plan (JSON)"),
+                  out: Path = typer.Argument(..., help="Where to write the track (.mp3)"),
+                  model: str = typer.Option("music_v2_5", help="ElevenLabs music model"),
+                  seed: int | None = typer.Option(None, help="Seed, for a reproducible variation")) -> None:
+    """Compose an original track for an edit with ElevenLabs Music (uses ELEVENLABS_API_KEY credits)."""
+    from .music.analysis import analyze_music
+    from .music.compose import compose
+
+    plan = json.loads(Path(plan_file).read_text(encoding="utf-8"))
+    path = compose(plan, out, model=model, seed=seed)
+    a = analyze_music(path)
+    console.print(f"[green]Track:[/] {escape(str(path))}")
+    console.print(escape(a.summary()))
+
+if __name__ == "__main__":
+    app()
