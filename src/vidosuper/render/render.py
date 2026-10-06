@@ -51,6 +51,35 @@ def decoded_peak_db(video: Path, scratch: Path) -> float:
     return 20 * np.log10(peak) if peak > 0 else -120.0
 
 
+def adaptive_looks(timeline, project: Project, look: str | None) -> list[str] | None:
+    """Per-shot grades for looks that adapt to the footage ('vivid'), from each shot's measured
+    saturation, brightness and contrast over the source it actually uses."""
+    if look != "vivid":
+        return None
+    from .looks import LOOKS, vivid_grade
+
+    arrays: dict[str, dict] = {}
+    out = []
+    for item in timeline.items:
+        cid = item.clip.clip_id
+        if cid not in arrays:
+            try:
+                with np.load(project.signals_npz(cid)) as z:
+                    arrays[cid] = {k: z[k] for k in ("t", "saturation", "brightness", "contrast")}
+            except (OSError, KeyError):
+                arrays[cid] = {}
+        a = arrays[cid]
+        if not a:
+            out.append(LOOKS["vivid"])
+            continue
+        t0 = item.seg.src_in
+        m = (a["t"] >= t0) & (a["t"] <= t0 + item.src_seconds(timeline.fps))
+        if not m.any():
+            m = np.abs(a["t"] - t0) <= max(0.2, float(np.min(np.abs(a["t"] - t0))))
+        out.append(vivid_grade(*(float(np.nanmean(a[k][m])) for k in ("saturation", "brightness", "contrast"))))
+    return out
+
+
 class EDLValidationError(ValueError):
     def __init__(self, issues: list[Issue]):
         self.issues = issues
@@ -104,7 +133,8 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
     work.mkdir(parents=True, exist_ok=True)
 
     shots = render_segments(timeline, width, height, quality, cfg, project.segments / quality, on_shot,
-                            look_name=meta.look)
+                            look_name=meta.look, item_looks=adaptive_looks(timeline, project, meta.look),
+                            stabilize=meta.stabilize)
     texts = [(t, render_text_png(t, width, height, work / f"text_{k}.png")) for k, t in enumerate(edl.texts)]
     video_only = assemble_video(timeline, shots, meta, quality, cfg, work / "picture.mp4", work,
                                 texts=texts, size=(width, height),

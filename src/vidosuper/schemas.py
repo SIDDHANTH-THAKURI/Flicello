@@ -224,6 +224,7 @@ class Segment(BaseModel):
     push: float = Field(0.0, ge=-0.4, le=0.4, description=(
         "Animated zoom over the shot: 0.15 pushes in 15% (eased), -0.15 starts 15% tight and pulls out."))
     fx: list[Fx] = Field(default_factory=list, description="Hits inside the shot: flash, shake, pulse.")
+    stabilize: bool = Field(False, description="Smooth handheld wobble (crops in slightly).")
     look: str | None = Field(None, description="Override the edit's look for this shot (see meta.look).")
     out_sync: Literal["beat", "downbeat", "free"] = Field("beat", description=(
         "How the cut OUT of this shot is timed when there is music: snapped to a beat, to a bar start, or "
@@ -289,7 +290,10 @@ class EditMeta(BaseModel):
     loudness_lufs: float = -14.0
     true_peak_db: float = -1.5
     snap_to_beats: bool = Field(True, description="Nudge hard cuts onto music beats (when there is music).")
-    look: str = Field("natural", description="Colour look: natural, warm, cool, teal-orange, film, faded, punchy, mono.")
+    look: str = Field("natural", description=(
+        "Colour look: natural, vivid (a summer grade adapted to each shot), warm, cool, teal-orange, film, "
+        "faded, punchy, mono."))
+    stabilize: bool = Field(False, description="Smooth handheld wobble in every shot.")
     letterbox: float | None = Field(None, description="Cinematic bars to this aspect ratio, e.g. 2.39 (None = off).")
 
 

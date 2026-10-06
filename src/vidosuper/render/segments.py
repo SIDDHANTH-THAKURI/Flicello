@@ -19,7 +19,7 @@ from ..config import Config
 from ..edit.timeline import Timeline, TimelineItem
 from ..ffmpeg import FFmpegError, run_ffmpeg
 from ..ingest.proxy import gpu_decode_available
-from .framing import atempo_chain, segment_video_filter
+from .framing import atempo_chain, segment_video_filter, stabilize_detect_filter
 from .looks import look_filter
 from ..edit.speed import speeds
 
@@ -116,10 +116,12 @@ def _render_audio(item: TimelineItem, fps: int, cache_dir: Path) -> tuple[Path, 
 
 
 def render_segment(item: TimelineItem, width: int, height: int, fps: int, quality: str,
-                   cfg: Config, cache_dir: Path, look_name: str | None = None) -> SegmentOutput:
+                   cfg: Config, cache_dir: Path, look_name: str | None = None,
+                   look_override: str | None = None, stabilize: bool = False) -> SegmentOutput:
     clip, seg = item.clip, item.seg
-    look = look_filter(seg.look or look_name)
-    key = segment_key(item, width, height, fps, quality, cfg, look)
+    look = look_override if look_override is not None and not seg.look else look_filter(seg.look or look_name)
+    stabilize = stabilize or seg.stabilize
+    key = segment_key(item, width, height, fps, quality, cfg, look + ("|stab" if stabilize else ""))
     video = cache_dir / f"{key}.mp4"
     want_audio = seg.audio.mode == "original" and clip.has_audio and bool(clip.audio_wav) and not seg.ramp
     audio, lead, audio_cached = (_render_audio(item, fps, cache_dir) if want_audio else (None, 0.0, True))
@@ -134,10 +136,18 @@ def render_segment(item: TimelineItem, width: int, height: int, fps: int, qualit
     window = ["-ss", f"{seg.src_in:.4f}", "-t", f"{src_seconds + 0.5:.4f}"]
     video_part = video.with_name(video.stem + ".part.mp4")
 
+    trf = cache_dir / f"{key}.trf"
+
+    def detect(gpu: bool) -> list[str]:
+        vf = stabilize_detect_filter(clip, seg, width, height, from_proxy=from_proxy, gpu=gpu, trf=str(trf))
+        hw = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"] if gpu else []
+        return [*hw, *window, "-i", str(source), "-map", "0:v:0", "-vf", vf, "-f", "null", "-"]
+
     def command(gpu: bool) -> list[str]:
         vf = segment_video_filter(clip, seg, width, height, fps, from_proxy=from_proxy,
                                   blur_sigma=cfg.render.blur_pad_sigma, gpu=gpu,
-                                  moving_frames=item.moving_frames, look=look)
+                                  moving_frames=item.moving_frames, look=look,
+                                  stab_trf=str(trf) if stabilize else None)
         hw = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"] if gpu else []
         return [*hw, *window, "-i", str(source), "-map", "0:v:0", "-vf", vf, "-frames:v", str(item.frames),
                 *intermediate_encoder(quality, cfg), "-an", str(video_part)]
@@ -147,6 +157,8 @@ def render_segment(item: TimelineItem, width: int, height: int, fps: int, qualit
     error: FFmpegError | None = None
     for gpu in attempts:
         try:
+            if stabilize:
+                run_ffmpeg(detect(gpu), what=f"Could not analyse shake in shot {seg.id} ({clip.rel_path})")
             run_ffmpeg(command(gpu), what=f"Could not render shot {seg.id} ({clip.rel_path})")
             error = None
             break
@@ -161,11 +173,13 @@ def render_segment(item: TimelineItem, width: int, height: int, fps: int, qualit
 
 def render_segments(timeline: Timeline, width: int, height: int, quality: str, cfg: Config,
                     cache_dir: Path, on_done: Callable[[], None] | None = None,
-                    look_name: str | None = None) -> list[SegmentOutput]:
+                    look_name: str | None = None, item_looks: list[str] | None = None,
+                    stabilize: bool = False) -> list[SegmentOutput]:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     def work(item: TimelineItem) -> SegmentOutput:
-        out = render_segment(item, width, height, timeline.fps, quality, cfg, cache_dir, look_name)
+        out = render_segment(item, width, height, timeline.fps, quality, cfg, cache_dir, look_name,
+                             item_looks[item.index] if item_looks else None, stabilize)
         if on_done:
             on_done()
         return out

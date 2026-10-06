@@ -65,15 +65,36 @@ def gpu_prefilter(clip: ClipInfo, width: int, height: int, zoom: float = 1.0) ->
     return chain
 
 
+def source_prefilter(clip: ClipInfo, seg: Segment, width: int, height: int, *, from_proxy: bool,
+                     gpu: bool) -> list[str]:
+    """Decode-side steps shared by rendering and stabilisation analysis (so both see the same frames)."""
+    if gpu:
+        return gpu_prefilter(clip, width, height, seg.zoom)
+    if clip.hdr and not from_proxy:  # proxies are already tone-mapped
+        return [tonemap_filter(clip)]
+    return []
+
+
+def filter_path(path: str) -> str:
+    """A file path written safely inside an FFmpeg filter argument."""
+    return "'" + str(path).replace("\\", "/").replace(":", "\\:") + "'"
+
+
+def stabilize_detect_filter(clip: ClipInfo, seg: Segment, width: int, height: int, *, from_proxy: bool,
+                            gpu: bool, trf: str) -> str:
+    pre = source_prefilter(clip, seg, width, height, from_proxy=from_proxy, gpu=gpu)
+    return ",".join([*pre, f"vidstabdetect=shakiness=6:accuracy=12:stepsize=6:result={filter_path(trf)}"])
+
+
 def segment_video_filter(clip: ClipInfo, seg: Segment, width: int, height: int, fps: int,
                          *, from_proxy: bool, blur_sigma: float, gpu: bool = False,
-                         moving_frames: int | None = None, look: str = "") -> str:
-    """moving_frames: frames of motion to keep before an optional freeze (the last one is then held)."""
-    pre = []
-    if gpu:
-        pre += gpu_prefilter(clip, width, height, seg.zoom)
-    elif clip.hdr and not from_proxy:  # proxies are already tone-mapped
-        pre.append(tonemap_filter(clip))
+                         moving_frames: int | None = None, look: str = "", stab_trf: str | None = None) -> str:
+    """moving_frames: frames of motion to keep before an optional freeze (the last one is then held).
+    stab_trf: vidstab motion file for this shot; smooths handheld wobble (optimal zoom hides the edges)."""
+    pre = source_prefilter(clip, seg, width, height, from_proxy=from_proxy, gpu=gpu)
+    if stab_trf:
+        pre.append(f"vidstabtransform=input={filter_path(stab_trf)}:smoothing=24:optzoom=1:zoomspeed=0.25"
+                   ":interpol=bicubic")
     if (crop := zoom_filter(seg)) is not None:
         pre.append(crop)
     pre.append(setpts_expr(seg))

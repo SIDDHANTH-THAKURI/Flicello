@@ -45,6 +45,7 @@ class Template(BaseModel):
     idea: str = ""
     music: MusicSpec
     look: str = "natural"
+    stabilize: bool = False
     fade_in: float = 0.0
     fade_out: float = 1.0
     slots: list[Slot]
@@ -145,7 +146,8 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
             rationale=(pick["text"] if pick["text"].startswith("chosen") else
                        f"PLACEHOLDER for '{slot.want}': {pick['text'][:90]}")))
     meta = EditMeta(title=template.name, width=width, height=height, fps=fps, look=template.look,
-                    fade_in=template.fade_in, fade_out=template.fade_out, snap_to_beats=False)
+                    fade_in=template.fade_in, fade_out=template.fade_out, snap_to_beats=False,
+                    stabilize=template.stabilize)
     return EDL(project_dir=str(project.clips_dir), meta=meta, segments=segments, music=template.music)
 
 
