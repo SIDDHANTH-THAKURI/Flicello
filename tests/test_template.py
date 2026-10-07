@@ -48,3 +48,30 @@ def test_v1_plan_becomes_v2_chunks():
     assert chunk["duration_ms"] == 8000 and chunk["text"].startswith("[Intro]")
     assert chunk["positive_styles"] == ["house", "pads"] and chunk["negative_styles"] == ["vocals", "drums"]
     assert to_v2_plan({"chunks": []}) == {"chunks": []}
+
+
+def test_cuts_land_on_their_frames_without_drift():
+    """Stutters (7.5 frames), whips and ramps: every cut stays within half a frame of its slot boundary."""
+    from vidosuper.edit.timeline import build_timeline
+    from vidosuper.schemas import EDL, ClipInfo, EditMeta, RampPoint, Segment, Transition
+    from vidosuper.template import _span, frames_on_screen
+
+    fps, t, slots = 30, 0.0, []
+    shots = [(2.004, None, []), *[(0.25, None, [])] * 4, (0.501, ("smoothleft", 0.3), []),
+             (2.004, None, [RampPoint(at=0, speed=2.0), RampPoint(at=1.8, speed=2.0), RampPoint(at=2.15, speed=0.4)]),
+             (1.002, ("dissolve", 0.5), []), (0.501, None, [])] * 3
+    for k, (length, tr, ramp) in enumerate(shots):
+        slots.append(Slot(id=f"s{k}", start=round(t, 3), end=round(t + length, 3), ramp=ramp,
+                          transition_in=Transition(type=tr[0], duration=tr[1]) if tr else Transition()))
+        t += length
+    clip = ClipInfo(clip_id="c", path="c", rel_path="c", fingerprint="c", duration=500.0, width=1920, height=1080,
+                    fps=60, has_audio=True)
+    frames, trans = frames_on_screen(slots, fps)
+    segments = [Segment(id=s.id, clip_id="c", src_in=0.0, src_out=round(_span(s, f / fps), 4), ramp=s.ramp,
+                        transition_in=Transition(type=s.transition_in.type, duration=t / fps) if t else Transition())
+                for s, f, t in zip(slots, frames, trans)]
+    timeline = build_timeline(EDL(project_dir=".", meta=EditMeta(fps=fps), music=MusicSpec(path="x.mp3"),
+                                  segments=segments), {"c": clip})
+    assert not timeline.notes and trans[5] == 3  # the whip after a 7-frame stutter gets the room it has
+    for slot, item in zip(slots, timeline.items):
+        assert item.start + item.trans_frames // 2 == round(slot.start * fps)  # fully on screen on its beat

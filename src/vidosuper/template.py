@@ -90,6 +90,22 @@ def _span(slot: Slot, seconds_on_screen: float) -> float:
     return source_time(probe, seconds_on_screen)
 
 
+def frames_on_screen(slots: list[Slot], fps: int) -> tuple[list[int], list[int]]:
+    """Output frames for each slot's shot (transitions included) and the frames of its transition in, so
+    every cut lands on the frame nearest its slot boundary. Rounding each shot on its own lets the error
+    add up (a 0.25 s stutter is 7.5 frames); rounding the boundaries keeps every cut within half a frame
+    of its beat. A transition gets at most half of the shorter slot beside it, as the timeline allows."""
+    bounds = [round(s.start * fps) for s in slots] + [round(slots[-1].end * fps)]
+    trans = [0] * (len(slots) + 1)
+    for k in range(1, len(slots)):
+        if slots[k].transition_in.type != "cut":
+            room = min(bounds[k] - bounds[k - 1], bounds[k + 1] - bounds[k]) // 2
+            trans[k] = min(round(slots[k].transition_in.duration * fps), room)
+    before = [t // 2 for t in trans]  # the part of each transition that plays before its boundary
+    frames = [(bounds[k + 1] + trans[k + 1] - before[k + 1]) - (bounds[k] - before[k]) for k in range(len(slots))]
+    return frames, trans[:-1]
+
+
 def autofill(template: Template, project: Project, fps: int = 30, width: int = 1920, height: int = 1080) -> EDL:
     """An EDL with placeholder footage in every slot; transitions are centred on the slot boundaries."""
     pool = _moments(project)
@@ -100,13 +116,10 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
     chosen: dict[int, dict] = {}
     # the most important slots (high energy, long holds) choose first, so the best action lands on the drop
     order = sorted(range(len(slots)), key=lambda k: (-slots[k].energy, -(slots[k].end - slots[k].start)))
+    frames, trans = frames_on_screen(slots, fps)
     for k in order:
         slot = slots[k]
-        d_in = slot.transition_in.duration if k and slot.transition_in.type != "cut" else 0.0
-        d_out = slots[k + 1].transition_in.duration if k + 1 < len(slots) and \
-            slots[k + 1].transition_in.type != "cut" else 0.0
-        on_screen = (slot.end - slot.start) + d_in / 2 + d_out / 2
-        need = _span(slot, on_screen)
+        need = _span(slot, frames[k] / fps)
         slow = min([p.speed for p in slot.ramp] or [slot.speed]) < 0.95
         if slot.clip:  # chosen by hand
             clip = clips[shorts.get(slot.clip, slot.clip)]
@@ -140,9 +153,10 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
         if pick["end"] - start < need:  # widen around the moment, inside the clip
             start = max(0.0, min(pick["clip"].duration - need, pick["start"] - (need - (pick["end"] - start)) / 2))
         segments.append(Segment(
-            id=slot.id, clip_id=pick["clip"].clip_id, src_in=round(start, 3), src_out=round(start + need, 3),
+            id=slot.id, clip_id=pick["clip"].clip_id, src_in=round(start, 4), src_out=round(start + need, 4),
             speed=slot.speed, ramp=slot.ramp, push=slot.push, fx=slot.fx,
-            transition_in=slot.transition_in if k else Transition(), out_sync="free",
+            transition_in=Transition(type=slot.transition_in.type, duration=trans[k] / fps) if trans[k] else Transition(),
+            out_sync="free",
             audio=SegmentAudio(mode="mute"), role=f"energy {slot.energy}",
             rationale=(pick["text"] if pick["text"].startswith("chosen") else
                        f"PLACEHOLDER for '{slot.want}': {pick['text'][:90]}")))
