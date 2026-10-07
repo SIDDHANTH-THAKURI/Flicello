@@ -798,6 +798,31 @@ def template_retarget(template_file: Path = typer.Argument(..., help="template.j
     console.print(f"[green]Template:[/] {escape(str(out))} ({new_template.slots[-1].end:.1f}s)")
 
 
+@app.command("rate")
+def rate(score: float | None = typer.Argument(None, help="The user's rating, 1-10 (leave out to see the history)"),
+         version: str = typer.Option("", help="What was rated, e.g. 'Wollongong C + intro'"),
+         project: str = typer.Option("", help="Project or trip name"),
+         music: float | None = typer.Option(None, help="Separate rating for the music"),
+         intro_outro: float | None = typer.Option(None, "--intro-outro", help="Separate rating for the intro/outro"),
+         critics: float | None = typer.Option(None, help="What the critic panel predicted (overall)"),
+         note: str = typer.Option("", help="The user's words"),
+         lesson: str = typer.Option("", help="Post-mortem for config/lessons.md: what moved the score, what didn't")) -> None:
+    """Log the user's rating of a result (and the critics' prediction), so every edit learns from the last."""
+    from .learning import add_postmortem, log_rating, read_ratings, summary
+
+    if score is not None:
+        if not version:
+            raise typer.BadParameter("say what was rated: --version")
+        entry = {"project": project, "version": version, "user": score, "critics": critics, "note": note}
+        entry.update({k: v for k, v in (("music", music), ("intro_outro", intro_outro)) if v is not None})
+        log_rating(entry)
+        if lesson:
+            add_postmortem(f"{project} {version}".strip(), f"{score:g}/10. {lesson}")
+        console.print(f"[green]Logged[/] {score:g}/10 for {escape(version)}"
+                      + ("" if lesson else " - add a post-mortem with --lesson (it is what the next edit learns from)"))
+    console.print(escape(summary(read_ratings())))
+
+
 @music_app.command("compose")
 def music_compose(plan_file: Path = typer.Argument(..., help="ElevenLabs composition plan (JSON)"),
                   out: Path = typer.Argument(..., help="Where to write the track (.mp3)"),
