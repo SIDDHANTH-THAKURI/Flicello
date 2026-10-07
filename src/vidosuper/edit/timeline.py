@@ -43,25 +43,31 @@ class Timeline:
 
 
 def build_timeline(edl: EDL, clips: dict[str, ClipInfo]) -> Timeline:
+    """Each shot ends on the frame nearest its exact end time. Rounding every shot's length on its own
+    let the error add up (twenty 0.25 s stutters drift 167 ms); rounding the running time keeps every
+    cut within half a frame of where the edit put it."""
     fps = edl.meta.fps
     items: list[TimelineItem] = []
     notes: list[str] = []
-    cursor = 0
+    cursor, exact = 0, 0.0  # where the previous shot ends: in frames, and in exact seconds
     for index, seg in enumerate(edl.segments):
         clip = clips[seg.clip_id]
-        moving = max(1, round(out_duration(seg) * fps))
-        frames = moving + round(seg.freeze * fps)
+        seconds = out_duration(seg) + seg.freeze
         trans = 0
         if index > 0 and seg.transition_in.type != "cut":
             trans = round(seg.transition_in.duration * fps)
-            limit = min(items[-1].frames, frames) // 2
+            limit = min(items[-1].frames, max(1, round(seconds * fps))) // 2
             if trans > limit:
                 notes.append(f"{seg.id}: transition shortened from {trans} to {limit} frames (shots too short)")
                 trans = limit
         start = 0 if index == 0 else cursor - trans
+        exact_end = (exact - trans / fps if index else 0.0) + seconds
+        end = max(start + 1 + round(seg.freeze * fps), round(exact_end * fps))
+        frames = end - start
+        moving = max(1, frames - round(seg.freeze * fps))
         items.append(TimelineItem(index=index, seg=seg, clip=clip, frames=frames, start=start, trans_frames=trans,
                                   moving_frames=moving))
-        cursor = start + frames
+        cursor, exact = end, exact_end
     return Timeline(items=items, fps=fps, total_frames=cursor, notes=notes)
 
 

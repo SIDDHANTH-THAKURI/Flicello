@@ -53,3 +53,16 @@ def test_output_fps_follows_the_footage():
     assert choose_fps([_clip("a", 10, 50.0)]) == 25
     assert choose_fps([_clip("a", 10, 23.976)]) == 24
     assert choose_fps([]) == 30
+
+
+def test_cuts_do_not_drift_when_shots_are_fractional_frames():
+    """Twenty 0.25 s stutters (7.5 frames each) used to round up one by one and drift 167 ms late."""
+    segs = [Segment(id=f"s{k}", clip_id="a", src_in=0.0, src_out=0.25) for k in range(20)]
+    segs.append(Segment(id="s20", clip_id="a", src_in=1.0, src_out=2.0, speed=0.5,
+                        transition_in=Transition(type="dissolve", duration=0.3)))
+    timeline = build_timeline(_edl(*segs), {"a": _clip("a")})
+    for k, item in enumerate(timeline.items[:20]):
+        assert abs(item.end - round((k + 1) * 0.25 * 30)) <= 1  # each cut within a frame of its exact time
+    assert timeline.items[19].end == 150  # 20 x 0.25 s = exactly 5 s
+    last = timeline.items[-1]
+    assert last.trans_frames == 4 and last.start == 146 and last.end == 206  # dissolve fits the 8-frame stutter
