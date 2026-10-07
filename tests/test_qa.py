@@ -22,7 +22,7 @@ def test_beat_sync_and_black_and_loudness():
     assert black_findings([(20.0, 20.3)], [0.0, 5.3, 60.0])[0].level == "fail"  # mid-film black
     assert loudness_findings(-14.2, -1.4)[0].level == "ok"
     assert loudness_findings(-14.0, -0.2)[0].level == "fail"
-    assert loudness_findings(-14.8, -1.1)[0].level == "warn"  # over the -1.5 target, under the -1 dB standard
+    assert loudness_findings(-14.8, -1.1, -14.0, -1.5)[0].level == "warn"  # over the -1.5 target, under -1 dB
 
 
 def test_voices_content_and_shake():
