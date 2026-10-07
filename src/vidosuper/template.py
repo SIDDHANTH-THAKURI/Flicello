@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 from .edit.speed import source_time
 from .music.analysis import MusicAnalysis
 from .perceive.prep import analysis_path
-from .schemas import EDL, ClipAnalysis, EditMeta, Fx, MusicSpec, RampPoint, Segment, SegmentAudio, Transition
+from .schemas import (EDL, ClipAnalysis, EditMeta, Fx, MusicSpec, RampPoint, Segment, SegmentAudio, SoundLayer,
+                      Transition)
 from .workspace import Project
 
 CAR_WORDS = re.compile(r"\b(dash|dashboard|windscreen|windshield|motorway|highway|freeway|car|ute ahead|"
@@ -50,6 +51,10 @@ class Template(BaseModel):
     fade_in: float = 0.0
     fade_out: float = 1.0
     slots: list[Slot]
+    music_credit: str | None = Field(None, description="Credit line for the outro, e.g. how the music was made.")
+    sounds: list[SoundLayer] = Field(default_factory=list, description=(
+        "Sound design on the timeline: a clip's own sound ('clip:c08' or a clip id) or a built-in effect "
+        "('sfx:whoosh', 'sfx:impact', ...)."))
 
 
 def load_template(path: Path) -> Template:
@@ -163,7 +168,10 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
     meta = EditMeta(title=template.name, width=width, height=height, fps=fps, look=template.look,
                     fade_in=template.fade_in, fade_out=template.fade_out, snap_to_beats=False,
                     stabilize=template.stabilize)
-    return EDL(project_dir=str(project.clips_dir), meta=meta, segments=segments, music=template.music)
+    sounds = [layer.model_copy(update={"source": f"clip:{shorts.get(layer.source[5:], layer.source[5:])}"})
+              if layer.source.startswith("clip:") else layer for layer in template.sounds]
+    return EDL(project_dir=str(project.clips_dir), meta=meta, segments=segments, music=template.music,
+               sounds=sounds)
 
 
 def template_markdown(template: Template) -> str:

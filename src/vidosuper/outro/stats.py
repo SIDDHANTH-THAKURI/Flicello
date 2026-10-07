@@ -68,9 +68,9 @@ def _fmt_score(x: float) -> str:
     return f"{x:.0f}" if abs(x - round(x)) < 0.05 else f"{x:.1f}"
 
 
-def collect_stats(run_dir: Path, project: Project, iteration: int) -> RunStats:
+def footage_stats(project: Project) -> RunStats:
+    """What the footage passes did: clips watched, raw length, frames measured, moments logged."""
     s = RunStats()
-    state = _json(run_dir / "run.json")
     clips = project.clips()
     s.clips = len(clips)
     s.raw_seconds = sum(c.duration for c in clips.values())
@@ -80,6 +80,13 @@ def collect_stats(run_dir: Path, project: Project, iteration: int) -> RunStats:
         if (signals := project.load_signals(cid)) is not None:
             s.measured_frames += round(signals.duration * signals.analysis_fps)
         s.moments += len(_json(analysis_path(project, cid)).get("moments") or [])
+    return s
+
+
+def collect_stats(run_dir: Path, project: Project, iteration: int) -> RunStats:
+    s = footage_stats(project)
+    state = _json(run_dir / "run.json")
+    clips = project.clips()
     s.acts = len(_json(run_dir / "brief.json").get("structure") or [])
 
     iterations = sorted(p for p in (run_dir / "iterations").glob("[0-9][0-9]") if p.is_dir())

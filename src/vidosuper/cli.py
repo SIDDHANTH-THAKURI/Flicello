@@ -706,15 +706,41 @@ template_app = typer.Typer(no_args_is_help=True, help="Templates: design an edit
 app.add_typer(template_app, name="template")
 
 
+def _template_outro(edl, template, project: Project, cfg: Config, style: str, final: bool):
+    """The crew card after a template edit: what was measured and cut (nothing invented), with the song's
+    opening coming back softly underneath."""
+    from .edit.timeline import build_timeline
+    from .music import load_or_analyze
+    from .outro.card import Outro
+    from .outro.stats import count_code_lines, footage_stats
+    from .outro.tail import build_tail
+    from .render.audio_mix import decode_music
+
+    stats = footage_stats(project)
+    film = build_timeline(edl, project.clips()).duration
+    stats.shots, stats.final_seconds, stats.code_lines = len(edl.segments), film, count_code_lines()
+    stats.music_credit = template.music_credit
+    music_wav = None
+    if edl.music is not None and edl.music.path:
+        song = load_or_analyze(edl.music.path, project.music)
+        stats.acts = sum(1 for s in song.sections if s.end > edl.music.start and s.start < edl.music.start + film)
+        music_wav = decode_music(edl.music.path, project.music)
+    card = Outro(stats, edl.meta.width, edl.meta.height, edl.meta.fps, style)
+    return build_tail(card, project.segments / "outro", "final" if final else "draft", cfg, music_wav, 0.0)
+
+
 @template_app.command("preview")
 def template_preview(template_file: Path = typer.Argument(..., help="template.json"),
                      clips_dir: Path = typer.Argument(..., help="Folder with the raw clips (analysed)"),
                      final: bool = typer.Option(False, "--final", help="Full quality (1080p) instead of a draft"),
+                     outro: str = typer.Option("none", help="full | short | none: the crew card after the film"),
                      open_file: bool = typer.Option(False, "--open", help="Open the preview")) -> None:
     """Fill every slot with placeholder footage and render a quick preview on the song."""
     from .render import render_edl
     from .template import autofill, load_template, save_preview_edl, template_markdown
 
+    if outro not in ("full", "short", "none"):
+        raise typer.BadParameter("outro must be full, short or none")
     cfg = load_config()
     project = Project(clips_dir, cfg)
     template = load_template(template_file)
@@ -723,7 +749,8 @@ def template_preview(template_file: Path = typer.Argument(..., help="template.js
     stem = Path(template_file).stem
     save_preview_edl(edl, out_dir / f"{stem}.preview-edl.json")
     (out_dir / f"{stem}.md").write_text(template_markdown(template), encoding="utf-8")
-    result = render_edl(edl, project, cfg, quality="final" if final else "draft",
+    tail = _template_outro(edl, template, project, cfg, outro, final) if outro != "none" else None
+    result = render_edl(edl, project, cfg, quality="final" if final else "draft", tail=tail,
                         out_path=out_dir / f"{stem}-{'final' if final else 'preview'}.mp4")
     console.print(f"[green]Preview:[/] {escape(result.output)} ({result.duration:.1f}s, {result.shots} slots)")
     if open_file and os.name == "nt":
