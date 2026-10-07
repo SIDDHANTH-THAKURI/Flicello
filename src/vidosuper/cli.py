@@ -744,6 +744,7 @@ def _template_outro(edl, template, project: Project, cfg: Config, style: str, fi
 def template_preview(template_file: Path = typer.Argument(..., help="template.json"),
                      clips_dir: Path = typer.Argument(..., help="Folder with the raw clips (analysed)"),
                      final: bool = typer.Option(False, "--final", help="Full quality (1080p) instead of a draft"),
+                     uhd: bool = typer.Option(False, "--4k", help="With --final: 3840x2160 from the 4K originals"),
                      outro: str = typer.Option("none", help="full | short | none: the crew card after the film"),
                      intro: bool = typer.Option(True, "--intro/--no-intro",
                                                 help="Play the template's cold open before the film (if it has one)"),
@@ -757,7 +758,9 @@ def template_preview(template_file: Path = typer.Argument(..., help="template.js
     cfg = load_config()
     project = Project(clips_dir, cfg)
     template = load_template(template_file)
-    edl = autofill(template, project)
+    if uhd and not final:
+        raise typer.BadParameter("--4k needs --final")
+    edl = autofill(template, project, width=3840 if uhd else 1920, height=2160 if uhd else 1080)
     out_dir = Path(template_file).parent
     stem = Path(template_file).stem
     save_preview_edl(edl, out_dir / f"{stem}.preview-edl.json")
@@ -769,7 +772,7 @@ def template_preview(template_file: Path = typer.Argument(..., help="template.js
     tail = _template_outro(edl, template, project, cfg, outro, final, canvas) if outro != "none" else None
     head = _template_intro(edl, template, project, cfg, final, canvas) if intro and template.intro else None
     result = render_edl(edl, project, cfg, quality="final" if final else "draft", tail=tail, head=head,
-                        out_path=out_dir / f"{stem}-{'final' if final else 'preview'}.mp4")
+                        out_path=out_dir / f"{stem}-{'final' if final else 'preview'}{'-4k' if uhd else ''}.mp4")
     console.print(f"[green]Preview:[/] {escape(result.output)} ({result.duration:.1f}s, {result.shots} slots)")
     if open_file and os.name == "nt":
         os.startfile(result.output)  # noqa: S606 - the user's own render
