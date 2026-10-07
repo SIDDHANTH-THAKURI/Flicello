@@ -95,8 +95,10 @@ def loudness_findings(lufs: float | None, true_peak: float | None, target: float
     if lufs is None or true_peak is None:
         return [Finding("warn", "loudness", "could not measure")]
     detail = f"{lufs:.1f} LUFS, true peak {true_peak:.1f} dB"
+    if true_peak > -1.0:  # the streaming standard: above it, phones and platform re-encodes can clip
+        return [Finding("fail", "loudness", detail + " (true peak above -1 dB can clip after re-encoding)")]
     if true_peak > ceiling + 0.3:
-        return [Finding("fail", "loudness", detail + f" (peaks above {ceiling:g} dB clip on phones)")]
+        return [Finding("warn", "loudness", detail + f" (a little over the {ceiling:g} dB target)")]
     if abs(lufs - target) > 1.5:
         return [Finding("warn", "loudness", detail + f" (target {target:g})")]
     return [Finding("ok", "loudness", detail)]
