@@ -41,14 +41,18 @@ def outro_key(outro: Outro, quality: str) -> str:
 
 
 def render_outro_video(outro: Outro, cache_dir: Path, quality: str, cfg: Config) -> Path:
-    """Frames are piped straight into FFmpeg; the result is cached by everything that shapes it."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    out = cache_dir / f"outro_{outro_key(outro, quality)}.mp4"
+    return render_card_video(outro, cache_dir / f"outro_{outro_key(outro, quality)}.mp4", quality, cfg)
+
+
+def render_card_video(card, out: Path, quality: str, cfg: Config) -> Path:
+    """An animated card (outro or intro: W, H, fps, frames, frame_at) to a video. Frames are piped
+    straight into FFmpeg; out is named by everything that shapes it, so an existing file is reused."""
+    out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         return out
     part = out.with_name(out.stem + ".part.mp4")
     cmd = [ffmpeg_bin(), "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
-           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{outro.W}x{outro.H}", "-r", str(outro.fps), "-i", "-",
+           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{card.W}x{card.H}", "-r", str(card.fps), "-i", "-",
            "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
            *intermediate_encoder(quality, cfg),
            "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
@@ -56,15 +60,15 @@ def render_outro_video(outro: Outro, cache_dir: Path, quality: str, cfg: Config)
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         assert proc.stdin is not None
-        for i in range(outro.frames):
-            proc.stdin.write(outro.frame_at(i).tobytes())
+        for i in range(card.frames):
+            proc.stdin.write(card.frame_at(i).tobytes())
         proc.stdin.close()
     except BrokenPipeError:
         pass
     err = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
     if proc.wait() != 0:
         part.unlink(missing_ok=True)
-        raise FFmpegError("Could not render the outro", cmd, err)
+        raise FFmpegError("Could not render the card animation", cmd, err)
     part.replace(out)
     return out
 
@@ -117,8 +121,32 @@ def _tick() -> np.ndarray:
     return np.sin(2 * np.pi * 3100 * t) * np.exp(-t * 260)
 
 
+def _key(pitch: float) -> np.ndarray:
+    """A keyboard click: a short tone plus a little noise; pitch varies key to key."""
+    n = int(0.018 * SR)
+    t = np.arange(n) / SR
+    noise = np.random.default_rng(int(pitch)).standard_normal(n)
+    return (0.6 * np.sin(2 * np.pi * pitch * t) + 0.4 * noise) * np.exp(-t * 320)
+
+
+def _clap() -> np.ndarray:
+    """A clapperboard snapping shut: a sharp wooden crack over a short low knock."""
+    n = int(0.25 * SR)
+    t = np.arange(n) / SR
+    crack = np.random.default_rng(5).standard_normal(n) * np.exp(-t * 90)
+    knock = np.sin(2 * np.pi * 140 * t) * np.exp(-t * 28)
+    return (0.75 * crack + 0.6 * knock) * np.minimum(1.0, t / 0.0008)
+
+
 def _cue_sound(kind: str, pitch: float) -> tuple[np.ndarray, float]:
     """(mono samples, offset in seconds relative to the cue time)."""
+    if kind == "key":
+        return _key(pitch), 0.0
+    if kind == "clap":
+        return _clap(), 0.0
+    if kind == "riser_end":  # a riser that peaks exactly on the cue
+        y = synthesize("riser")[:, 0].astype(np.float64)
+        return y, -len(y) / SR
     if kind == "pop":
         return _pop(pitch), 0.0
     if kind == "pluck":
@@ -133,16 +161,22 @@ def _cue_sound(kind: str, pitch: float) -> tuple[np.ndarray, float]:
     raise ValueError(f"unknown outro sound {kind!r}")
 
 
-def outro_audio(outro: Outro, music_wav: Path | None = None, music_from: float = 0.0) -> np.ndarray:
-    n = frames_to_samples(outro.frames, outro.fps)
+def cue_track(card, n: int) -> np.ndarray:
+    """The card's synthesised cues, each peak-normalised to its gain, on a mono track of n samples."""
     mono = np.zeros(n)
-    for cue in outro.cues:
+    for cue in card.cues:
         y, offset = _cue_sound(cue.kind, cue.pitch)
         y = y / (np.abs(y).max() + 1e-9) * cue.gain
         start = int(round((cue.t + offset) * SR))
         a, b = max(0, start), min(n, start + len(y))
         if b > a:
             mono[a:b] += y[a - start: b - start]
+    return mono
+
+
+def outro_audio(outro: Outro, music_wav: Path | None = None, music_from: float = 0.0) -> np.ndarray:
+    n = frames_to_samples(outro.frames, outro.fps)
+    mono = cue_track(outro, n)
     mix = np.stack([mono, mono], axis=1) * 0.5
     if music_wav is not None:
         data, sr = sf.read(str(music_wav), dtype="float32", always_2d=True)

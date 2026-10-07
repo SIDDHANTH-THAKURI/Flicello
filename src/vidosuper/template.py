@@ -42,6 +42,14 @@ class Slot(BaseModel):
     transition_in: Transition = Field(default_factory=Transition)
 
 
+class IntroSpec(BaseModel):
+    """A five-second cold open before the film: the crew at work at hyper-speed, "Done.", then this title."""
+
+    title: str = "Can Claude edit?"
+    header: str = "CLAUDE CODE · VIDEO EDITING TRIALS"
+    take: str = "TAKE 2"
+
+
 class Template(BaseModel):
     name: str
     idea: str = ""
@@ -52,6 +60,7 @@ class Template(BaseModel):
     fade_out: float = 1.0
     slots: list[Slot]
     music_credit: str | None = Field(None, description="Credit line for the outro, e.g. how the music was made.")
+    intro: IntroSpec | None = None
     sounds: list[SoundLayer] = Field(default_factory=list, description=(
         "Sound design on the timeline: a clip's own sound ('clip:c08' or a clip id) or a built-in effect "
         "('sfx:whoosh', 'sfx:impact', ...)."))

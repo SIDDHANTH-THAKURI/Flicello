@@ -88,6 +88,15 @@ def tiles_for(stats: RunStats) -> list[Tile]:
     return tiles
 
 
+def background(w: int, h: int) -> Image.Image:
+    """The dark, softly vignetted backdrop shared by the outro and the intro."""
+    y = ((np.arange(h, dtype=np.float32) - h * 0.46) / (h * 0.7))[:, None]
+    x = ((np.arange(w, dtype=np.float32) - w / 2) / (w * 0.7))[None, :]
+    t = np.clip(np.sqrt(x * x + y * y), 0, 1) ** 1.5
+    rgb = BG_CENTRE * (1 - t[..., None]) + BG_EDGE * t[..., None]
+    return Image.fromarray(rgb.astype(np.uint8), "RGB").convert("RGBA")
+
+
 def _clock(seconds: float) -> str:
     s = max(0, round(seconds))
     return f"{s // 60}:{s % 60:02d}"
@@ -134,12 +143,7 @@ class Outro:
         return max(8, round(base * self.u))
 
     def _background(self) -> Image.Image:
-        h, w = self.H, self.W
-        y = ((np.arange(h, dtype=np.float32) - h * 0.46) / (h * 0.7))[:, None]
-        x = ((np.arange(w, dtype=np.float32) - w / 2) / (w * 0.7))[None, :]
-        t = np.clip(np.sqrt(x * x + y * y), 0, 1) ** 1.5
-        rgb = BG_CENTRE * (1 - t[..., None]) + BG_EDGE * t[..., None]
-        return Image.fromarray(rgb.astype(np.uint8), "RGB").convert("RGBA")
+        return background(self.W, self.H)
 
     def _sprite(self, i: int, pose: int, blink: bool) -> Image.Image:
         key = (i, pose, blink)

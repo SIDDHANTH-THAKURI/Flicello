@@ -110,8 +110,9 @@ def draft_canvas(width: int, height: int, short_side: int) -> tuple[int, int]:
 
 def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft",
                out_path: Path | None = None, on_shot: Callable[[], None] | None = None,
-               tail: Tail | None = None) -> RenderResult:
-    """tail: something to play after the film (the outro), already rendered at this size and fps."""
+               tail: Tail | None = None, head: Tail | None = None) -> RenderResult:
+    """tail / head: something to play after / before the film (the outro / the intro), already rendered at
+    this size and fps, with its own sound at its own level."""
     if quality not in ("draft", "final"):
         raise ValueError("quality must be 'draft' or 'final'")
     started = time.perf_counter()
@@ -138,7 +139,8 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
     texts = [(t, render_text_png(t, width, height, work / f"text_{k}.png")) for k, t in enumerate(edl.texts)]
     video_only = assemble_video(timeline, shots, meta, quality, cfg, work / "picture.mp4", work,
                                 texts=texts, size=(width, height),
-                                tail=(tail.video, tail.frames) if tail else None)
+                                tail=(tail.video, tail.frames) if tail else None,
+                                head=(head.video, head.frames) if head else None)
 
     music_wav = decode_music(edl.music.path, project.music) if edl.music and edl.music.path else None
     layers = [(layer, resolve_sound(layer.source, clips, project)) for layer in edl.sounds]
@@ -149,6 +151,10 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
         tail_audio = np.zeros((frames_to_samples(tail.frames, timeline.fps), 2), np.float32)
         tail_audio[: len(tail.audio)] = tail.audio[: len(tail_audio)]
         mix = np.concatenate([mix, tail_audio])
+    if head is not None:  # the intro's sound plays before the film's
+        head_audio = np.zeros((frames_to_samples(head.frames, timeline.fps), 2), np.float32)
+        head_audio[: len(head.audio)] = head.audio[: len(head_audio)]
+        mix = np.concatenate([head_audio, mix])
     mix_path = work / "mix.wav"
     write_wav(mix_path, mix)
 
@@ -169,7 +175,7 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
     duration = float((probe.get("format") or {}).get("duration") or 0.0)
     result = RenderResult(
         output=str(out_path), quality=quality, width=width, height=height, fps=timeline.fps,
-        frames=timeline.total_frames + (tail.frames if tail else 0), duration=round(duration, 3), shots=len(shots),
+        frames=timeline.total_frames + (tail.frames if tail else 0) + (head.frames if head else 0), duration=round(duration, 3), shots=len(shots),
         shots_rendered=sum(1 for s in shots if not s.cached), seconds=round(time.perf_counter() - started, 1),
         loudness_measured=None if measured is None else round(measured, 1),
         loudness_gain_db=None if gain_db is None else round(gain_db, 1),
