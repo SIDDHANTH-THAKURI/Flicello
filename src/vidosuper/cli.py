@@ -774,6 +774,16 @@ def template_preview(template_file: Path = typer.Argument(..., help="template.js
     result = render_edl(edl, project, cfg, quality="final" if final else "draft", tail=tail, head=head,
                         out_path=out_dir / f"{stem}-{'final' if final else 'preview'}{'-4k' if uhd else ''}.mp4")
     console.print(f"[green]Preview:[/] {escape(result.output)} ({result.duration:.1f}s, {result.shots} slots)")
+    if final:  # check before anyone sees it
+        from .outro.intro import DURATION
+        from .qa import run_checks
+
+        findings, sheet = run_checks(Path(result.output), edl, project, head=DURATION if head else 0.0,
+                                     tail=tail is not None, strict_beats=True)
+        colour = {"ok": "green", "warn": "yellow", "fail": "red"}
+        for f in findings:
+            console.print(f"[{colour[f.level]}]{f.level.upper():4}[/] {f.check}: {escape(f.detail)}")
+        console.print(f"Contact sheet: {escape(str(sheet))}")
     if open_file and os.name == "nt":
         os.startfile(result.output)  # noqa: S606 - the user's own render
 
@@ -796,6 +806,41 @@ def template_retarget(template_file: Path = typer.Argument(..., help="template.j
     for note in notes:
         console.print(escape(note))
     console.print(f"[green]Template:[/] {escape(str(out))} ({new_template.slots[-1].end:.1f}s)")
+
+
+@app.command("check")
+def check(video: Path = typer.Argument(..., help="The rendered video"),
+          clips_dir: Path = typer.Argument(..., help="Folder with the raw clips (analysed)"),
+          template_file: Path = typer.Option(None, "--template", help="The template it was rendered from"),
+          edl_file: Path = typer.Option(None, "--edl", help="Or the EDL it was rendered from"),
+          head: float | None = typer.Option(None, help="Seconds of intro before the film (default: from the template)"),
+          tail: bool = typer.Option(False, help="An outro follows the film")) -> None:
+    """Check a render before showing it: beat sync, black frames, loudness, voices, content, shake."""
+    from .qa import run_checks
+    from .schemas import EDL as EDLModel
+
+    if (template_file is None) == (edl_file is None):
+        raise typer.BadParameter("give --template or --edl")
+    project = Project(clips_dir, load_config())
+    strict = template_file is not None
+    if template_file is not None:
+        from .outro.intro import DURATION
+        from .template import load_template
+
+        template = load_template(template_file)
+        edl_path = Path(template_file).with_name(f"{Path(template_file).stem}.preview-edl.json")
+        if head is None:
+            head = DURATION if template.intro else 0.0
+    else:
+        edl_path = edl_file
+    edl = EDLModel.model_validate_json(Path(edl_path).read_text(encoding="utf-8"))
+    findings, sheet = run_checks(video, edl, project, head=head or 0.0, tail=tail, strict_beats=strict)
+    colour = {"ok": "green", "warn": "yellow", "fail": "red"}
+    for f in findings:
+        console.print(f"[{colour[f.level]}]{f.level.upper():4}[/] {f.check}: {escape(f.detail)}")
+    console.print(f"Contact sheet (look for the companion, cars, text): {escape(str(sheet))}")
+    if any(f.level == "fail" for f in findings):
+        raise typer.Exit(1)
 
 
 @app.command("rate")
