@@ -191,12 +191,22 @@ def run_checks(video: Path, edl: EDL, project: Project, *, head: float = 0.0, ta
     timeline = build_timeline(edl, clips)
     film = timeline.duration
     findings: list[Finding] = []
-    if edl.music is not None and edl.music.path and not edl.music.jumps:
+    if edl.music is not None and edl.music.path:
         song = load_or_analyze(edl.music.path, project.music)
         beats = np.asarray(song.beats) - edl.music.start + head
-        half = float(np.median(np.diff(beats))) / 2 if len(beats) > 1 else 0.0
-        grid = np.sort(np.concatenate([beats, beats + half]))
-        findings += beat_findings(m.cuts, grid, head, head + film, strict=strict_beats)
+        period = float(np.median(np.diff(beats))) if len(beats) > 1 else 0.0
+        # a jump by whole beats (a bar repeated or skipped) leaves the grid where it was
+        on_grid = all(period and abs(((j.at + edl.music.start - j.to) / period) - round((j.at + edl.music.start - j.to)
+                                                                                         / period)) * period < 0.01
+                      for j in edl.music.jumps)
+        if on_grid:
+            grid = np.sort(np.concatenate([beats, beats + period / 2]))
+            if edl.music.jumps:  # extend the grid past the song's end by the beats the jumps add
+                extra = beats[-1] + period * np.arange(1, 64)
+                grid = np.sort(np.concatenate([grid, extra, extra + period / 2]))
+            findings += beat_findings(m.cuts, grid, head, head + film, strict=strict_beats)
+        else:
+            findings.append(Finding("warn", "beat sync", "music jumps off the beat grid: not checked"))
     fades = [0.0, head, head + film, m.duration] if (head or tail) else [0.0, m.duration]
     findings += black_findings(m.blacks, fades)
     findings += loudness_findings(m.lufs, m.true_peak, edl.meta.loudness_lufs, edl.meta.true_peak_db)

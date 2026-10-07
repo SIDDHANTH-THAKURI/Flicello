@@ -66,6 +66,7 @@ class Design(BaseModel):
     music_fade_out: float = 0.6
     intro: IntroSpec | None = None
     sound_design: bool = True
+    bar_pulses: bool = Field(True, description="A zoom pulse on every cut that starts a bar (off = fewer effects).")
     pool: dict[str, Moment]
     plan: list[Shot]
 
@@ -243,7 +244,7 @@ def build_template(design: Design, project: Project) -> Template:
             lead = 0.4
         elif shot.kind == "cut":
             lead = 0.15 if shot.beats <= 2 else None
-            if abs(pos % 4) < 1e-6 and pos > 0:
+            if design.bar_pulses and abs(pos % 4) < 1e-6 and pos > 0:
                 fx = [Fx(type="pulse", at=0.0, duration=0.4, strength=0.8)]
         moment = design.pool[shot.key]
         slot = Slot(id=f"s{n + 1:02d}", start=round(start, 3), end=round(end, 3), energy=energy,
