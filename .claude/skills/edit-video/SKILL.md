@@ -21,7 +21,10 @@ get approval at the two gates below, and don't render what they haven't agreed t
    (`./vido music compose <plan.json> "<out.mp3>"`, each costs the user's ElevenLabs credits), analyse
    each (drop, sections, tempo) and open a page with the three players. The user picks by ear. The
    model never puts the drop where the plan says: always work from the analysis.
-4. **Design the cut on the song's real bars** (a template JSON, see `src/vidosuper/template.py`):
+4. **Design the cut on the song's real bars:** write a design file (song, a pool of hand-picked
+   moments, a shot plan of hold / cut / hit / ramp / stutter in beats — format in
+   `src/vidosuper/design.py`) and run `./vido template design <name>.design.json "<clips folder>"`;
+   it picks the steadiest window or the action peak of every moment and adds the sound design. The plan:
    long slow holds where the music breathes, a build whose cuts accelerate into a stutter, the drop
    on the hero moment (slow motion + flash), 1-beat bursts against slow-motion holds and speed ramps,
    a breathing moment, the strongest moments last. Hand-pick every window and check the gates:
@@ -33,14 +36,17 @@ get approval at the two gates below, and don't render what they haven't agreed t
    new song.
 5. **Render:** `./vido template preview <template.json> "<clips folder>" --final --outro full`
    (`--4k` for 3840×2160). Cuts land within half a frame of their beat automatically.
-6. **Check before showing:** every hard cut within ~17 ms of a beat (scene-change times against the
-   beat grid), no black except the planned fades, about −14 LUFS with true peak under −1 dB, a contact
-   sheet of the shots (no companion, car or text), the drop cut on the drop's downbeat.
+6. **Check before showing:** final renders run `./vido check` automatically (also by hand:
+   `./vido check <video> "<clips folder>" --template <t.json> --tail`): cuts against the beat grid,
+   black frames, loudness, voices in used clip sound, shots logged with the companion or a car, shake.
+   Fix every FAIL; look at the contact sheet it writes for anything no number catches.
 7. **Show and rate:** open the result on screen (a comparison page when there are options). Ask for a
    1–10 rating, and a separate music rating when the music changed.
-8. **Learn (every time):** append the rating to `config/ratings.jsonl` (with the critics' prediction
-   when there was one) and a dated post-mortem to `config/lessons.md` §6: what moved the score, what
-   didn't, the rule it implies. Update the user-taste memory. Next edit starts by reading it.
+8. **Learn (every time):** `./vido rate <score> --version "<what>" --project <trip> [--music N]
+   [--intro-outro N] [--critics N] --note "<their words>" --lesson "<what moved the score, what didn't,
+   the rule it implies>"` — it logs `config/ratings.jsonl`, puts the post-mortem on top of
+   `config/lessons.md` and prints the critics' bias. Update the user-taste memory. The next edit starts
+   by reading the lessons. Every ~3 ratings: a short retro (promote what mattered, prune what didn't).
 
 ## The agent loop (when the user asks for it, or for long-form)
 `./vido edit start` → `director` → music → `editor` → critic panel + `adversary` → `./vido edit

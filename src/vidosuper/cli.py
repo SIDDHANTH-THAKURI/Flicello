@@ -788,6 +788,22 @@ def template_preview(template_file: Path = typer.Argument(..., help="template.js
         os.startfile(result.output)  # noqa: S606 - the user's own render
 
 
+@template_app.command("design")
+def template_design(design_file: Path = typer.Argument(..., help="design.json: song, moment pool, shot plan"),
+                    clips_dir: Path = typer.Argument(..., help="Folder with the raw clips (analysed)"),
+                    out: Path = typer.Option(None, help="Template to write (default: next to the design)")) -> None:
+    """Lay a shot plan on the song's real bars: lengths in beats, windows chosen, sound designed."""
+    from .design import build_template, design_summary, load_design
+
+    design = load_design(design_file)
+    template = build_template(design, Project(clips_dir, load_config()))
+    stem = Path(design_file).stem.removesuffix(".design")
+    out = out or Path(design_file).with_name(f"{stem}.json")
+    out.write_text(template.model_dump_json(indent=1, exclude_defaults=True), encoding="utf-8")
+    console.print(f"[green]Template:[/] {escape(str(out))}")
+    console.print(escape(design_summary(template)))
+
+
 @template_app.command("retarget")
 def template_retarget(template_file: Path = typer.Argument(..., help="template.json"),
                       music: Path = typer.Argument(..., help="The new song"),
