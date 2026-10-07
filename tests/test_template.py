@@ -22,14 +22,22 @@ def test_retarget_keeps_slots_in_beats_from_the_drop():
         Slot(id="c", start=13.0, end=19.0),
         Slot(id="d", start=19.0, end=20.0),
     ])
-    new = _song(0.4, drop=16.1, duration=21.0)  # 150 BPM, drop on beat 40, ends 4.9 s after it
+    # 150 BPM, drop on beat 40, room for 24 beats before it but only 12 after (the template has 16)
+    new = _song(0.4, drop=16.1, duration=21.0)
     moved, notes = retarget(template, old, new, "new.mp3")
     assert moved.music.path == "new.mp3" and moved.music.start == pytest.approx(16.1 - 24 * 0.4, abs=1e-3)
-    a, b, c = moved.slots  # 'd' fell past the song's end; 'c' now runs to it
+    a, b, c, d = moved.slots
     assert b.start == pytest.approx(24 * 0.4, abs=1e-3) and b.end == pytest.approx(26 * 0.4, abs=1e-3)
     assert b.fx[0].at == pytest.approx(0.4)  # the hit stays on the same beat
-    assert c.end == pytest.approx(21.0 - moved.music.start, abs=1e-3)
-    assert any("d: dropped" in n for n in notes) and "b on the drop" in notes[0]
+    assert d.end == pytest.approx(36 * 0.4, abs=1e-3)  # squeezed after the drop to end with the song
+    assert "b on the drop" in notes[0]
+    # a song that drops early: the build squeezes into the beats there are, the rest stretches (at most 1.5x)
+    early = _song(0.4, drop=4.9, duration=21.0)
+    moved, _ = retarget(template, old, early, "early.mp3")
+    a, b, c, d = moved.slots
+    assert moved.music.start == pytest.approx(0.1) and b.start == pytest.approx(12 * 0.4, abs=1e-3)
+    assert b.end - b.start == pytest.approx(3 * 0.4, abs=1e-3) and b.fx[0].at == pytest.approx(0.8)
+    assert d.end == pytest.approx(36 * 0.4, abs=1e-3)
 
 
 def test_v1_plan_becomes_v2_chunks():

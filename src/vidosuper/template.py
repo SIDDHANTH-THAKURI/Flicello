@@ -110,7 +110,7 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
         slow = min([p.speed for p in slot.ramp] or [slot.speed]) < 0.95
         if slot.clip:  # chosen by hand
             clip = clips[shorts.get(slot.clip, slot.clip)]
-            start = slot.src_in or 0.0
+            start = max(0.0, min(slot.src_in or 0.0, clip.duration - need))  # a longer slot may start earlier
             chosen[k] = {"clip": clip, "start": start, "end": start + need, "text": f"chosen: {slot.want}", "need": need}
             used.add((clip.clip_id, start))
             continue
@@ -167,58 +167,85 @@ def save_preview_edl(edl: EDL, path: Path) -> None:
     Path(path).write_text(json.dumps(edl.model_dump(mode="json"), indent=2), encoding="utf-8")
 
 
+def main_drop(music: MusicAnalysis, start: float = 0.0, end: float | None = None) -> float | None:
+    """The drop into the song's full-energy part: the first one (between start and end) followed by 8 s at
+    peak energy, else the one into the loudest stretch (a song may also 'drop' from its intro into a build)."""
+    import numpy as np
+
+    energy = np.asarray(music.energy)
+    drops = [d for d in music.drops if start <= d <= (music.duration if end is None else end)]
+    if not drops:
+        return None
+    after = {d: float(energy[int(d):int(d) + 8].mean()) if int(d) < len(energy) else 0.0 for d in drops}
+    return next((d for d in drops if after[d] >= 0.7), max(drops, key=lambda d: after[d]))
+
+
+def audible_end(music: MusicAnalysis, floor: float = 0.1) -> float:
+    """Where the song has died away (energy per second under the floor from there on)."""
+    loud = [i for i, e in enumerate(music.energy) if e >= floor]
+    return min(music.duration, loud[-1] + 1.0) if loud else music.duration
+
+
 def retarget(template: Template, old: MusicAnalysis, new: MusicAnalysis, new_path: str,
              anchor: str | None = None) -> tuple[Template, list[str]]:
-    """The same edit on another song. Every slot keeps its place in beats counted from the anchor slot
-    (default: the one that hits the old song's drop), and the anchor lands on the new song's drop, so
-    the shots, speeds and hits stay where they were in the music. Hits are rescaled to the new tempo;
-    slots past the new song's end are shortened or dropped."""
+    """The same edit on another song. Slot boundaries are counted in beats from the anchor slot (default:
+    the one on the old song's drop), which lands on the new song's main drop. Before the drop the slots
+    keep their beat counts when the song has room, else squeeze into the beats there are; after it they
+    stretch or squeeze (0.75-1.5x) to end with the song. Every cut stays on a whole beat and hits move
+    with their slot; slots past the new song's end are shortened or dropped."""
     import numpy as np
 
     old_period = float(np.median(np.diff(old.beats)))
     new_beats = np.asarray(new.beats, dtype=float)
     new_period = float(np.median(np.diff(new_beats)))
+    slots = template.slots
     if anchor is not None:
-        anchor_slot = next((s for s in template.slots if s.id == anchor), None)
+        anchor_slot = next((s for s in slots if s.id == anchor), None)
         if anchor_slot is None:
             raise ValueError(f"no slot {anchor!r} in the template")
     else:
-        if not old.drops:
+        old_drop = main_drop(old, template.music.start, template.music.start + slots[-1].end)
+        if old_drop is None:
             raise ValueError("the old song has no drop to line up; name an anchor slot")
-        old_drop = old.drops[0] - template.music.start
-        anchor_slot = min(template.slots, key=lambda s: abs(s.start - old_drop))
-    if not new.drops:
+        anchor_slot = min(slots, key=lambda s: abs(s.start - (old_drop - template.music.start)))
+    drop = main_drop(new)
+    if drop is None:
         raise ValueError("the new song has no drop to line up with")
-    drop_beat = int(np.argmin(np.abs(new_beats - new.drops[0])))
+    drop_beat = int(np.argmin(np.abs(new_beats - drop)))
 
-    def music_time(t: float) -> float:
-        """Timeline seconds on the template -> seconds into the new song, by beats from the anchor."""
-        pos = drop_beat + round((t - anchor_slot.start) / old_period * 2) / 2
-        if pos <= 0:
-            return float(new_beats[0] + pos * new_period)
-        if pos >= len(new_beats) - 1:
-            return float(new_beats[-1] + (pos - len(new_beats) + 1) * new_period)
-        return float(np.interp(pos, np.arange(len(new_beats)), new_beats))
+    rel = [(t - anchor_slot.start) / old_period for t in [s.start for s in slots] + [slots[-1].end]]
+    pre, post = max(-rel[0], 0.0), max(rel[-1], 0.0)
+    end_beat = int(np.searchsorted(new_beats, audible_end(new), side="right")) - 1
+    pre_scale = min(1.0, drop_beat / pre) if pre else 1.0
+    post_scale = min(1.5, max(0.75, (end_beat - drop_beat) / post)) if post else 1.0
+    idx = [drop_beat + int(np.floor(r * (pre_scale if r < 0 else post_scale) + 0.5)) for r in rel]
+    for k in range(1, len(idx)):  # every slot keeps at least one beat
+        idx[k] = max(idx[k], idx[k - 1] + 1)
 
-    start = music_time(template.slots[0].start)
-    if start < 0:
-        raise ValueError(f"the new song reaches its drop {-start:.1f}s too early for this template")
-    end = new.duration - start
-    scale = new_period / old_period
-    notes, slots = [], []
-    for slot in template.slots:
-        full = music_time(slot.end) - start
-        s0, s1 = music_time(slot.start) - start, min(full, end)
+    def beat_time(i: int) -> float:
+        if i >= len(new_beats):
+            return float(new_beats[-1] + (i - len(new_beats) + 1) * new_period)
+        return float(new_beats[i])
+
+    times = [beat_time(i) for i in idx]
+    start, end = times[0], new.duration - times[0]
+    notes, moved = [], []
+    for k, slot in enumerate(slots):
+        s0, full = times[k] - start, times[k + 1] - start
+        s1 = min(full, end)
         if s1 < full - 0.01:
             if s1 - s0 < 1.0:
                 notes.append(f"{slot.id}: dropped, the new song ends at {end:.1f}s")
-                if slots:
-                    slots[-1] = slots[-1].model_copy(update={"end": round(end, 3)})
+                if moved:
+                    moved[-1] = moved[-1].model_copy(update={"end": round(end, 3)})
                 continue
             notes.append(f"{slot.id}: shortened to end with the song ({s1 - s0:.1f}s)")
-        fx = [f.model_copy(update={"at": round(f.at * scale, 3)}) for f in slot.fx]
-        slots.append(slot.model_copy(update={"start": round(s0, 3), "end": round(s1, 3), "fx": fx}))
+        ratio = (idx[k + 1] - idx[k]) / max(rel[k + 1] - rel[k], 1e-6)
+        fx = [f.model_copy(update={"at": round(int(np.floor(f.at / old_period * ratio + 0.5)) * new_period, 3)})
+              for f in slot.fx]
+        moved.append(slot.model_copy(update={"start": round(s0, 3), "end": round(s1, 3), "fx": fx}))
     music = template.music.model_copy(update={"path": new_path, "start": round(start, 3)})
-    notes.insert(0, f"{anchor_slot.id} on the drop at {new.drops[0]:.2f}s; the song starts at {start:.2f}s; "
-                    f"tempo {60 / old_period:.1f} -> {60 / new_period:.1f} BPM")
-    return template.model_copy(update={"music": music, "slots": slots}), notes
+    notes.insert(0, f"{anchor_slot.id} on the drop at {drop:.2f}s; the song starts at {start:.2f}s; tempo "
+                    f"{60 / old_period:.1f} -> {60 / new_period:.1f} BPM; before the drop x{pre_scale:.2f}, "
+                    f"after x{post_scale:.2f}")
+    return template.model_copy(update={"music": music, "slots": moved}), notes

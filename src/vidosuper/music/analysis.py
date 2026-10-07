@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
-MUSIC_VERSION = 4  # 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum
+MUSIC_VERSION = 5  # 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum;
+#                   5: drops on the beat where the kick comes in, bars phased from the main drop
 SR = 22050
 HOP = 512
 PULSE_CHUNK = 8.0
@@ -122,6 +123,17 @@ def _beat_grid(beats: np.ndarray, duration: float, onset: np.ndarray) -> np.ndar
     fine = _grid_score(spread, np.array([best_period]), fine_phases, duration)[0]
     phase = float(fine_phases[int(np.argmax(fine))]) % best_period
     return phase + best_period * np.arange(int((duration - phase) / best_period) + 1)
+
+
+def _refine_drop(t: float, beats: np.ndarray, level: np.ndarray) -> float:
+    """The beat a drop really lands on: within a bar either side of the bar start found, the first beat
+    whose low-band level already matches what follows (the kick comes in) right after a quieter one."""
+    i0 = int(np.argmin(np.abs(beats - t)))
+    for i in range(max(1, i0 - 4), min(len(beats) - 8, i0 + 5)):
+        after = float(np.median(level[i:i + 8]))
+        if level[i] >= after - 3 and level[i - 1] < after - 6:
+            return float(beats[i])
+    return t
 
 
 def _label_sections(bounds: list[float], energy: np.ndarray, duration: float) -> list[MusicSection]:
@@ -237,16 +249,27 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
         if len(bars) else np.zeros(0)
     bounds = [0.0]
     drops: list[float] = []
+    # low-band level on each beat (dB), to put each drop on the beat where the kick comes in
+    low_db = 20 * np.log10(spec[freqs < 150].sum(axis=0) + 1e-9)
+    frames = np.asarray(grid_frames, dtype=int)
+    beat_level = np.array([low_db[max(0, f - 1):f + 6].max() if f < len(low_db) else -120.0 for f in frames])
     if len(bar_energy) >= 8:
         w = 2
         novelty = np.zeros(len(bar_energy))
         for i in range(w, len(bar_energy) - w + 1):
             novelty[i] = bar_energy[i:i + w].mean() - bar_energy[i - w:i].mean()
         peaks, _ = find_peaks(np.abs(novelty), height=0.12, distance=4)
+        biggest: tuple[float, float | None] = (0.0, None)
         for p in peaks:
-            bounds.append(float(bars[p]))
+            t = float(bars[p])
             if novelty[p] > 0.2:
-                drops.append(round(float(bars[p]), 2))
+                t = _refine_drop(t, beats, beat_level)
+                drops.append(round(t, 2))
+                if novelty[p] > biggest[0]:
+                    biggest = (float(novelty[p]), t)
+            bounds.append(t)
+        if biggest[1] is not None:  # drops land on bar starts: the main drop sets the bar phase
+            downbeats = beats[int(np.argmin(np.abs(beats - biggest[1]))) % 4::4]
     bounds.append(duration)
     sections = _label_sections(sorted(set(bounds)), energy, duration)
 
