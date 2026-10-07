@@ -57,6 +57,11 @@ merely clean and synced is a 4, not a 7. Be harsh; predict the user's number.
   agent, generic results); autofill picking shots by score alone (bench, clover, selfie).
 
 ## 5. Craft to reach for next (research, 2026-10-08)
+- **Scenes, not shots.** Viewers called the films "just transitions and cut-paste": a montage of
+  interchangeable shots with decorative effects. Build moments as sequences — wide → closer → detail →
+  what the person sees (POV) → their reaction — so a cut means "he looks, and this is what he sees".
+  Give the person a reason to be there, one specific detail of the place, one surprise, and fewer
+  effects. A single voiceover line in the user's own words is a strong option (ask; not stray voices).
 - **Hook in 1.5–2 s** (Instagram decides there; 60 %+ 3-s hold → 5–10× reach). Strongest image or the
   question first.
 - **Visual beats** (Davis & Agrawala): time in-shot impacts (a wave bursting, a footstep) onto musical
