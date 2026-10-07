@@ -27,6 +27,11 @@ idea-less, stayed at 4.8. So before any shot: a **premise** a viewer could say b
 **emotional arc** (e.g. stillness → the sea gathering → eruption → exhale), and a **payoff** the
 ending delivers. A person in the footage gives the arc a witness — give them a small arc too
 (arrives, sees, reflects).
+Plan a **turn** by the midpoint (a reveal, a reversal, a sudden stillness — the moment the film
+changes direction; flat short films lack it) and a **button** at the end (the last beat that lands
+the idea). Build at least one moment as a **scene**, not a shot: the person looks → what they see →
+their reaction, or the five shots of one action (hands, face, wide, over the shoulder, an unusual
+angle) — that is what stops viewers calling it "cut-paste".
 - **thesis** — what this footage is actually about, in a sentence or two. Specific and visual,
   something the footage can *show*: a tension, a contrast, a feeling, a change over the day — not a
   slogan ("an amazing day in Sydney" is not a thesis). Every shot must earn its place by serving it;

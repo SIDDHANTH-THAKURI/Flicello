@@ -56,7 +56,19 @@ merely clean and synced is a 4, not a 7. Be harsh; predict the user's number.
 - Didn't work: the director/editor/critic loop with stock music (critics inflated, ~300K tokens per
   agent, generic results); autofill picking shots by score alone (bench, clover, selfie).
 
-## 5. Craft to reach for next (research, 2026-10-08)
+## 5. Craft to reach for next (research, 2026-10-08; details in docs/research/2026-10-08-night.md)
+- **A turn by the midpoint, a button at the end.** "Most sixty-second pieces that feel flat are missing
+  the turn." Our films went calm → build → drop → more drop; the 9/10 intro and outro both turn
+  ("Done." → "Can Claude edit?"; "I didn't edit this" → "Every one of them is Claude") and end on a button.
+- **Pacing:** Wollongong C averaged 1.3 s per shot — cinematic-ad speed (music videos 3.5–6 s, films
+  4–5 s). Keep the bursts for the peaks, give story moments 3–6 s, and land nearer 2–3 s on average.
+  Cut on phrase ends rather than every beat; a **silence beat** right after the fastest montage.
+- **Point of view:** tell the place through one person's eyes (Brandon Li: the festival "from the
+  point of view of the guy who breathes fire"); the person who shot it can be the character
+  ("The Road From Karakol").
+- **Sound bridges:** at every change of place, the next place's sound arrives first (J-cut).
+- **Colour:** match shots to one reference shot before the look; a per-shot boost can make neighbours
+  inconsistent.
 - **Scenes, not shots.** Viewers called the films "just transitions and cut-paste": a montage of
   interchangeable shots with decorative effects. Build moments as sequences — wide → closer → detail →
   what the person sees (POV) → their reaction — so a cut means "he looks, and this is what he sees".

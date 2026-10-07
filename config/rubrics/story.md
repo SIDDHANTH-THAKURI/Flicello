@@ -16,6 +16,10 @@ convention break, structure), `edl.md` (every shot with its rationale) and the s
   the point (circularity, flash-forward paid off).
 - **motifs_and_contrast** — planned motifs return and juxtapositions land side by side.
 - **ending** — resolves the thesis; not just "the last clip recorded".
+- **turn_and_scene** — is there a turn by the midpoint (the film changes direction) and at least one
+  moment built as a scene (look → what is seen → reaction), not only a montage of shots?
+  3 = a montage with no turn ("just transitions and cut-paste"); 5 = a turn or a scene; 7 = both,
+  clearly felt; 9 = the turn reframes everything before it.
 
 ## Typical issues
 Postcard shots that don't serve the thesis; a motif introduced and dropped; a juxtaposition planned

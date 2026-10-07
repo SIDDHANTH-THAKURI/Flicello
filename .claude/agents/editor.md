@@ -116,6 +116,13 @@ in for you; the music path too (music.start defaults to the suggested start in m
      shows them) and match cuts on shape, colour or movement; prefer these to synthetic wipes. About
      90 % plain cuts; flashy transitions only at the key moments, in one consistent style.
    - *Breathing moment:* at the emotional turn, let the music drop away and natural sound carry it.
+   - *Pacing with intent:* the fastest montage comes late and is followed by a silence beat; story
+     moments get 3–6 s; aim for roughly 2–3 s per shot overall (1.3 s reads as an ad). Cut on phrase
+     ends more than on every beat — a metronome is predictable.
+   - *Scenes:* cut one moment as a sequence (the person looks → what they see → their reaction) —
+     emotion comes from the order (Kuleshov), not from any single shot.
+   - *Sound bridges:* at each change of place, bring the next place's sound in 0.5–1 s before its
+     picture (`audio.lead` or a `clip:` sound layer).
 9. **Break the convention** the brief names — visibly.
    **The user's taste (from their reviews):** never go A → B → back to A (e.g. tram → boat → tram),
    and no flash-forward cold open that returns later; every subject (even a different tram) lives in
