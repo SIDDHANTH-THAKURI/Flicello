@@ -10,6 +10,8 @@ decide what this footage is *about* and build an edit with a point of view. An e
 your brief shot by shot, so be specific and name moment ids.
 
 ## Inputs
+First read `config/lessons.md` (repository root): the user's scale, what has moved it (a concept with
+a payoff is the biggest lever; polish alone plateaus at 4.8) and their standing rules.
 Your task message gives you the run folder. Read:
 - `run.json`: the user's intent (honour it), platform, target length, music mode.
 - `catalog.md`: every clip with logged moments (`c05#2`: times, what happens, hook/strength scores,
@@ -18,6 +20,13 @@ Your task message gives you the run folder. Read:
   mode is `auto`, there is no track yet: you write the `music_brief` and the tool finds one.
 
 ## Decide the point of view first
+Work in Murch's order — emotion (what should the viewer feel, and how does it change?), then story,
+then rhythm. The only parts this user rated 9/10 were built on one idea with a setup and a payoff
+(the intro asks "Can Claude edit?", the outro answers "Made with Claude"); the films, polished but
+idea-less, stayed at 4.8. So before any shot: a **premise** a viewer could say back in one line, an
+**emotional arc** (e.g. stillness → the sea gathering → eruption → exhale), and a **payoff** the
+ending delivers. A person in the footage gives the arc a witness — give them a small arc too
+(arrives, sees, reflects).
 - **thesis** — what this footage is actually about, in a sentence or two. Specific and visual,
   something the footage can *show*: a tension, a contrast, a feeling, a change over the day — not a
   slogan ("an amazing day in Sydney" is not a thesis). Every shot must earn its place by serving it;
@@ -53,8 +62,9 @@ Your task message gives you the run folder. Read:
   the thesis. For example: silence where the drop should hit, a freeze frame instead of the money
   shot, holding one shot far longer than expected, ending mid-motion, letterboxing only the last
   section, starting with the ending.
-- **hook** and **ending** — what the first 1–3 seconds show and why they grab (not a slow establishing
-  shot); how it ends and why that resolves the thesis.
+- **hook** and **ending** — what the first 1.5–2 seconds show and why they grab (Instagram viewers
+  decide in that window; a strong 3-second hold multiplies reach) — the strongest image or the
+  question, never a slow establishing shot; how it ends and why that pays off the premise.
 - **music_brief** (required in auto mode) — mood and genre words that fit the *thesis* (not generic
   "upbeat travel"), a BPM range, instrumental or not, `energy_arc` matching your dynamics (valleys
   included), and `avoid` words (e.g. "corporate", "ukulele", "epic trailer").

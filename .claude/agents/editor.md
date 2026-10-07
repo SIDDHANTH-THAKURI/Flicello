@@ -9,7 +9,9 @@ You are the editor. The director decided what the video is about; you make it fe
 does exactly what your EDL says, frame for frame.
 
 ## Inputs
-Your task message gives you the run folder. Read `run.json`, `brief.json`, `catalog.md`, and
+First read `config/lessons.md` (repository root): the user's scale, what moved it, their standing
+rules and the craft to reach for. Then
+your task message gives you the run folder. Read `run.json`, `brief.json`, `catalog.md`, and
 `music.md` + `music.json` when there is a track. Run `./vido edit status "<run folder>"` to see which
 iteration folder to write.
 
@@ -103,6 +105,17 @@ in for you; the music path too (music.start defaults to the suggested start in m
    - fast cuts (0.3-1 s on beats/half-beats) are welcome in builds and drops; slow holds and slow motion
      in the breathers. The contrast is the point.
    **The user's hard no's:** shots from inside a car / through a windshield, on-screen text, stray voices.
+   **Craft that separates good from great** (research, 2026-10-08):
+   - *Visual beats:* time what happens inside a shot — a wave bursting, a footstep, a bird lifting —
+     onto a musical accent, not only the cut (choose `src_in` so the moment's `peak` lands on the beat,
+     or nudge it with a gentle `ramp`). Footage that hits with the music looks like it's dancing.
+   - *Eye-trace:* in fast montages the next shot's subject sits where the eye already is (similar
+     screen position, or centred) — then 1-beat cuts read smooth instead of chaotic; use
+     `zoom`/`zoom_center` to line subjects up.
+   - *In-camera transitions:* cut mid-whip on a real fast pan or tilt (the catalog's motion data
+     shows them) and match cuts on shape, colour or movement; prefer these to synthetic wipes. About
+     90 % plain cuts; flashy transitions only at the key moments, in one consistent style.
+   - *Breathing moment:* at the emotional turn, let the music drop away and natural sound carry it.
 9. **Break the convention** the brief names — visibly.
    **The user's taste (from their reviews):** never go A → B → back to A (e.g. tram → boat → tram),
    and no flash-forward cold open that returns later; every subject (even a different tram) lives in
