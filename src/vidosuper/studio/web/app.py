@@ -32,6 +32,8 @@ from ..storage import UploadError, finish_upload, safe_child, start_upload, work
 
 HERE = Path(__file__).parent
 COOKIE = "vs_session"
+DEVICE = "vs_device"  # a browser the person has signed in from before (login throttling)
+MOMENT_ID = re.compile(r"\(?\b[cC]\d{2,3}#\d+\b\)?:?\s*")  # catalog ids like c04#1 mean nothing to people
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; "
        "style-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
        "form-action 'self'; object-src 'none'")
@@ -51,7 +53,8 @@ def create_app(studio: Studio) -> FastAPI:
     templates.env.filters["fromjson"] = json.loads
     templates.env.filters["ago"] = _ago
     templates.env.filters["mmss"] = lambda x: f"{int(x or 0) // 60}:{int(x or 0) % 60:02d}"
-    templates.env.filters["noids"] = lambda t: re.sub(r"\(?[cC]\d{2,3}#\d+\)?:?\s*", "", str(t or "")).strip()
+    templates.env.filters["shapes"] = lambda x: "9:16 + 16:9" if x == "both" else x
+    templates.env.filters["noids"] = lambda t: MOMENT_ID.sub("", str(t or "")).strip()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
     # ------------------------------------------------------------------ plumbing
@@ -128,6 +131,13 @@ def create_app(studio: Studio) -> FastAPI:
         resp.set_cookie(COOKIE, token, max_age=s.session_days * 86400, httponly=True, samesite="strict",
                         secure=s.https, path="/")
 
+    def remember_device(request: Request, resp: Response, user_id: str) -> None:
+        """Mark this browser as one the person uses (see accounts.login), unless it already is."""
+        if accounts._known_device(studio.db, request.cookies.get(DEVICE), user_id):
+            return
+        resp.set_cookie(DEVICE, accounts.new_device(studio.db, user_id), max_age=365 * 86400, httponly=True,
+                        samesite="strict", secure=s.https, path="/")
+
     # ------------------------------------------------------------------ health (no login, no details)
     @app.get("/healthz")
     def healthz():
@@ -145,11 +155,12 @@ def create_app(studio: Studio) -> FastAPI:
     @app.post("/login")
     def login_post(request: Request, name: str = Form(""), password: str = Form("")):
         try:
-            _user, token = accounts.login(studio.db, s, name, password, client_ip(request))
+            user, token = accounts.login(studio.db, s, name, password, client_ip(request), request.cookies.get(DEVICE))
         except accounts.AccountError as exc:
             return page(request, "login.html", None, None, error=str(exc), name=name[:40])
         resp = back("/")
         set_cookie(resp, token)
+        remember_device(request, resp, user["id"])
         return resp
 
     @app.post("/logout")
@@ -190,6 +201,7 @@ def create_app(studio: Studio) -> FastAPI:
                         name=name[:40])
         resp = back("/welcome")
         set_cookie(resp, accounts.new_session(studio.db, s, user["id"], client_ip(request)))
+        remember_device(request, resp, user["id"])
         return resp
 
     @app.get("/welcome", response_class=HTMLResponse)
@@ -256,7 +268,7 @@ def create_app(studio: Studio) -> FastAPI:
         pitches = studio.pitches(p)
         samples = studio.renders(p, "sample")
         finals = studio.renders(p, "final")
-        latest = [r for r in finals if r["version"] == p["version"]]
+        latest = sorted([r for r in finals if r["version"] == p["version"]], key=lambda r: r["shape"] != "9:16")
         older = [r for r in finals if r["version"] != p["version"]]
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
@@ -482,6 +494,9 @@ def create_app(studio: Studio) -> FastAPI:
     @app.get("/admin", response_class=HTMLResponse)
     def admin(request: Request):
         user, sess = need_owner(request)
+        return admin_page(request, user, sess)
+
+    def admin_page(request: Request, user: dict, sess: dict, new_link: str = "") -> HTMLResponse:
         db = studio.db
         users = db.all("SELECT u.*, (SELECT COUNT(*) FROM projects p WHERE p.user_id=u.id) AS projects, "
                        "(SELECT COALESCE(SUM(usd),0) FROM spend sp WHERE sp.user_id=u.id AND sp.billed=1) AS usd "
@@ -492,19 +507,16 @@ def create_app(studio: Studio) -> FastAPI:
         invites = db.all("SELECT * FROM invites WHERE used_by IS NULL AND expires > ? ORDER BY created DESC", (time.time(),))
         spend = db.all("SELECT task, model, backend, COUNT(*) AS n, SUM(usd) AS usd, SUM(tin) AS tin, SUM(tout) AS tout, "
                        "AVG(seconds) AS s FROM spend GROUP BY task, model, backend ORDER BY usd DESC")
-        new_link = request.query_params.get("link", "")
         return page(request, "admin.html", user, sess, health=studio.health(), users=users, jobs=jobs, alerts=alerts,
-                    invites=invites, spend=spend, new_link=new_link if new_link.startswith("/join/") else "",
-                    default_videos=s.limits.videos_per_user)
+                    invites=invites, spend=spend, new_link=new_link, default_videos=s.limits.videos_per_user)
 
     @app.post("/admin/invite")
     def admin_invite(request: Request, csrf: str = Form(""), label: str = Form("")):
         user, sess = need_owner(request)
         check_csrf(sess, csrf)
         token = accounts.create_invite(studio.db, s, label, "friend")
-        from urllib.parse import quote
-
-        return RedirectResponse(f"/admin?link={quote('/join/' + token)}", status_code=303)
+        # shown once in this response, never put in a URL (it would sit in the browser's history)
+        return admin_page(request, user, sess, new_link="/join/" + token)
 
     @app.post("/admin/user")
     def admin_user(request: Request, csrf: str = Form(""), uid: str = Form(""), action: str = Form(""),

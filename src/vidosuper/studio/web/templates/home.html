@@ -21,7 +21,7 @@
     <div class="tile-body">
       <b>{{ p.title }}</b>
       <span class="pill {{ 'busy' if p.stage in BUSY else p.stage }}">{{ STAGES.get(p.stage, p.stage) }}</span>
-      <span class="muted small">{{ p.shapes }} · {{ p.length|int }} s · {{ p.updated|ago }}</span>
+      <span class="muted small">{{ p.shapes|shapes }} · {{ p.length|int }} s · {{ p.updated|ago }}</span>
     </div>
   </a>
   {% endfor %}

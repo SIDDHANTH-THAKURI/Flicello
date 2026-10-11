@@ -100,11 +100,31 @@ def _limited(db: DB, keys: list[str], limit: int, window: float = 900.0) -> bool
     return any(db.value("SELECT COUNT(*) FROM attempts WHERE key=? AND at>=?", (k, since), 0) >= limit for k in keys)
 
 
-def login(db: DB, s: StudioSettings, name: str, password: str, ip: str) -> tuple[dict, str]:
-    keys = [f"user:{name.strip().lower()}", f"ip:{ip}"]
+def new_device(db: DB, user_id: str) -> str:
+    """A long-lived marker for a browser this person signed in from (OWASP 'device cookie')."""
+    token = secrets.token_urlsafe(24)
+    db.run("INSERT INTO devices(token, user_id, created) VALUES (?,?,?)", (token_hash(token), user_id, time.time()))
+    return token
+
+
+def _known_device(db: DB, token: str | None, user_id: str | None) -> str | None:
+    if not token or not user_id or len(token) > 100:
+        return None
+    hashed = token_hash(token)
+    return hashed if db.one("SELECT 1 AS ok FROM devices WHERE token=? AND user_id=?", (hashed, user_id)) else None
+
+
+def login(db: DB, s: StudioSettings, name: str, password: str, ip: str, device: str | None = None) -> tuple[dict, str]:
+    """Failed tries are limited per account, so guessing a password is hopeless; but on a browser the person
+    has signed in from before they're limited per that browser instead, so someone else's bad tries can't
+    lock them out."""
+    user = db.one("SELECT * FROM users WHERE name=?", (" ".join(name.split()),))
+    known = _known_device(db, device, user["id"] if user else None)
+    keys = [f"dev:{known}"] if known else [f"user:{name.strip().lower()}"]
+    if not known and ip not in ("127.0.0.1", "::1", "?"):  # behind `tailscale serve` everyone arrives from loopback
+        keys.append(f"ip:{ip}")
     if _limited(db, keys, s.limits.login_attempts):
         raise AccountError("Too many tries. Wait 15 minutes and try again.")
-    user = db.one("SELECT * FROM users WHERE name=?", (" ".join(name.split()),))
     ok = user is not None and not user["disabled"] and verify_password(password, user["pw"])
     if not ok:
         if user is None:

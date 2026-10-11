@@ -81,7 +81,9 @@ class Studio:
         if self.is_owner(user):
             return None
         allowed = user["videos_allowed"] if user["videos_allowed"] is not None else self.s.limits.videos_per_user
-        made = self.db.value("SELECT COUNT(*) FROM projects WHERE user_id=?", (user["id"],), 0)
+        # a video counts once it exists; deleting an unfinished one gives the place back, a finished one doesn't
+        made = self.db.value("SELECT COUNT(*) FROM projects WHERE user_id=? AND (deleted=0 OR version>=1)",
+                             (user["id"],), 0)
         return max(0, allowed - made)
 
     # ------------------------------------------------------------------ projects
@@ -137,6 +139,12 @@ class Studio:
             raise ActionError("That can't be done at this step.")
 
     def _enqueue(self, project: dict, kind: str, params: dict | None = None) -> int:
+        user = self.user(project["user_id"])
+        if kind in JOB_STAGE and user and not self.is_owner(user):
+            busy = self.db.value("SELECT COUNT(*) FROM jobs WHERE user_id=? AND status IN ('queued','running','waiting') "
+                                 "AND kind != 'learn'", (user["id"],), 0)
+            if busy >= self.s.limits.active_jobs_per_user:
+                raise ActionError("One video at a time: wait for your other video's step to finish.")
         job = self.db.enqueue(kind, project["id"], project["user_id"], params, PRIORITY.get(kind, 5))
         if kind in JOB_STAGE:
             self.db.set_stage(project["id"], JOB_STAGE[kind])
@@ -148,6 +156,13 @@ class Studio:
             raise ActionError("Add at least one clip first.")
         if not project["song"]:
             raise ActionError("Add a song first.")
+        footage = float(self.db.value("SELECT COALESCE(SUM(seconds), 0) FROM clips WHERE project_id=?", (project["id"],), 0.0))
+        if footage < 0.6 * project["length"]:
+            raise ActionError(f"That's {footage:.0f} s of footage for a {project['length']:.0f} s video: add more clips, "
+                              "or pick a shorter length.")
+        if footage > self.s.limits.project_seconds:
+            raise ActionError(f"That's {footage / 60:.0f} minutes of footage; the most a video can use is "
+                              f"{self.s.limits.project_seconds / 60:.0f}. Remove some clips.")
         self._enqueue(project, "prepare")
 
     def choose(self, project: dict, pitch_id: int) -> None:

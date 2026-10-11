@@ -14,9 +14,11 @@ from the command line (to measure time and cost per video).
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -51,6 +53,9 @@ def studio_config(workspace: Path, render_preset: str = "medium", models_dir: Pa
                        "output": {"outro": "none"}}
     if models_dir is not None:
         overrides["analysis"] = {"models_dir": str(models_dir)}
+    if os.name != "nt" or os.environ.get("VIDO_STUDIO_HWACCEL") == "none":
+        # a container lists QuickSync in FFmpeg's build but has no GPU: every shot would fail on it first
+        overrides["ingest"] = {"hwaccel": "none"}
     return load_config(overrides)
 
 
@@ -131,11 +136,19 @@ class Pipeline:
         tasks = prepare_perception(project, self.cfg)
         by_id = {c.clip_id: c for c in usable}
         todo = [t for t in tasks["clips"] if catalog_check(project, by_id[t["clip_id"]])[1]]
-        for n, task in enumerate(todo):
+        done = [0]
+
+        def watch(task: dict) -> None:
             clip = by_id[task["clip_id"]]
-            self.progress(0.35 + 0.5 * n / max(1, len(todo)), f"Watching clip {n + 1} of {len(todo)}")
             analysis = self.brain.analyse_clip(clip, brief_text(Path(task["brief"])), [Path(s) for s in task["sheets"]])
             write_text_atomic(analysis_path(project, clip.clip_id), analysis.model_dump_json(indent=1))
+            done[0] += 1
+            self.progress(0.35 + 0.5 * done[0] / len(todo), f"Watched {done[0]} of {len(todo)} clips")
+
+        if todo:
+            self.progress(0.35, f"Watching {len(todo)} clip{'s' if len(todo) > 1 else ''}")
+            with ThreadPoolExecutor(max_workers=max(1, getattr(self.brain, "parallel", 1))) as pool:
+                list(pool.map(watch, todo))  # the first failure (or a spending cap) stops the step
         self.progress(0.88, "Making the catalog")
         catalog = build_catalog(project)
         self.progress(0.93, "Listening to the song")

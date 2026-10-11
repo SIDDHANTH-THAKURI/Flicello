@@ -30,7 +30,13 @@ ai = [
   "imagehash>=4.3",
   "jinja2>=3.1",
 ]
-dev = ["pytest>=8.0"]
+studio = [
+  "fastapi>=0.115",
+  "uvicorn>=0.32",
+  "python-multipart>=0.0.12",
+  "anthropic>=0.40",
+]
+dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [project.scripts]
 vido = "vidosuper.cli:app"

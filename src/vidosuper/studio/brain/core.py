@@ -223,6 +223,11 @@ class Brain:
     def backend_name(self) -> str:
         return getattr(self.backend, "name", "?")
 
+    @property
+    def parallel(self) -> int:
+        """Clips logged at once: the API takes several requests; each Claude Code run is a whole process."""
+        return {"api": 4, "claude_code": 2}.get(self.backend_name, 1)
+
     def _log(self, name: str, data: dict) -> None:
         if self.log_dir is None:
             return

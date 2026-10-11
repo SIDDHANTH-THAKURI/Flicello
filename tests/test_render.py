@@ -117,3 +117,28 @@ def test_draft_slow_motion_uses_original_frames(ingested):
     items = build_timeline(edl, project.clips()).items
     assert [uses_proxy(i, "draft") for i in items] == [False, True, True]  # 30 fps slow-mo can't do better
     assert not any(uses_proxy(i, "final") for i in items)
+
+
+def test_stabiliser_jumps_finds_a_thrown_frame_but_not_a_flash(tmp_path):
+    import cv2
+    import numpy as np
+
+    from vidosuper.render.segments import stabiliser_jumps
+    from vidosuper.schemas import Fx, Segment
+
+    rng = np.random.default_rng(1)
+    noise = (rng.random((180, 320, 3)) * 255).astype(np.uint8)
+    base = cv2.normalize(cv2.GaussianBlur(noise, (0, 0), 12), None, 0, 255, cv2.NORM_MINMAX)  # smooth, like a scene
+    path = tmp_path / "shot.mp4"
+    out = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30, (320, 180))
+    for i in range(60):
+        frame = np.roll(base, i, axis=1)  # a steady pan
+        if i == 20:
+            frame = np.roll(base, 120, axis=0)  # one frame thrown off
+        if 40 <= i < 44:
+            frame = cv2.convertScaleAbs(frame, alpha=1.0, beta=90)  # a flash
+        out.write(frame)
+    out.release()
+    seg = Segment(id="s1", clip_id="c", src_in=0.0, src_out=2.0, fx=[Fx(type="flash", at=40 / 30, duration=0.15)])
+    jumps = stabiliser_jumps(path, 30, seg)
+    assert jumps and all(abs(t - 20 / 30) < 0.05 or abs(t - 21 / 30) < 0.05 for t in jumps), jumps

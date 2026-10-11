@@ -6,7 +6,7 @@
   <h1>{{ p.title }}</h1>
   <span class="pill {{ 'busy' if p.stage in BUSY else p.stage }}" id="stage-pill">{{ STAGES.get(p.stage, p.stage) }}</span>
 </div>
-<p class="muted small">{{ p.shapes }} · {{ p.length|int }} s{% if p.song %} · ♪ {{ p.song }}{% endif %}{% if p.intent %} · “{{ p.intent }}”{% endif %}</p>
+<p class="muted small">{{ p.shapes|shapes }} · {{ p.length|int }} s{% if p.song %} · ♪ {{ p.song }}{% endif %}{% if p.intent %} · “{{ p.intent }}”{% endif %}</p>
 
 {% if p.stage == 'setup' %}
 <section class="card">

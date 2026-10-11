@@ -294,9 +294,66 @@ def test_budget_cap_pauses_instead_of_spending(studio):
     studio.db.run("INSERT INTO spend(at, user_id, usd, billed) VALUES (?,?,?,1)", (time.time(), owner["id"], 1.5))
     p = studio.create_project(friend, "x", "9:16", 15, "")
     studio.db.run("UPDATE projects SET song='s.mp3' WHERE id=?", (p["id"],))
-    studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, created) VALUES ('c1', ?, 'a', 'a.mp4', 1, 0)", (p["id"],))
+    studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, created) VALUES ('c1', ?, 'a', 'a.mp4', 1, 30.0, 0)", (p["id"],))
     studio.start(studio.db.project(p["id"]))
     _drain(studio, 2)
     assert studio.db.project(p["id"])["stage"] == "paused"
     assert studio.db.one("SELECT status FROM jobs")["status"] == "waiting"
     assert studio.db.one("SELECT * FROM alerts WHERE kind='budget'")
+
+
+def test_start_needs_enough_footage(studio):
+    from vidosuper.studio.service import ActionError
+
+    friend = _friend(studio, "Cy")
+    p = studio.create_project(friend, "x", "9:16", 30, "")
+    studio.db.run("UPDATE projects SET song='s.mp3' WHERE id=?", (p["id"],))
+    studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, created) "
+                  "VALUES ('c9', ?, 'a', 'a.mp4', 1, 8.0, 0)", (p["id"],))
+    with pytest.raises(ActionError, match="8 s of footage"):
+        studio.start(studio.db.project(p["id"]))
+
+
+def test_open_uploads_reserve_space_and_are_capped(studio):
+    from vidosuper.studio.storage import MAX_OPEN_UPLOADS, UploadError, start_upload
+
+    friend = _friend(studio, "Dee")
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+    studio.s.limits.project_bytes = 3_000_000
+    start_upload(studio.db, studio.s, friend, p, "clip", "a.mp4", 2_000_000)
+    with pytest.raises(UploadError, match="would go over"):  # the first upload's size is reserved
+        start_upload(studio.db, studio.s, friend, p, "clip", "b.mp4", 2_000_000)
+    studio.s.limits.project_bytes = 10 ** 12
+    for k in range(MAX_OPEN_UPLOADS - 1):
+        start_upload(studio.db, studio.s, friend, p, "clip", f"c{k}.mp4", 1000)
+    with pytest.raises(UploadError, match="finish first"):
+        start_upload(studio.db, studio.s, friend, p, "clip", "z.mp4", 1000)
+
+
+def test_someone_elses_bad_passwords_cannot_lock_you_out(studio):
+    _friend(studio, "Eve")
+    user, _ = accounts.login(studio.db, studio.s, "Eve", "a long password 2", "127.0.0.1")
+    device = accounts.new_device(studio.db, user["id"])
+    for _ in range(studio.s.limits.login_attempts):  # a griefer on another browser
+        with pytest.raises(accounts.AccountError):
+            accounts.login(studio.db, studio.s, "Eve", "guess", "127.0.0.1")
+    with pytest.raises(accounts.AccountError, match="Too many"):
+        accounts.login(studio.db, studio.s, "Eve", "a long password 2", "127.0.0.1")
+    found, _ = accounts.login(studio.db, studio.s, "Eve", "a long password 2", "127.0.0.1", device)
+    assert found["id"] == user["id"]
+
+
+def test_one_active_video_per_friend(studio):
+    from vidosuper.studio.service import ActionError
+
+    friend = _friend(studio, "Fay")
+    projects = []
+    for k in range(2):
+        p = studio.create_project(friend, f"v{k}", "9:16", 15, "")
+        studio.db.run("UPDATE projects SET song='s.mp3' WHERE id=?", (p["id"],))
+        studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, created) VALUES (?, ?, 'a', 'a.mp4', 1, 30.0, 0)",
+                      (f"c{k}", p["id"]))
+        projects.append(studio.db.project(p["id"]))
+    studio.start(projects[0])
+    with pytest.raises(ActionError, match="One video at a time"):
+        studio.start(projects[1])

@@ -27,3 +27,7 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+
+# Studio secrets (API key, alert topic)
+.env.*
+!.env.example

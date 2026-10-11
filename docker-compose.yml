@@ -1,0 +1,34 @@
+# VidoSuper Studio on this PC. The port is bound to 127.0.0.1 only: friends reach it through Tailscale
+# (`tailscale serve`), never through an open port. Secrets go in .env.studio (git-ignored), e.g.
+#   ANTHROPIC_API_KEY=...            (the key itself: never paste it in chat)
+#   VIDO_STUDIO_ALERT_URL=https://ntfy.sh/<a long random topic>
+#   VIDO_STUDIO_MONTHLY_USD=20
+services:
+  studio:
+    build: .
+    image: vidosuper-studio:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env.studio
+        required: false
+    environment:
+      VIDO_STUDIO_HTTPS: "1"            # served over HTTPS by tailscale serve: cookies are Secure
+      VIDO_STUDIO_BRAIN: api            # friends' videos: the Claude API (pay per use, capped)
+      VIDO_STUDIO_OWNER_BRAIN: api      # no Claude Code inside the container
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - studio-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=2g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 6g
+    cpus: 4
+
+volumes:
+  studio-data:

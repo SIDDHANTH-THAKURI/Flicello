@@ -67,12 +67,16 @@ def run_ffmpeg(args: list[str], *, what: str = "ffmpeg failed", timeout: float |
     return stderr
 
 
-def ffprobe_json(path: str | Path) -> dict:
+def ffprobe_json(path: str | Path, timeout: float | None = None) -> dict:
+    """timeout: seconds before giving up on the file (for untrusted uploads; raises FFmpegError)."""
     cmd = [
         ffprobe_bin(), "-v", "error", "-print_format", "json",
         "-show_format", "-show_streams", str(path),
     ]
-    proc = subprocess.run(cmd, capture_output=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise FFmpegError(f"ffprobe took longer than {timeout:.0f}s on {path}", cmd) from exc
     if proc.returncode != 0:
         raise FFmpegError(f"ffprobe could not read {path}", cmd, proc.stderr.decode("utf-8", errors="replace"))
     return json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")

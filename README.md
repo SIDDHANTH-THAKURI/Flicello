@@ -19,6 +19,17 @@ From Git Bash use `./vido` instead of `.\vido.cmd`.
 | `/analyze-footage <clips folder>` | Phase 2: transcripts + contact sheets, `clip-analyst` subagents log every clip, then a catalog (`catalog.html`) of moments and problems |
 | `/edit-video <clips folder> ...` | Phase 3: `director` plans the story, `editor` cuts a beat-synced draft, you review, final render lands in `Videos\VidoSuper` |
 
+## Studio (a website where invited friends make their own videos)
+
+Setup, Tailscale, Docker, costs and monitoring: [docs/studio.md](docs/studio.md).
+
+| Command | What it does |
+|---|---|
+| `vido studio invite --owner` | One-time link for your own account (then invite friends from `/admin`) |
+| `vido studio serve` | The web app + the job worker on http://127.0.0.1:8765 |
+| `vido studio status` | Worker heartbeat, queue, disk, the month's AI spend, unread alerts |
+| `vido studio run <clips> --song <file> [--brain local\|claude_code\|api]` | One whole video from the command line, with the time and cost of every step |
+
 ## Commands (Phase 3: editing)
 
 | Command | What it does |
