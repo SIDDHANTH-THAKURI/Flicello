@@ -193,6 +193,34 @@ class RampPoint(BaseModel):
     speed: float = Field(..., ge=0.1, le=8.0, description="0.3 = slow motion, 2.0 = double speed.")
 
 
+class Graphic(BaseModel):
+    """Motion graphics drawn into a shot. `world` graphics stick to the scene as the camera moves (the shot
+    is tracked); `screen` graphics stay put. `behind` puts it behind the person in the shot (a person
+    matte), e.g. a title the subject walks in front of. Positions are fractions of the frame (for world
+    graphics: of the shot's first frame)."""
+
+    kind: Literal["title", "words", "label", "doodle", "route", "crew", "character", "sign", "card", "bubble",
+                  "panels", "snipcut"]
+    at: float = Field(0.0, ge=0.0, description="Seconds into the shot it appears.")
+    until: float | None = Field(None, description="Seconds into the shot it's gone (default: the end of the shot).")
+    x: float = 0.5
+    y: float = 0.5
+    size: float = Field(1.0, gt=0.0, description="1 = the kind's normal size.")
+    text: str = Field("", description=(
+        "title/label/sign/bubble/card text; words: 'ONE|TWO'; route: 'Sydney|Wollongong'; character: scout, muse or "
+        "snip; panels: tile sources 'c40@52.6|c39@53.0|c39@68.0' (clip@source second); snipcut: end-card title."))
+    style: str = Field("", description=(
+        "doodle: circle, arrow, burst, spiral, stars, line, underline, waves; title: slam, rise; character actions "
+        "'jump:0.0,duck:4.0,wave:6.0,flip'; card: split."))
+    anchor: Literal["world", "screen"] = "world"
+    behind: bool = False
+    points: list[tuple[float, float]] = Field(default_factory=list, description=(
+        "Doodle path / arrow ends / label or bubble offset / a character's positions (with beats as their times)."))
+    beats: list[float] = Field(default_factory=list, description=(
+        "Seconds into the shot: when words/letters hit, when panels appear, when a character reaches each point."))
+    color: str = Field("cream", description="cream, white, amber, teal, coral or #rrggbb.")
+
+
 class Fx(BaseModel):
     """A hit inside a shot, timed to the music: a flash, a camera shake or a zoom pulse."""
 
@@ -225,6 +253,9 @@ class Segment(BaseModel):
         "Animated zoom over the shot: 0.15 pushes in 15% (eased), -0.15 starts 15% tight and pulls out."))
     fx: list[Fx] = Field(default_factory=list, description="Hits inside the shot: flash, shake, pulse.")
     stabilize: bool = Field(False, description="Smooth handheld wobble (crops in slightly).")
+    frame_center: tuple[float, float] = Field((0.5, 0.5), description=(
+        "Where a 'fill' crop sits in the source (fractions): keeps the subject in a vertical frame."))
+    graphics: list[Graphic] = Field(default_factory=list, description="Motion graphics drawn into this shot.")
     look: str | None = Field(None, description="Override the edit's look for this shot (see meta.look).")
     out_sync: Literal["beat", "downbeat", "free"] = Field("beat", description=(
         "How the cut OUT of this shot is timed when there is music: snapped to a beat, to a bar start, or "
@@ -254,6 +285,8 @@ class MusicSpec(BaseModel):
         "Music level over time (linear in dB between points): dips, drop-outs and swells. Applied on top of "
         "the automatic ducking under kept shot audio."))
     jumps: list[MusicJump] = Field(default_factory=list, description="Music edits: skip ahead/back in the track.")
+    grid_shift: float = Field(0.0, description=(
+        "Seconds added to the analysed beat grid when it sits on the off-beat (set by the editor who heard it)."))
 
 
 class SoundLayer(BaseModel):

@@ -23,10 +23,14 @@ def _even(value: float) -> int:
     return max(2, int(round(value / 2)) * 2)
 
 
-def framing_filter(mode: str, width: int, height: int, blur_sigma: float) -> str:
+def framing_filter(mode: str, width: int, height: int, blur_sigma: float,
+                   center: tuple[float, float] = (0.5, 0.5)) -> str:
+    """center: where a fill crop sits in the scaled source (fractions), e.g. on the subject in 9:16."""
     if mode == "fill":
-        return (f"scale={width}:{height}:force_original_aspect_ratio=increase:force_divisible_by=2,"
-                f"crop={width}:{height}")
+        cx, cy = (min(1.0, max(0.0, v)) for v in center)
+        crop = f"crop={width}:{height}" if (cx, cy) == (0.5, 0.5) else \
+            f"crop={width}:{height}:x='(iw-{width})*{cx:.4f}':y='(ih-{height})*{cy:.4f}'"
+        return f"scale={width}:{height}:force_original_aspect_ratio=increase:force_divisible_by=2,{crop}"
     if mode == "fit":
         return (f"scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
                 f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black")
@@ -105,7 +109,7 @@ def segment_video_filter(clip: ClipInfo, seg: Segment, width: int, height: int, 
     motion = motion_filter(seg, width, height, (moving_frames or 0) / fps)
     post = ([motion] if motion else []) + ([look] if look else []) + [
         "setsar=1", "format=yuv420p", f"tpad=stop_mode=clone:stop_duration={seg.freeze + 2:.3f}"]
-    return ",".join(pre) + "," + framing_filter(mode, width, height, blur_sigma) + "," + ",".join(post)
+    return ",".join(pre) + "," + framing_filter(mode, width, height, blur_sigma, seg.frame_center) + "," + ",".join(post)
 
 
 def motion_filter(seg: Segment, width: int, height: int, seconds: float) -> str | None:

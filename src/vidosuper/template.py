@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from .edit.speed import source_time
 from .music.analysis import MusicAnalysis
 from .perceive.prep import analysis_path
-from .schemas import (EDL, ClipAnalysis, EditMeta, Fx, MusicSpec, RampPoint, Segment, SegmentAudio, SoundLayer,
+from .schemas import (EDL, ClipAnalysis, EditMeta, Fx, Graphic, MusicSpec, RampPoint, Segment, SegmentAudio, SoundLayer,
                       Transition)
 from .workspace import Project
 
@@ -40,6 +40,8 @@ class Slot(BaseModel):
     push: float = 0.0
     fx: list[Fx] = Field(default_factory=list)
     transition_in: Transition = Field(default_factory=Transition)
+    frame_center: tuple[float, float] = Field((0.5, 0.5), description="Where the crop sits (keeps the subject in 9:16).")
+    graphics: list[Graphic] = Field(default_factory=list, description="Motion graphics drawn into this shot.")
 
 
 class IntroSpec(BaseModel):
@@ -58,6 +60,7 @@ class Template(BaseModel):
     stabilize: bool = False
     fade_in: float = 0.0
     fade_out: float = 1.0
+    vertical: bool = Field(False, description="9:16 (Reels) instead of 16:9.")
     slots: list[Slot]
     music_credit: str | None = Field(None, description="Credit line for the outro, e.g. how the music was made.")
     intro: IntroSpec | None = None
@@ -102,6 +105,21 @@ def _span(slot: Slot, seconds_on_screen: float) -> float:
         return seconds_on_screen * slot.speed
     probe = Segment(id="probe", clip_id="x", src_in=0.0, src_out=1.0, ramp=slot.ramp)
     return source_time(probe, seconds_on_screen)
+
+
+def _resolve_tiles(graphics: list[Graphic], clips: dict, shorts: dict[str, str]) -> list[Graphic]:
+    """Panel tiles name clips by short id ('c40@52.6'); the renderer needs their files."""
+    out = []
+    for g in graphics:
+        if g.kind == "panels":
+            tokens = []
+            for token in (t.strip() for t in g.text.split("|") if t.strip()):
+                cid, _, sec = token.rpartition("@")
+                clip = clips.get(shorts.get(cid, cid))
+                tokens.append(f"{clip.proxy or clip.path}@{sec}" if clip else token)  # a tile needs no 4K
+            g = g.model_copy(update={"text": "|".join(tokens)})
+        out.append(g)
+    return out
 
 
 def frames_on_screen(slots: list[Slot], fps: int) -> tuple[list[int], list[int]]:
@@ -168,7 +186,9 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
             start = max(0.0, min(pick["clip"].duration - need, pick["start"] - (need - (pick["end"] - start)) / 2))
         segments.append(Segment(
             id=slot.id, clip_id=pick["clip"].clip_id, src_in=round(start, 4), src_out=round(start + need, 4),
-            speed=slot.speed, ramp=slot.ramp, push=slot.push, fx=slot.fx,
+            framing="fill" if template.vertical else "auto",  # full-bleed 9:16; frame_center keeps the subject
+            speed=slot.speed, ramp=slot.ramp, push=slot.push, fx=slot.fx, frame_center=slot.frame_center,
+            graphics=_resolve_tiles(slot.graphics, clips, shorts),
             transition_in=Transition(type=slot.transition_in.type, duration=trans[k] / fps) if trans[k] else Transition(),
             out_sync="free",
             audio=SegmentAudio(mode="mute"), role=f"energy {slot.energy}",

@@ -19,6 +19,7 @@ dependencies = [
   "soundfile>=0.12",
   "pyloudnorm>=0.1.1",
   "pillow>=10.2",
+  "pycairo>=1.25",
 ]
 
 [project.optional-dependencies]

@@ -10,7 +10,8 @@ import soundfile as sf
 from scipy.signal import butter, sosfilt
 
 SR = 48000
-SFX_NAMES = ("whoosh", "whoosh_long", "riser", "impact", "subdrop", "swell", "tick", "shutter")
+SFX_NAMES = ("whoosh", "whoosh_long", "riser", "impact", "subdrop", "swell", "tick", "shutter", "pop", "snip",
+             "boing", "chime")
 
 
 def _noise(seconds: float, seed: int) -> np.ndarray:
@@ -66,6 +67,28 @@ def synthesize(name: str) -> np.ndarray:
     elif name == "shutter":
         a = _bandpass_sweep(_noise(0.05, 6), 3000, 5000) * np.exp(-np.arange(int(0.05 * SR)) / SR * 80)
         y = np.concatenate([a, np.zeros(int(0.07 * SR)), 0.8 * a])
+    elif name == "pop":  # a bubbly bloop: a quick upward glide that settles (the crew appearing)
+        t = np.arange(int(0.22 * SR)) / SR
+        f = 520 * (0.7 + 0.3 * (1 - np.exp(-t * 55)))
+        y = (np.sin(2 * np.pi * np.cumsum(f) / SR) + 0.18 * np.sin(4 * np.pi * np.cumsum(f) / SR)) *             np.minimum(1, t / 0.003) * np.exp(-t * 22)
+    elif name == "snip":  # scissors: two short metallic clicks with a brushed blade between
+        n = int(0.05 * SR)
+        t = np.arange(n) / SR
+        click = (np.sin(2 * np.pi * 4200 * t) * 0.6 + _noise(0.05, 7) * 0.4) * np.exp(-t * 160)
+        blade = _bandpass_sweep(_noise(0.09, 8), 5000, 2500) * 0.25
+        y = np.concatenate([click, blade, click * 0.85])
+    elif name == "boing":  # a cartoon jump: a springy rising tone with vibrato
+        t = np.arange(int(0.45 * SR)) / SR
+        f = 180 + 520 * (1 - np.exp(-t * 9)) + 25 * np.sin(2 * np.pi * 18 * t)
+        y = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.minimum(1, t / 0.005) * np.exp(-t * 5.5)
+    elif name == "chime":  # a small bell, two notes a fifth apart
+        t = np.arange(int(1.8 * SR)) / SR
+        y = np.zeros_like(t)
+        for start, base in ((0.0, 1046.5), (0.09, 1567.98)):
+            k = int(start * SR)
+            tt = t[: len(t) - k]
+            y[k:] += sum(a * np.sin(2 * np.pi * base * r * tt) * np.exp(-tt * d)
+                         for r, a, d in ((1, 1.0, 2.2), (2.76, 0.35, 4.5), (5.4, 0.12, 8)))
     else:
         raise ValueError(f"unknown sound effect {name!r}; available: {', '.join(SFX_NAMES)}")
     y = y / (np.abs(y).max() + 1e-9) * 0.5  # -6 dBFS peak; the mix sets the final level

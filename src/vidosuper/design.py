@@ -29,7 +29,7 @@ import numpy as np
 from pydantic import BaseModel, Field, model_validator
 
 from .perceive.prep import transcript_path
-from .schemas import Fx, MusicSpec, RampPoint, SoundLayer, Transition
+from .schemas import Fx, Graphic, MusicSpec, RampPoint, SoundLayer, Transition
 from .template import IntroSpec, Slot, Template, _short_ids, _span
 from .workspace import Project
 
@@ -53,6 +53,8 @@ class Shot(BaseModel):
     speed: float | None = None
     push: float | None = None
     transition: tuple[str, float] | None = None
+    frame: tuple[float, float] | None = Field(None, description="Where the crop sits (fractions), e.g. on the subject in 9:16.")
+    graphics: list[Graphic] = Field(default_factory=list, description="Motion graphics drawn into this shot.")
 
 
 class Design(BaseModel):
@@ -66,9 +68,15 @@ class Design(BaseModel):
     music_fade_out: float = 0.6
     intro: IntroSpec | None = None
     sound_design: bool = True
+    vertical: bool = Field(False, description="9:16 for Reels.")
+    beat_at: float | None = Field(None, description=(
+        "Song seconds where a beat certainly is (the opening hit, the drop): the beat grid is shifted to "
+        "it when the analysis put the beat on the off-beat."))
     bar_pulses: bool = Field(True, description="A zoom pulse on every cut that starts a bar (off = fewer effects).")
     pool: dict[str, Moment]
     plan: list[Shot]
+    sfx: list[tuple[float, str, float]] = Field(default_factory=list, description=(
+        "Extra sound effects on the timeline: (seconds, built-in name, gain dB), e.g. pops when characters appear."))
 
     @model_validator(mode="before")
     @classmethod
@@ -213,7 +221,15 @@ def build_template(design: Design, project: Project) -> Template:
     song = load_or_analyze(design.song, project.music)
     beats = np.asarray(song.beats, dtype=float)
     period = float(np.median(np.diff(beats)))
-    first = int(np.argmin(np.abs(beats - song.downbeats[0]))) if song.downbeats else 0
+    shift = 0.0
+    if design.beat_at is not None:  # put a beat exactly where the editor heard one
+        shift = (design.beat_at - beats[0]) % period
+        shift = shift - period if shift > period / 2 else shift
+        start = design.beat_at % period  # the same regular grid, through the heard beat, from the top
+        beats = start + period * np.arange(int((song.duration - start) / period) + 1)
+        first = int(np.argmin(np.abs(beats - design.beat_at))) % 4
+    else:
+        first = int(np.argmin(np.abs(beats - song.downbeats[0]))) if song.downbeats else 0
 
     def at(pos: float) -> float:  # song seconds at a beat position (half beats allowed)
         i = first + pos
@@ -250,7 +266,8 @@ def build_template(design: Design, project: Project) -> Template:
         slot = Slot(id=f"s{n + 1:02d}", start=round(start, 3), end=round(end, 3), energy=energy,
                     want=f"{shot.kind} {shot.key}", clip=moment.clip,
                     speed=shot.speed if shot.speed is not None else speed,
-                    ramp=ramp_pts, push=shot.push if shot.push is not None else push, fx=fx, transition_in=transition)
+                    ramp=ramp_pts, push=shot.push if shot.push is not None else push, fx=fx, transition_in=transition,
+                    frame_center=shot.frame or (0.5, 0.5), graphics=shot.graphics if rep == 0 else [])
         d_in = transition.duration if n and transition.type != "cut" else 0.0
         nxt = items[n + 1] if n + 1 < len(items) else None
         d_out = nxt[0].transition[1] if nxt and nxt[1] == 0 and nxt[0].transition else 0.0
@@ -261,9 +278,13 @@ def build_template(design: Design, project: Project) -> Template:
         slots.append(slot.model_copy(update={"src_in": src}))
         pos += shot.beats
     sounds = _sound_design(items, slots, footage) if design.sound_design else []
-    return Template(name=design.name, music=MusicSpec(path=design.song, start=round(t0, 3), fade_out=design.music_fade_out),
+    sounds += [SoundLayer(source=f"sfx:{name}", at=round(t, 3), duration=1.8, gain_db=gain, fade_in=0.0, fade_out=0.05)
+               for t, name, gain in design.sfx]
+    return Template(name=design.name, music=MusicSpec(path=design.song, start=round(t0, 3), fade_out=design.music_fade_out,
+                                                      grid_shift=round(shift, 4)),
                     look=design.look, stabilize=design.stabilize, fade_in=design.fade_in, fade_out=design.fade_out,
-                    slots=slots, music_credit=design.music_credit, sounds=sounds, intro=design.intro)
+                    slots=slots, music_credit=design.music_credit, sounds=sounds, intro=design.intro,
+                    vertical=design.vertical)
 
 
 def design_summary(template: Template) -> str:

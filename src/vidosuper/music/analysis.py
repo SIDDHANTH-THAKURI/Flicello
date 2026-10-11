@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
-MUSIC_VERSION = 5  # 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum;
+MUSIC_VERSION = 6  # 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum; 6: beat level re-checked;
 #                   5: drops on the beat where the kick comes in, bars phased from the main drop
 SR = 22050
 HOP = 512
@@ -156,17 +156,66 @@ def _label_sections(bounds: list[float], energy: np.ndarray, duration: float) ->
     return sections
 
 
-def _kick_on_the_beat(beats: np.ndarray, kick_env: np.ndarray, duration: float) -> np.ndarray:
+def _best_period(onset: np.ndarray, duration: float, period: float) -> float:
+    """The beat period whose grid the onsets follow best, among the detected one and its usual mistakes
+    (4/3, 3/4, 2, 1/2, 3/2, 2/3 of it). Another level wins only when its grid clearly hits the drums
+    (a real pulse, at least twice the average onset) and clearly beats the tracker's own; tempos between
+    90 and 140 BPM get a small edge, as in most songs. Music without a beat keeps what it had."""
+    spread = np.maximum(onset, np.maximum(np.roll(onset, 1), np.roll(onset, -1)))
+    mean = float(onset.mean()) + 1e-9
+
+    def contrast(p: float) -> float:  # fine-searched: a candidate a hair off would drift over the song
+        periods = p * (1 + np.linspace(-0.02, 0.02, 41))
+        phases = np.linspace(0, p, 32, endpoint=False)
+        return float(_grid_score(spread, periods, phases, duration).max()) / mean
+
+    own = contrast(period)
+    best, best_score = period, own * (1.12 if 90 <= 60 / period <= 140 else 1.0)
+    for ratio in (4 / 3, 3 / 4, 2.0, 0.5, 1.5, 2 / 3):
+        p = period * ratio
+        if not 60 / 180 <= p <= 1.0:
+            continue
+        raw = contrast(p)
+        score = raw * (1.12 if 90 <= 60 / p <= 140 else 1.0)
+        if raw >= 2.0 and raw >= 1.25 * own and score > best_score:
+            best, best_score = p, score
+    return best
+
+
+def _kick_on_the_beat(beats: np.ndarray, kick_env: np.ndarray, duration: float,
+                      onset: np.ndarray | None = None) -> np.ndarray:
     """Dance music puts loud open hi-hats on the off-beats, and the grid fit can lock onto them. The
     beat is where the kick drum is: if the kick band hits clearly harder half a beat later than on the
-    grid, move the grid there."""
+    grid, move the grid there. When the kick can't tell (a busy low end), the song's biggest hits - the
+    opening hit, the drop, the crashes - land on beats: follow them."""
     if len(beats) < 8:
         return beats
     half = float(np.median(np.diff(beats))) / 2
-    if _strength_at(kick_env, beats + half) <= 1.3 * _strength_at(kick_env, beats):
+    on, off = _strength_at(kick_env, beats), _strength_at(kick_env, beats + half)
+    shift = off > 1.3 * on
+    if not shift and off > on / 1.3 and onset is not None:
+        shift = _accents_off_grid(beats, onset)
+    if not shift:
         return beats
     shifted = np.concatenate([beats - half, [beats[-1] + half]])
     return shifted[(shifted >= 0) & (shifted < duration)]
+
+
+def _accents_off_grid(beats: np.ndarray, onset: np.ndarray, top: int = 8) -> bool:
+    """True when the strongest onsets (at least a second apart) sit nearer the half-beats than the beats."""
+    times = np.arange(len(onset)) * HOP / SR
+    order = np.argsort(onset)[::-1]
+    picked: list[float] = []
+    for i in order:
+        t = float(times[i])
+        if all(abs(t - u) >= 1.0 for u in picked):
+            picked.append(t)
+        if len(picked) == top:
+            break
+    period = float(np.median(np.diff(beats)))
+    phase = np.array([((t - beats[0]) / period) % 1.0 for t in picked])
+    on_beat = np.minimum(phase, 1 - phase)  # 0 = on a beat, 0.5 = on a half-beat
+    return float(np.mean(on_beat)) > 0.32
 
 
 def _strength_at(onset_env: np.ndarray, points: np.ndarray) -> float:
@@ -209,12 +258,17 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
     onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP)
     tempo, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr, hop_length=HOP)
     detected = librosa.frames_to_time(np.asarray(beat_frames, dtype=int), sr=sr, hop_length=HOP)
+    if len(detected) >= 8:  # the tracker can lock onto a 3-against-4 or a double/half pulse: re-check the level
+        period0 = float(np.median(np.diff(detected)))
+        period = _best_period(onset_env / (onset_env.max() + 1e-9), duration, period0)
+        if abs(period - period0) / period0 > 0.05:
+            detected = np.arange(detected[0] % period, duration, period)
     beats = _beat_grid(detected, duration, onset_env / (onset_env.max() + 1e-9))
     # the kick drum alone: low band of the percussive part (bass lines and pads removed)
     low_band = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP, fmax=200, n_mels=24)
     kick_env = librosa.onset.onset_strength(y=librosa.effects.percussive(y, margin=2.0), sr=sr, hop_length=HOP,
                                             fmax=200, n_mels=24)
-    beats = _kick_on_the_beat(beats, kick_env, duration)
+    beats = _kick_on_the_beat(beats, kick_env, duration, onset_env)
     beats = _align_to_attacks(y, sr, beats)
     beats = beats[(beats >= 0) & (beats < duration)]
     if len(beats) >= 2:

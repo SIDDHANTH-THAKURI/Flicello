@@ -195,7 +195,7 @@ def run_checks(video: Path, edl: EDL, project: Project, *, head: float = 0.0, ta
     findings: list[Finding] = []
     if edl.music is not None and edl.music.path:
         song = load_or_analyze(edl.music.path, project.music)
-        beats = np.asarray(song.beats) - edl.music.start + head
+        beats = np.asarray(song.beats) + edl.music.grid_shift - edl.music.start + head
         period = float(np.median(np.diff(beats))) if len(beats) > 1 else 0.0
         # a jump by whole beats (a bar repeated or skipped) leaves the grid where it was
         on_grid = all(period and abs(((j.at + edl.music.start - j.to) / period) - round((j.at + edl.music.start - j.to)

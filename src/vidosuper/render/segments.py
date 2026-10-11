@@ -78,6 +78,8 @@ def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: 
     # newer options only enter the key when used, so shots cached before they existed stay valid
     if seg.zoom > 1.0001:
         payload["zoom"] = [round(seg.zoom, 4), [round(v, 4) for v in seg.zoom_center]]
+    if tuple(seg.frame_center) != (0.5, 0.5):
+        payload["frame_center"] = [round(v, 4) for v in seg.frame_center]
     if seg.freeze > 0:
         payload["freeze"] = [item.moving_frames, round(seg.freeze, 3)]
     if look:
@@ -180,6 +182,11 @@ def render_segments(timeline: Timeline, width: int, height: int, quality: str, c
     def work(item: TimelineItem) -> SegmentOutput:
         out = render_segment(item, width, height, timeline.fps, quality, cfg, cache_dir, look_name,
                              item_looks[item.index] if item_looks else None, stabilize)
+        if item.seg.graphics:  # motion graphics drawn into the rendered shot
+            from ..graphics.apply import apply_graphics
+
+            out = SegmentOutput(apply_graphics(out.video, item.seg.graphics, timeline.fps, cache_dir, quality, cfg),
+                                out.audio, cached=out.cached, audio_lead=out.audio_lead)
         if on_done:
             on_done()
         return out
