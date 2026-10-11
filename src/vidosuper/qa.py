@@ -65,9 +65,15 @@ def measure(video: Path) -> Measured:
 
 
 def beat_findings(cuts: list[float], grid: np.ndarray, start: float, end: float, *, strict: bool,
-                  tolerance: float = 0.025) -> list[Finding]:
-    """Cuts inside the film [start, end] against the beat grid (beats and half beats, film time)."""
-    inside = [c for c in cuts if start + 0.3 < c < end - 0.3]
+                  tolerance: float = 0.025, min_gap: float = 0.085) -> list[Finding]:
+    """Cuts inside the film [start, end] against the beat grid (beats and half beats, film time).
+    A 'cut' detected within min_gap (2.5 frames at 30 fps) of the one before is the same cut seen twice: a fast
+    move or a zoom pulse in the new shot's first frames trips the detector again. No edit here cuts that fast
+    (the shortest stutter piece is ~4 frames), so only the first detection counts."""
+    inside = []
+    for c in sorted(c for c in cuts if start + 0.3 < c < end - 0.3):
+        if not inside or c - inside[-1] >= min_gap:
+            inside.append(c)
     if not inside or not len(grid):
         return [Finding("warn", "beat sync", "no hard cuts or no beat grid to check")]
     errs = np.array([np.min(np.abs(grid - c)) for c in inside])

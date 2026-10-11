@@ -41,3 +41,16 @@ def test_voices_content_and_shake():
     t = np.arange(0, 60, 0.1)
     s = np.where((t > 47) & (t < 47.5), 0.2, 0.01)
     assert shake_findings(_edl(surf), {"c20": (t, s)}, 0.12)[0].level == "warn"
+
+
+def test_a_cut_detected_twice_counts_once():
+    import numpy as np
+
+    from vidosuper.qa import beat_findings
+
+    grid = np.arange(0, 20, 0.5)
+    cuts = [2.0, 4.0, 4.033, 6.0, 6.067, 8.0]  # a fast move right after a cut trips the detector again
+    finding = beat_findings(cuts, grid, 0.0, 20.0, strict=True)[0]
+    assert finding.level == "ok" and finding.detail.startswith("4 hard cuts"), finding.detail
+    off = beat_findings([2.0, 4.2], grid, 0.0, 20.0, strict=True)[0]  # a real late cut still fails
+    assert off.level == "fail"
