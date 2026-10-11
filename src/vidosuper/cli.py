@@ -903,5 +903,9 @@ def music_compose(plan_file: Path = typer.Argument(..., help="ElevenLabs composi
     console.print(f"[green]Track:[/] {escape(str(path))}")
     console.print(escape(a.summary()))
 
+from .studio.cli import studio_app  # noqa: E402 - the studio's own commands
+
+app.add_typer(studio_app, name="studio")
+
 if __name__ == "__main__":
     app()

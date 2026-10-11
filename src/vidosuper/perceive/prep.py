@@ -62,8 +62,7 @@ def ensure_transcript(project: Project, clip: ClipInfo, cfg: Config, force: bool
         return None
     if not force and (cached := load_transcript(project, clip.clip_id)) is not None:
         return cached
-    transcript = transcribe(clip.clip_id, clip.audio_wav16k, cfg.analysis.whisper_model,
-                            cfg.workspace_root / "models" / "whisper")
+    transcript = transcribe(clip.clip_id, clip.audio_wav16k, cfg.analysis.whisper_model, cfg.models_root / "whisper")
     write_model(transcript_path(project, clip.clip_id), transcript)
     return transcript
 

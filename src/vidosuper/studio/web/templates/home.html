@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row between">
+  <h1>My videos</h1>
+  {% if left is none or left > 0 %}<a class="btn primary" href="/new">+ New video</a>{% endif %}
+</div>
+{% if left is not none %}<p class="muted small">{{ left }} video{{ '' if left == 1 else 's' }} left in this trial.</p>{% endif %}
+{% if not projects %}
+<section class="card center empty">
+  <p class="big">Make your first video.</p>
+  <p class="muted">Clips from your phone or camera and a song you love: that's all it needs.</p>
+  {% if left is none or left > 0 %}<a class="btn primary" href="/new">Start</a>{% endif %}
+</section>
+{% else %}
+<div class="grid">
+  {% for p in projects %}
+  <a class="tile" href="/p/{{ p.id }}">
+    <div class="thumb {{ 'tall' if p.shapes == '9:16' else '' }}">
+      {% if thumbs[p.id] %}<img src="/m/{{ p.id }}/stills/{{ thumbs[p.id] }}" alt="" loading="lazy">{% endif %}
+    </div>
+    <div class="tile-body">
+      <b>{{ p.title }}</b>
+      <span class="pill {{ 'busy' if p.stage in BUSY else p.stage }}">{{ STAGES.get(p.stage, p.stage) }}</span>
+      <span class="muted small">{{ p.shapes }} · {{ p.length|int }} s · {{ p.updated|ago }}</span>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

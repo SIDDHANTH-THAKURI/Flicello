@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}New video · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>New video</h1>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if left is not none and left <= 0 %}
+    <p>You've made all your videos for this trial. Thank you!</p>
+  {% else %}
+  <form method="post" action="/new" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Name it <span class="muted">(optional)</span><input name="title" maxlength="60" placeholder="Beach day"></label>
+    <fieldset>
+      <legend>Where will you post it?</legend>
+      <div class="chips">
+        <label class="chip"><input type="radio" name="shapes" value="9:16" checked><span>Reels / Shorts / TikTok <i>9:16</i></span></label>
+        <label class="chip"><input type="radio" name="shapes" value="16:9"><span>YouTube <i>16:9</i></span></label>
+        <label class="chip"><input type="radio" name="shapes" value="both"><span>Both</span></label>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>How long?</legend>
+      <div class="chips">
+        {% for n in LENGTHS %}<label class="chip"><input type="radio" name="length" value="{{ n }}" {% if n == 30 %}checked{% endif %}><span>{{ n }} s</span></label>{% endfor %}
+      </div>
+    </fieldset>
+    <label>What's it about? <span class="muted">(optional: leave empty to be surprised)</span>
+      <textarea name="intent" rows="3" maxlength="600" placeholder="A lazy Sunday at the beach with my dog. Make it feel warm and funny."></textarea></label>
+    <button class="btn primary" type="submit">Next: add clips</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

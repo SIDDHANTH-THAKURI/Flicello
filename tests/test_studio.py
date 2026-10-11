@@ -1,0 +1,302 @@
+"""The studio: accounts, uploads, the brain's checks, and one whole video through the web app with the
+no-AI brain (synthetic footage)."""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import time
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from vidosuper.perceive import prep as prep_module
+from vidosuper.perceive.transcribe import Transcript
+from vidosuper.studio import accounts
+from vidosuper.studio.brain import BrainError, brain_kind_for
+from vidosuper.studio.brain.backends import Request, Usage, model_schema, structured
+from vidosuper.studio.brain.context import BeatMap, ClipFacts
+from vidosuper.studio.brain.core import StoryContext, check_plan
+from vidosuper.studio.brain.schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StyleRule
+from vidosuper.studio.pipeline import slice_template
+from vidosuper.studio.profiles import Profile
+from vidosuper.studio.service import Studio
+from vidosuper.studio.settings import load_settings
+from vidosuper.studio.storage import safe_child
+from vidosuper.studio.web.app import create_app
+from vidosuper.studio.worker import Worker
+
+
+@pytest.fixture()
+def studio(tmp_path, monkeypatch):
+    monkeypatch.delenv("VIDO_STUDIO_BRAIN", raising=False)
+    s = load_settings(tmp_path / "home", {"brain": "local", "owner_brain": "local", "render_preset": "ultrafast"})
+    s.limits.min_free_gb = 0.0
+    return Studio(s)
+
+
+def _owner(studio: Studio, name: str = "owner") -> dict:
+    token = accounts.create_invite(studio.db, studio.s, "", "owner")
+    return accounts.register(studio.db, token, name, "a long password 1")
+
+
+def _friend(studio: Studio, name: str) -> dict:
+    token = accounts.create_invite(studio.db, studio.s, name)
+    return accounts.register(studio.db, token, name, "a long password 2")
+
+
+# ---------------------------------------------------------------- accounts
+
+def test_passwords_invites_and_sessions(studio):
+    stored = accounts.hash_password("correct horse")
+    assert accounts.verify_password("correct horse", stored) and not accounts.verify_password("wrong", stored)
+    token = accounts.create_invite(studio.db, studio.s, "Mia")
+    assert accounts.open_invite(studio.db, token)["label"] == "Mia"
+    with pytest.raises(accounts.AccountError):
+        accounts.register(studio.db, token, "Mia", "short")
+    user = accounts.register(studio.db, token, "Mia", "a long password")
+    assert user["role"] == "friend"
+    with pytest.raises(accounts.AccountError):  # one use only
+        accounts.register(studio.db, token, "Mia2", "a long password")
+    _, session = accounts.login(studio.db, studio.s, "mia", "a long password", "1.2.3.4")
+    found = accounts.session_user(studio.db, session)
+    assert found and found[0]["id"] == user["id"]
+    assert studio.db.one("SELECT token FROM sessions")["token"] != session  # stored hashed
+    accounts.end_session(studio.db, session)
+    assert accounts.session_user(studio.db, session) is None
+
+
+def test_logins_are_rate_limited(studio):
+    _friend(studio, "Sam")
+    for _ in range(studio.s.limits.login_attempts):
+        with pytest.raises(accounts.AccountError, match="don't match"):
+            accounts.login(studio.db, studio.s, "Sam", "wrong password", "9.9.9.9")
+    with pytest.raises(accounts.AccountError, match="Too many"):
+        accounts.login(studio.db, studio.s, "Sam", "a long password 2", "9.9.9.9")
+
+
+def test_invites_expire(studio):
+    token = accounts.create_invite(studio.db, studio.s, "Old")
+    studio.db.run("UPDATE invites SET expires=?", (time.time() - 1,))
+    assert accounts.open_invite(studio.db, token) is None
+
+
+# ---------------------------------------------------------------- brain: schemas and checks
+
+def test_model_schema_keeps_field_names_and_closes_objects():
+    s = model_schema(Pitches)
+    pitch = s["$defs"]["StoryPitch"]
+    assert "title" in pitch["properties"] and "title" in pitch["required"]
+    assert pitch["additionalProperties"] is False
+
+
+def _ctx(drop: int | None = 16, target: int = 32) -> StoryContext:
+    moments = [{"start": 0.5, "end": 4.0, "peak": 2.0, "kind": "action", "description": "a jump", "hook": 7,
+                "strength": 7, "best_use": "hook", "sound": "either"}]
+    facts = {f"c0{i}": ClipFacts(f"c0{i}", f"clip{i}", 6.0, 30.0, False, [(4.5, 6.0)], moments) for i in range(1, 6)}
+    beats = BeatMap(first=0, t0=0.0, period=0.5, available=64, target=target, drop=drop, sections=[])
+    return StoryContext(catalog={"clips": []}, facts=facts, song=None, beats=beats, shapes=["9:16"], intent="", rules=[])
+
+
+def _plan(shots, pool=None) -> DesignPlan:
+    pool = pool or [PoolMoment(key=f"k{i}", clip=f"c0{i}", start=0.5, end=4.0, peak=2.0) for i in range(1, 6)]
+    return DesignPlan(name="t", idea="t", pool=pool, plan=shots)
+
+
+def test_check_plan_accepts_a_good_plan():
+    plan = _plan([PlanShot(kind="cut", beats=8, key="k1"), PlanShot(kind="stutter", beats=0.5, count=8, key="k2"),
+                  PlanShot(kind="cut", beats=4, key="k3"), PlanShot(kind="hit", beats=8, key="k4"),
+                  PlanShot(kind="hold", beats=8, key="k5")])
+    assert check_plan(plan, _ctx()) == []
+
+
+def test_check_plan_names_every_problem():
+    plan = _plan([PlanShot(kind="hold", beats=12, key="k1"), PlanShot(kind="cut", beats=8, key="k1"),
+                  PlanShot(kind="cut", beats=8, key="zz")],
+                 [PoolMoment(key="k1", clip="c01", start=4.0, end=5.5, peak=None),
+                  PoolMoment(key="k2", clip="c99", start=0, end=1, peak=None)])
+    problems = " | ".join(check_plan(plan, _ctx()))
+    for expected in ("not in the catalog", "overlaps a range to avoid", "not in the pool", "adds up to 28",
+                     "no shot starts on the drop", "used more than once", "first shot lasts 6.0s", "needs"):
+        assert expected in problems, expected
+
+
+class _FakeBackend:
+    name = "fake"
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.corrections = []
+
+    def ask(self, req, correction=None):
+        self.corrections.append(correction)
+        return self.answers.pop(0), Usage(req.task, req.model, "fake", 100, 50, usd=0.01)
+
+
+def test_structured_retries_with_the_problems_then_succeeds():
+    good = {"add": [{"text": "Keep it calm", "why": "said too fast"}], "drop": [], "summary": "ok"}
+    backend = _FakeBackend([{"add": "not a list"}, good])
+    spent = []
+    out = structured(backend, Request("learn", "sys", "text", ProfileUpdate, "m"), spent.append)
+    assert out.add[0].text == "Keep it calm" and len(spent) == 2
+    assert backend.corrections[0] is None and "problems" in backend.corrections[1]
+
+
+def test_structured_gives_up():
+    backend = _FakeBackend([{"add": 5}] * 3)
+    with pytest.raises(BrainError, match="not valid after 3 tries"):
+        structured(backend, Request("learn", "sys", "text", ProfileUpdate, "m"), lambda u: None)
+
+
+def test_claude_code_never_works_on_friends_videos(studio):
+    studio.s.brain = "claude_code"
+    with pytest.raises(BrainError):
+        brain_kind_for(studio.s, owner=False)
+    studio.s.owner_brain = "claude_code"
+    assert brain_kind_for(studio.s, owner=True) == "claude_code"
+
+
+# ---------------------------------------------------------------- profiles, files, templates
+
+def test_profile_answers_and_learning(tmp_path):
+    p = Profile.load(tmp_path / "profile.json")
+    p.set_answers({"pace": "calm", "sound": "music", "look": "natural", "bogus": "x"}, "my car")
+    texts = [r["text"] for r in p.rules]
+    assert any("Calm" in t for t in texts) and any("my car" in t for t in texts) and p.look == "natural"
+    entry = p.apply(ProfileUpdate(add=[StyleRule(text="Use real sounds", why="said so")], drop=[p.rules[0]["id"]]))
+    p.save()
+    again = Profile.load(tmp_path / "profile.json")
+    assert entry["added"] and entry["dropped"] and any(r["text"] == "Use real sounds" for r in again.rules)
+
+
+def test_safe_child_refuses_paths(tmp_path):
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    assert safe_child(tmp_path, "a.mp4") == (tmp_path / "a.mp4").resolve()
+    for bad in ("../a.mp4", "..\\a.mp4", "/etc/passwd", "", ".hidden", "missing.mp4"):
+        assert safe_child(tmp_path, bad) is None
+
+
+def test_slice_template_starts_at_zero():
+    from vidosuper.schemas import MusicSpec, SoundLayer, Transition
+    from vidosuper.template import Slot, Template
+
+    slots = [Slot(id=f"s{i}", start=i * 2.0, end=i * 2.0 + 2.0, clip="c01", src_in=0.0,
+                  transition_in=Transition(type="dissolve", duration=0.4)) for i in range(6)]
+    t = Template(name="t", music=MusicSpec(path="x.mp3", start=1.0), slots=slots,
+                 sounds=[SoundLayer(source="sfx:impact", at=5.0, duration=1.0), SoundLayer(source="sfx:whoosh", at=0.5, duration=0.5)])
+    part = slice_template(t, 3.0, 9.0)
+    assert part.slots[0].start == 0.0 and part.slots[0].transition_in.type == "cut"
+    assert part.music.start == 3.0 and [round(x.at, 2) for x in part.sounds] == [3.0]
+
+
+# ---------------------------------------------------------------- the web app, end to end
+
+def _csrf(html: str) -> str:
+    return re.search(r'name="csrf" content="([^"]+)"', html).group(1)
+
+
+def _upload(client, csrf, pid, path: Path, kind: str, chunk: int = 300_000):
+    data = path.read_bytes()
+    up = client.post(f"/api/p/{pid}/uploads", json={"kind": kind, "name": path.name, "size": len(data)},
+                     headers={"X-CSRF": csrf}).json()
+    received = 0
+    while received < len(data):
+        r = client.put(f"/api/uploads/{up['id']}?offset={received}", content=data[received:received + chunk],
+                       headers={"X-CSRF": csrf})
+        assert r.status_code == 200, r.text
+        received = r.json()["received"]
+    r = client.post(f"/api/uploads/{up['id']}/done", headers={"X-CSRF": csrf})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _drain(studio: Studio, limit: int = 10) -> None:
+    worker = Worker(studio)
+    for _ in range(limit):
+        if not worker.tick():
+            return
+
+
+def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    owner = _owner(studio)
+    friend = _friend(studio, "Ana")
+    app = create_app(studio)
+    client = TestClient(app)
+    other = TestClient(app)
+    # Ana signs in and makes a video
+    r = client.post("/login", data={"name": "Ana", "password": "a long password 2"}, follow_redirects=False)
+    assert r.status_code == 303 and "vs_session" in r.headers["set-cookie"]
+    home = client.get("/", follow_redirects=True)
+    csrf = _csrf(home.text)
+    assert "Three quick questions" in home.text  # friends answer the style questions first
+    client.post("/welcome", data={"csrf": csrf, "pace": "fast", "sound": "music", "look": "vivid"})
+    r = client.post("/new", data={"csrf": csrf, "title": "Beach", "shapes": "both", "length": 15, "intent": "fun"},
+                    follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    for name in ("a_stable.mp4", "c_pan.mp4", "f_portrait60.mov"):
+        _upload(client, csrf, pid, media / "clips" / name, "clip")
+    _upload(client, csrf, pid, media / "music.wav", "song")
+    bad = client.post(f"/api/p/{pid}/uploads", json={"kind": "clip", "name": "x.exe", "size": 10}, headers={"X-CSRF": csrf})
+    assert bad.status_code == 400
+    # someone else can't see it, nor its files
+    other.post("/login", data={"name": "owner", "password": "a long password 1"})
+    assert other.get(f"/p/{pid}").status_code == 404
+    assert other.get(f"/api/p/{pid}/status").status_code == 404
+    # start: analyse + pitch
+    assert client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=False).status_code == 303
+    assert client.get(f"/api/p/{pid}/status").json()["busy"]
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "Make this one" in page, studio.db.all("SELECT * FROM events")
+    pitch_id = int(re.search(r'name="pitch" value="(\d+)"', page).group(1))
+    # one more idea, then pick
+    client.post(f"/p/{pid}/another", data={"csrf": csrf, "reason": "funnier"})
+    _drain(studio)
+    assert studio.db.value("SELECT COUNT(*) FROM pitches WHERE project_id=?", (pid,)) == 4
+    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": pitch_id})
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "Looks right" in page
+    sample = re.search(r'src="(/m/[^"]+\.mp4)"', page).group(1)
+    assert client.get(sample).status_code == 200 and other.get(sample).status_code == 404
+    client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "How did it turn out?" in page
+    finals = studio.renders(studio.db.project(pid), "final")
+    assert {r["shape"] for r in finals} == {"9:16", "16:9"}
+    assert all(f["level"] != "fail" for r in finals for f in json.loads(r["findings"]))
+    # rate it and ask for a change: a second version, and the profile learns
+    client.post(f"/p/{pid}/rate", data={"csrf": csrf, "match": 4, "liked": 6, "tags": ["too fast"], "text": "",
+                                        "fix": "calmer please"})
+    _drain(studio)
+    p = studio.db.project(pid)
+    assert p["version"] == 2 and p["stage"] == "done"
+    assert any("calm" in r["text"].lower() for r in studio.profile(friend).rules)
+    # security headers, and delete removes the files
+    r = client.get(f"/p/{pid}")
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    work = studio.s.users_dir / friend["id"] / "projects" / pid
+    assert work.exists()
+    client.post(f"/p/{pid}/delete", data={"csrf": csrf, "sure": "yes"})
+    assert not work.exists() and client.get(f"/p/{pid}").status_code == 404
+    assert owner["role"] == "owner"
+
+
+def test_budget_cap_pauses_instead_of_spending(studio):
+    owner = _owner(studio)
+    friend = _friend(studio, "Bo")
+    studio.s.brain = "api"
+    studio.s.limits.monthly_usd = 1.0
+    studio.db.run("INSERT INTO spend(at, user_id, usd, billed) VALUES (?,?,?,1)", (time.time(), owner["id"], 1.5))
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+    studio.db.run("UPDATE projects SET song='s.mp3' WHERE id=?", (p["id"],))
+    studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, created) VALUES ('c1', ?, 'a', 'a.mp4', 1, 0)", (p["id"],))
+    studio.start(studio.db.project(p["id"]))
+    _drain(studio, 2)
+    assert studio.db.project(p["id"])["stage"] == "paused"
+    assert studio.db.one("SELECT status FROM jobs")["status"] == "waiting"
+    assert studio.db.one("SELECT * FROM alerts WHERE kind='budget'")

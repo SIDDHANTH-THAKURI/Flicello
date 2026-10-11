@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf" content="{{ csrf }}">
+  <meta name="theme-color" content="#111115">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <script src="/static/app.js" defer></script>
+</head>
+<body{% block body_attrs %}{% endblock %}>
+  <header class="top">
+    <a class="brand" href="/"><span class="logo"></span>{{ app_name }}</a>
+    {% if user %}
+    <nav>
+      <a href="/">My videos</a>
+      <a href="/style">My style</a>
+      {% if is_owner %}<a href="/admin">Admin</a>{% endif %}
+      <form method="post" action="/logout" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="link" type="submit">Sign out</button>
+      </form>
+    </nav>
+    {% endif %}
+  </header>
+  <main>
+    {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="foot">Your clips stay private to you and are deleted after a while. We never train anything on your footage.</footer>
+</body>
+</html>

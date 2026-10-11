@@ -102,6 +102,7 @@ class MusicCfg(_Strict):
 class AnalysisCfg(_Strict):
     frames_per_second: float = 0.5
     whisper_model: str = "small"
+    models_dir: str = "auto"  # where downloaded models live; auto = <workspace>/models (shared by every project)
 
 
 class Config(_Strict):
@@ -124,6 +125,12 @@ class Config(_Strict):
             return Path(self.workspace).expanduser()
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(base) / "VidoSuper"
+
+    @property
+    def models_root(self) -> Path:
+        if self.analysis.models_dir != "auto":
+            return Path(self.analysis.models_dir).expanduser()
+        return self.workspace_root / "models"
 
 
 def _deep_merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:

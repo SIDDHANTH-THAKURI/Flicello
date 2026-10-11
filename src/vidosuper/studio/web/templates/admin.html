@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Admin · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>Admin</h1>
+<section class="card">
+  <h2>Health</h2>
+  <div class="stats">
+    <div><b>{% if health.worker_seen is none %}never{% else %}{{ health.worker_seen|int }} s ago{% endif %}</b><span>worker seen</span></div>
+    <div><b>{{ health.running }} / {{ health.queued }}</b><span>running / queued</span></div>
+    <div><b>{{ health.waiting }}</b><span>paused jobs</span></div>
+    <div><b>{{ health.failed_24h }}</b><span>failed (24 h)</span></div>
+    <div><b>{{ health.free_gb }} GB</b><span>disk free</span></div>
+    <div><b>${{ '%.2f'|format(health.month_usd) }} / ${{ '%.0f'|format(health.cap_usd) }}</b><span>API spend this month</span></div>
+    <div><b>${{ '%.2f'|format(health.month_usd_all) }}</b><span>incl. your plan (API-equivalent)</span></div>
+  </div>
+  {% if health.worker_seen is none or health.worker_seen > 60 %}<p class="error">The worker isn't running: videos won't move. Start it with <code>vido studio serve</code>.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Invite a friend</h2>
+  {% if new_link %}
+  <div class="note">Send this link (it works once, for 7 days). It won't be shown again:<br>
+    <code class="copy" id="invite-link" data-path="{{ new_link }}">{{ new_link }}</code></div>
+  {% endif %}
+  <form method="post" action="/admin/invite" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input name="label" maxlength="60" placeholder="Their first name (shown on the welcome page)">
+    <button class="btn primary" type="submit">Make invite link</button>
+  </form>
+  {% if invites %}<p class="muted small">{{ invites|length }} open invite(s).</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>People</h2>
+  <table>
+    <tr><th>Name</th><th>Role</th><th>Videos</th><th>API $</th><th></th></tr>
+    {% for u in users %}
+    <tr class="{{ 'off' if u.disabled }}">
+      <td>{{ u.name }}</td><td>{{ u.role }}</td><td>{{ u.projects }}{% if u.role != 'owner' %} / {{ u.videos_allowed if u.videos_allowed is not none else default_videos }}{% endif %}</td>
+      <td>{{ '%.2f'|format(u.usd) }}</td>
+      <td>{% if u.role != 'owner' %}
+        <form method="post" action="/admin/user" class="row">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="uid" value="{{ u.id }}">
+          <input type="number" name="videos" min="0" max="50" value="{{ u.videos_allowed if u.videos_allowed is not none else default_videos }}" class="num">
+          <button class="link" name="action" value="videos" type="submit">Set</button>
+          {% if u.disabled %}<button class="link" name="action" value="enable" type="submit">Enable</button>
+          {% else %}<button class="link danger-text" name="action" value="disable" type="submit">Disable</button>{% endif %}
+        </form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <div class="row between"><h2>Alerts</h2>
+    <form method="post" action="/admin/alerts"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link" type="submit">Mark all seen</button></form></div>
+  {% if not alerts %}<p class="muted">None.</p>{% endif %}
+  <ul class="files">{% for a in alerts %}<li class="{{ 'off' if a.seen }}"><span><b class="lvl-{{ a.level }}">{{ a.kind }}</b> {{ a.message }}</span><span class="muted small">{{ a.at|ago }}</span></li>{% endfor %}</ul>
+</section>
+
+<section class="card">
+  <h2>Jobs</h2>
+  <table>
+    <tr><th>#</th><th>Kind</th><th>Who / video</th><th>Status</th><th>When</th><th></th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td>{{ j.id }}</td><td>{{ j.kind }}</td>
+      <td>{{ j.name or '-' }} · {% if j.project_id %}<a href="/admin/events/{{ j.project_id }}">{{ j.title or j.project_id }}</a>{% endif %}</td>
+      <td class="lvl-{{ 'fail' if j.status == 'failed' else 'ok' }}">{{ j.status }}{% if j.status == 'running' %} {{ (j.progress * 100)|int }}%{% endif %}
+        {% if j.error %}<div class="muted small">{{ j.error[:160] }}</div>{% endif %}</td>
+      <td class="small">{{ j.created|ago }}</td>
+      <td>{% if j.status in ('failed', 'waiting') %}
+        <form method="post" action="/admin/job" class="row"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job" value="{{ j.id }}">
+          <button class="link" name="action" value="retry" type="submit">Retry</button>
+          {% if j.status == 'waiting' %}<button class="link" name="action" value="cancel" type="submit">Cancel</button>{% endif %}</form>
+      {% elif j.status == 'queued' %}
+        <form method="post" action="/admin/job"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job" value="{{ j.id }}">
+          <button class="link" name="action" value="cancel" type="submit">Cancel</button></form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>AI cost by step</h2>
+  <table>
+    <tr><th>Step</th><th>Model</th><th>Brain</th><th>Calls</th><th>Tokens in / out</th><th>$</th><th>Avg s</th></tr>
+    {% for r in spend %}<tr><td>{{ r.task }}</td><td>{{ r.model }}</td><td>{{ r.backend }}</td><td>{{ r.n }}</td>
+      <td>{{ r.tin }} / {{ r.tout }}</td><td>{{ '%.3f'|format(r.usd or 0) }}</td><td>{{ (r.s or 0)|int }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endblock %}

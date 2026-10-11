@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}{{ p.title }} · {{ app_name }}{% endblock %}
+{% block body_attrs %} data-project="{{ p.id }}" data-stage="{{ p.stage }}" data-busy="{{ 1 if p.stage in BUSY else 0 }}" data-chunk="{{ chunk }}"{% endblock %}
+{% block content %}
+<div class="row between wrap">
+  <h1>{{ p.title }}</h1>
+  <span class="pill {{ 'busy' if p.stage in BUSY else p.stage }}" id="stage-pill">{{ STAGES.get(p.stage, p.stage) }}</span>
+</div>
+<p class="muted small">{{ p.shapes }} · {{ p.length|int }} s{% if p.song %} · ♪ {{ p.song }}{% endif %}{% if p.intent %} · “{{ p.intent }}”{% endif %}</p>
+
+{% if p.stage == 'setup' %}
+<section class="card">
+  <h2>1 · Your clips</h2>
+  <p class="muted small">Straight from your phone or camera, vertical or horizontal. Up to 20 clips; the more variety, the better the story.</p>
+  <label class="drop" id="drop">
+    <input type="file" id="clip-input" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm" multiple>
+    <span>Tap to choose clips, or drop them here</span>
+  </label>
+  <ul class="files" id="clip-list">
+    {% for c in clips %}
+    <li data-clip="{{ c.id }}"><span class="name">{{ c.name }}</span><span class="muted">{{ c.seconds|mmss }}</span>
+      <button class="link danger-text" type="button" data-delete="{{ c.id }}">Remove</button></li>
+    {% endfor %}
+  </ul>
+  <ul class="files" id="upload-list"></ul>
+</section>
+<section class="card">
+  <h2>2 · Your song</h2>
+  <p class="muted small">The cut follows its beat and its drop. Use a song you're allowed to post.</p>
+  <label class="drop small-drop">
+    <input type="file" id="song-input" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg">
+    <span>{% if p.song %}♪ {{ p.song }} · tap to change{% else %}Tap to choose a song{% endif %}</span>
+  </label>
+  <ul class="files" id="song-list"></ul>
+</section>
+<form method="post" action="/p/{{ p.id }}/start" class="center">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="btn primary big" type="submit" id="start-btn" {% if not clips or not p.song %}disabled{% endif %}>Start: watch my clips</button>
+  <p class="muted small">It takes a few minutes. You can close the page meanwhile.</p>
+</form>
+
+{% elif p.stage in BUSY %}
+<section class="card center busy-card">
+  <div class="pulse"></div>
+  <h2 id="job-label">{{ STAGES.get(p.stage) }}</h2>
+  <div class="bar"><span id="bar" data-progress="{{ job.progress if job else 0 }}"></span></div>
+  <p id="job-msg" class="muted">{% if job and job.status == 'queued' %}Waiting for its turn…{% else %}{{ job.message if job else '' }}{% endif %}</p>
+  <p class="muted small">You can close this page; it keeps going.</p>
+</section>
+
+{% elif p.stage == 'choose' %}
+<p class="lead">Three ways to tell it. Pick the one you'd post.</p>
+<div class="pitches">
+  {% for item in pitches if not item.rejected %}
+  {% set d = item.pitch %}
+  <article class="card pitch">
+    {% if item.stills %}
+    <div class="stills">{% for s in item.stills %}<img src="/m/{{ p.id }}/stills/{{ s }}" alt="" loading="lazy">{% endfor %}</div>
+    {% endif %}
+    <h3>{{ d.title }}</h3>
+    <p class="logline">{{ d.logline|noids }}</p>
+    <dl class="facts">
+      <dt>Feeling</dt><dd>{{ d.feeling }}</dd>
+      <dt>Opens on</dt><dd>{{ d.hook|noids }}</dd>
+      <dt>The turn</dt><dd>{{ d.turn|noids }}</dd>
+      <dt>Ends on</dt><dd>{{ d.ending|noids }}</dd>
+    </dl>
+    <details><summary>Part by part</summary>
+      <ol class="beats">{% for b in d.beats %}<li>{{ b.what|noids }}{% if b.music %} <span class="muted">· {{ b.music }}</span>{% endif %}</li>{% endfor %}</ol>
+    </details>
+    <form method="post" action="/p/{{ p.id }}/pick">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pitch" value="{{ item.id }}">
+      <button class="btn primary" type="submit">Make this one</button>
+    </form>
+  </article>
+  {% endfor %}
+</div>
+<section class="card">
+  <h2>None of these?</h2>
+  <form method="post" action="/p/{{ p.id }}/another" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>What's missing? <span class="muted">(optional)</span><input name="reason" maxlength="300" placeholder="Something funnier / more about the food / calmer"></label>
+    <button class="btn" type="submit">Show me another idea</button>
+  </form>
+  <form method="post" action="/p/{{ p.id }}/another" class="stack top-gap">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Or describe your own idea<textarea name="own" rows="2" maxlength="600" placeholder="Start with the sunset, then rewind the day…"></textarea></label>
+    <button class="btn" type="submit">Use my idea</button>
+  </form>
+</section>
+
+{% elif p.stage == 'review' and sample %}
+<p class="lead">A short sample, to check the feel before the whole video is made.</p>
+<section class="card center">
+  <video class="player {{ 'tall' if sample.shape == '9:16' else '' }}" src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video>
+  <form method="post" action="/p/{{ p.id }}/sample" class="top-gap">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="ok">
+    <button class="btn primary big" type="submit">Looks right: make the whole video</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Not quite?</h2>
+  <form method="post" action="/p/{{ p.id }}/sample" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="no">
+    <label>What should change?<textarea name="note" rows="2" maxlength="600" required placeholder="Slower start / more of the dog / different shot on the drop"></textarea></label>
+    <button class="btn" type="submit">Try again with this</button>
+  </form>
+  <form method="post" action="/p/{{ p.id }}/sample" class="top-gap">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="ideas">
+    <button class="link" type="submit">← Back to the story ideas</button>
+  </form>
+</section>
+
+{% elif p.stage == 'done' %}
+<div class="videos">
+  {% for r in latest %}
+  <figure class="card center">
+    <video class="player {{ 'tall' if r.shape == '9:16' else '' }}" src="/m/{{ p.id }}/out/{{ r.file }}" controls playsinline preload="metadata"></video>
+    <figcaption>{{ r.shape }} · {{ r.seconds|mmss }} · <a href="/m/{{ p.id }}/out/{{ r.file }}?dl=1">Download</a></figcaption>
+    {% if is_owner %}
+    <details class="checks"><summary>Checks</summary><ul>
+      {% for f in r.findings|fromjson %}<li class="lvl-{{ f.level }}"><b>{{ f.level|upper }}</b> {{ f.check }}: {{ f.detail }}</li>{% endfor %}
+    </ul></details>
+    {% endif %}
+  </figure>
+  {% endfor %}
+</div>
+{% if not rated %}
+<section class="card">
+  <h2>How did it turn out?</h2>
+  <form method="post" action="/p/{{ p.id }}/rate" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <fieldset><legend>Did it do what you asked?</legend>
+      <div class="chips">{% for n in range(1, 6) %}<label class="chip"><input type="radio" name="match" value="{{ n }}" required><span>{{ n }}</span></label>{% endfor %}</div>
+      <p class="muted small">1 = not at all · 5 = exactly</p>
+    </fieldset>
+    <fieldset><legend>How much do you like it? <output id="liked-out">7</output>/10</legend>
+      <input type="range" name="liked" min="1" max="10" value="7" id="liked">
+    </fieldset>
+    <fieldset><legend>Anything off? <span class="muted">(tick any)</span></legend>
+      <div class="chips">{% for t in TAGS %}<label class="chip"><input type="checkbox" name="tags" value="{{ t }}"><span>{{ t }}</span></label>{% endfor %}</div>
+    </fieldset>
+    <label>In your words <span class="muted">(optional)</span><textarea name="text" rows="2" maxlength="1000"></textarea></label>
+    <label>What should change? <span class="muted">(optional · we'll make a new version{% if revisions_left is not none %}; {{ revisions_left }} left{% endif %})</span>
+      <textarea name="fix" rows="2" maxlength="1000" placeholder="Leave empty if it's done"></textarea></label>
+    <button class="btn primary" type="submit">Send</button>
+  </form>
+</section>
+{% else %}
+<section class="card">
+  <p>Thanks for rating it ({{ rated.liked }}/10). Your style profile learns from it.</p>
+  {% if revisions_left is none or revisions_left > 0 %}
+  <form method="post" action="/p/{{ p.id }}/rate" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="match" value="{{ rated.match }}"><input type="hidden" name="liked" value="{{ rated.liked }}">
+    <label>Want changes? <textarea name="fix" rows="2" maxlength="1000" required placeholder="What should change"></textarea></label>
+    <button class="btn" type="submit">Make a new version</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+{% if older %}
+<section class="card"><h2>Earlier versions</h2><ul class="files">
+  {% for r in older %}<li><span>Version {{ r.version }} · {{ r.shape }}</span><a href="/m/{{ p.id }}/out/{{ r.file }}">Watch</a></li>{% endfor %}
+</ul></section>
+{% endif %}
+
+{% elif p.stage == 'paused' %}
+<section class="card center"><h2>Paused</h2><p>{{ p.note or "Waiting for the owner." }}</p></section>
+
+{% elif p.stage == 'failed' %}
+<section class="card center">
+  <h2>Something went wrong</h2>
+  <p>{{ p.error or "The owner has been told." }}</p>
+  <form method="post" action="/p/{{ p.id }}/retry"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn primary" type="submit">Try again</button></form>
+</section>
+{% endif %}
+
+<details class="danger card">
+  <summary>Delete this video</summary>
+  <form method="post" action="/p/{{ p.id }}/delete" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="check"><input type="checkbox" name="sure" value="yes"> Yes, delete it with all its clips and versions</label>
+    <button class="btn danger" type="submit">Delete</button>
+  </form>
+</details>
+{% endblock %}
