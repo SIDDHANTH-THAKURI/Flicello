@@ -370,3 +370,16 @@ def test_the_api_key_is_read_from_the_dotenv_file(tmp_path, monkeypatch):
     s = load_settings(tmp_path / "home")
     assert s.limits.monthly_usd == 7.0
     assert ApiBackend().client.api_key == "sk-test-123"
+
+
+def test_wrong_sign_in_and_bad_sign_up_show_a_message_not_a_crash(studio):
+    _friend(studio, "Gus")
+    client = TestClient(create_app(studio), raise_server_exceptions=True)
+    r = client.post("/login", data={"name": "Gus", "password": "wrong password"})
+    assert r.status_code == 200 and "don&#39;t match" in r.text and 'value="Gus"' in r.text
+    r = client.post("/login", data={"name": "nobody", "password": "whatever"})
+    assert r.status_code == 200 and "don&#39;t match" in r.text
+    token = accounts.create_invite(studio.db, studio.s, "Hal")
+    r = client.post(f"/join/{token}", data={"name": "Hal", "password": "a long password", "password2": "different one!!",
+                                            "agree": "yes"})
+    assert r.status_code == 200 and "different" in r.text and 'value="Hal"' in r.text

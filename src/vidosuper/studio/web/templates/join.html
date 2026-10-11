@@ -7,7 +7,7 @@
      then makes the finished video for Reels, Shorts or YouTube. Rate it, and it learns your style.</p>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="/join/{{ token }}" class="stack">
-    <label>Your name <input name="name" value="{{ name or '' }}" autocomplete="username" required maxlength="31"></label>
+    <label>Your name <input name="name" value="{{ typed or '' }}" autocomplete="username" required maxlength="31"></label>
     <label>Password (10 characters or more)
       <input type="password" name="password" autocomplete="new-password" required minlength="10"></label>
     <label>The same password again <input type="password" name="password2" autocomplete="new-password" required minlength="10"></label>

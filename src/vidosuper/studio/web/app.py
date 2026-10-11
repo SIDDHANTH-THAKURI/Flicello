@@ -157,7 +157,7 @@ def create_app(studio: Studio) -> FastAPI:
         try:
             user, token = accounts.login(studio.db, s, name, password, client_ip(request), request.cookies.get(DEVICE))
         except accounts.AccountError as exc:
-            return page(request, "login.html", None, None, error=str(exc), name=name[:40])
+            return page(request, "login.html", None, None, error=str(exc), typed=name[:40])
         resp = back("/")
         set_cookie(resp, token)
         remember_device(request, resp, user["id"])
@@ -198,7 +198,7 @@ def create_app(studio: Studio) -> FastAPI:
                 error = str(exc)
         if error:
             return page(request, "join.html", None, None, invite=invite, token=token, limits=s.limits, error=error,
-                        name=name[:40])
+                        typed=name[:40])
         resp = back("/welcome")
         set_cookie(resp, accounts.new_session(studio.db, s, user["id"], client_ip(request)))
         remember_device(request, resp, user["id"])
