@@ -357,3 +357,16 @@ def test_one_active_video_per_friend(studio):
     studio.start(projects[0])
     with pytest.raises(ActionError, match="One video at a time"):
         studio.start(projects[1])
+
+
+def test_the_api_key_is_read_from_the_dotenv_file(tmp_path, monkeypatch):
+    from vidosuper import config as config_module
+    from vidosuper.studio.brain.backends import ApiBackend
+
+    (tmp_path / ".env").write_text('# comment\nANTHROPIC_API_KEY="sk-test-123"\nVIDO_STUDIO_MONTHLY_USD=7\n', encoding="utf-8")
+    monkeypatch.setattr(config_module, "REPO_ROOT", tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("VIDO_STUDIO_MONTHLY_USD", raising=False)
+    s = load_settings(tmp_path / "home")
+    assert s.limits.monthly_usd == 7.0
+    assert ApiBackend().client.api_key == "sk-test-123"

@@ -153,6 +153,9 @@ _ENV = {  # environment variable -> setting (strings are parsed by pydantic)
 
 
 def load_settings(home: Path | None = None, overrides: dict | None = None) -> StudioSettings:
+    from ..music.sources import _load_dotenv
+
+    _load_dotenv()  # the repo's .env (git-ignored): ANTHROPIC_API_KEY, VIDO_STUDIO_* ...; real environment wins
     home = Path(home) if home else default_home()
     data: dict = {}
     path = home / "studio.yaml"
