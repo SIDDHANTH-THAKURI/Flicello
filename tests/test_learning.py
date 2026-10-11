@@ -15,6 +15,14 @@ def test_ratings_log_and_critic_bias(tmp_path):
     assert "too generous" in text and "music 5" in text and "best 5.5" in text
 
 
+def test_summary_shows_each_ratings_scale(tmp_path):
+    path = tmp_path / "ratings.jsonl"
+    log_rating({"version": "old cut", "user": 7.1}, path)
+    log_rating({"version": "new cut", "user": 7.2, "out_of": 20}, path)
+    text = summary(read_ratings(path))
+    assert "7.1/10" in text and "7.2/20" in text and "best 7.2" in text
+
+
 def test_postmortem_goes_on_top(tmp_path):
     path = tmp_path / "lessons.md"
     path.write_text(f"# Lessons\n\n{POSTMORTEMS}\n- **old** — first lesson\n", encoding="utf-8")

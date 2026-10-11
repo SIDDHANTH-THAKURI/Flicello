@@ -60,7 +60,8 @@ def summary(ratings: list[dict]) -> str:
     for r in ratings:
         extra = "".join(f", {k} {r[k]:g}" for k in ("music", "intro_outro") if isinstance(r.get(k), (int, float)))
         critics = f" (critics {r['critics']:g})" if isinstance(r.get("critics"), (int, float)) else ""
-        lines.append(f"{r.get('date', '?')}  {r['user']:>4g}/10{critics}{extra}  {r['version']}")
+        # the scale went from /10 to /20 on 2026-10-11 with the same numbers (a higher ceiling), so scores compare as is
+        lines.append(f"{r.get('date', '?')}  {r['user']:>4g}/{r.get('out_of', 10)}{critics}{extra}  {r['version']}")
     recent = [r["user"] for r in ratings[-3:]]
     lines.append(f"Last {len(recent)}: {sum(recent) / len(recent):.1f} average; best {max(r['user'] for r in ratings):g}.")
     bias, n = critic_bias(ratings)

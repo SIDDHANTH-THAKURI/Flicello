@@ -52,3 +52,43 @@ hero moments twice: once horizontal, once vertical.
 Before the trip, one line for what the day is about ("chasing the perfect wave", "first light to last
 light", "the sea is breathing"). Shooting toward an idea gives the edit a premise and a payoff, and
 those are what the 9/10 intro and outro had that the films didn't.
+
+## 11. Stories to shoot
+
+Pitched 2026-10-11. Each is one idea with room to land. The magic is made in the edit; the real
+places, the light and you in them have to be filmed. Pick one before the shoot and get its exact shot
+list (spot, framing, length, what you do).
+
+### Lost Shadow (~40 s vertical reel)
+1. You sit on a bench scrolling your phone (back view). Your shadow on the ground stands up without you.
+2. It walks off. You look down: sun on you, no shadow.
+3. The chase: the shadow runs along a wall, slides down stairs, waits at a corner, waves "come on".
+4. The cliff path, the light turning gold.
+5. The top: the big golden view on the music drop. The shadow is sitting at the edge, waiting. You sit
+   beside it and it slides back to your feet.
+6. Phone into your pocket. The sun goes down and the shadow fades with it. It only wanted to see the
+   sunset.
+
+Filming: a sunny day, starting about 90 minutes before sunset, with a mini tripod. The three magic
+shots (bench, no shadow, sitting together) need a locked camera and the same framing for every take:
+empty, then you still, then you moving. The chase shots need no tricks: film your real shadow with
+you just out of frame. Keep a plain, still background behind the bench (not the sea), and keep the
+camera operator's shadow out of frame. Back views only, no talking.
+
+### Bottled
+At each place you hold up an empty glass jar and open it: the place's colour and sound swirl in, the
+place drains to grey and the jar glows. Each jar adds a layer to the music. At night, at home, you
+open all the jars: the music drops and the colour bursts back. Last shot: an empty jar labelled
+"next trip".
+
+Filming: one clear glass jar with a lid and tape labels. At each place, a wide shot and an
+over-the-shoulder shot of the jar held up against the view (open, hold 4 s, close). At home, a locked
+shot of the jars on a windowsill at night.
+
+### Pause
+You snap your fingers and the world freezes: gulls stuck in mid-air, the blowhole frozen
+mid-explosion. Only you move. You walk up, touch it, snap again: it explodes on the music drop.
+Ending: at sunset your hand rises to snap, then drops. Some moments you let play.
+
+Filming: a tripod. Each scene is two takes with the same framing: 10 s of the action without you,
+then you walking in from behind the camera.

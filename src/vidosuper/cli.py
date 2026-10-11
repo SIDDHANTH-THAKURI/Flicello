@@ -760,7 +760,9 @@ def template_preview(template_file: Path = typer.Argument(..., help="template.js
     template = load_template(template_file)
     if uhd and not final:
         raise typer.BadParameter("--4k needs --final")
-    edl = autofill(template, project, width=3840 if uhd else 1920, height=2160 if uhd else 1080)
+    long_side, short_side = (3840, 2160) if uhd else (1920, 1080)
+    width, height = (short_side, long_side) if template.vertical else (long_side, short_side)
+    edl = autofill(template, project, width=width, height=height)
     out_dir = Path(template_file).parent
     stem = Path(template_file).stem
     save_preview_edl(edl, out_dir / f"{stem}.preview-edl.json")
@@ -860,9 +862,11 @@ def check(video: Path = typer.Argument(..., help="The rendered video"),
 
 
 @app.command("rate")
-def rate(score: float | None = typer.Argument(None, help="The user's rating, 1-10 (leave out to see the history)"),
+def rate(score: float | None = typer.Argument(None, help="The user's rating (leave out to see the history)"),
          version: str = typer.Option("", help="What was rated, e.g. 'Wollongong C + intro'"),
          project: str = typer.Option("", help="Project or trip name"),
+         out_of: int = typer.Option(20, "--out-of", help="The user's scale: 20 since 2026-10-11 - the same numbers as "
+                                                         "the old /10, with the ceiling raised (old scores compare as is)"),
          music: float | None = typer.Option(None, help="Separate rating for the music"),
          intro_outro: float | None = typer.Option(None, "--intro-outro", help="Separate rating for the intro/outro"),
          critics: float | None = typer.Option(None, help="What the critic panel predicted (overall)"),
@@ -874,12 +878,12 @@ def rate(score: float | None = typer.Argument(None, help="The user's rating, 1-1
     if score is not None:
         if not version:
             raise typer.BadParameter("say what was rated: --version")
-        entry = {"project": project, "version": version, "user": score, "critics": critics, "note": note}
+        entry = {"project": project, "version": version, "user": score, "out_of": out_of, "critics": critics, "note": note}
         entry.update({k: v for k, v in (("music", music), ("intro_outro", intro_outro)) if v is not None})
         log_rating(entry)
         if lesson:
-            add_postmortem(f"{project} {version}".strip(), f"{score:g}/10. {lesson}")
-        console.print(f"[green]Logged[/] {score:g}/10 for {escape(version)}"
+            add_postmortem(f"{project} {version}".strip(), f"{score:g}/{out_of}. {lesson}")
+        console.print(f"[green]Logged[/] {score:g}/{out_of} for {escape(version)}"
                       + ("" if lesson else " - add a post-mortem with --lesson (it is what the next edit learns from)"))
     console.print(escape(summary(read_ratings())))
 
