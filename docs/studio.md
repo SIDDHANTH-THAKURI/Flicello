@@ -75,6 +75,16 @@ opened to the internet.
 The container only sees its own data volume, runs as a non-root user with a read-only filesystem and no extra
 privileges, and its port is bound to 127.0.0.1.
 
+**Native or Docker?** Measured on 2026-10-12 with the same 30 s 9:16 video from six 4K clips:
+
+| | analyse | sample | final render | whole video |
+|---|---|---|---|---|
+| Native (Intel QuickSync decode) | 42 s | 10 s | 3.4 min | ~4.7 min |
+| Docker (software decode, no GPU) | 2.9 min | 65 s | 10 min | ~14 min |
+
+Native is ~3x faster with 4K phone footage. Docker keeps uploaded files and FFmpeg inside a sandbox. For the first
+friends you trust, native is fine; switch to Docker (or a cloud server) when people you don't know join.
+
 ```powershell
 # put the key in .env.studio (git-ignored):  ANTHROPIC_API_KEY=...
 docker compose up -d --build
