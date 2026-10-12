@@ -308,6 +308,17 @@ def create_app(studio: Studio) -> FastAPI:
             return back(f"/p/{pid}", str(exc))
         return back(f"/p/{pid}")
 
+    @app.post("/p/{pid}/extend")
+    async def extend(request: Request, pid: str, csrf: str = Form("")):
+        user, sess = need_user(request)
+        check_csrf(sess, csrf)
+        p = owned(user, pid)
+        try:
+            info = await run_in_threadpool(studio.extend_song, p)
+        except ActionError as exc:
+            return back(f"/p/{pid}", str(exc))
+        return back(f"/p/{pid}", f"Done: the song now runs {info['seconds']:.0f} s (it repeats its strongest {info['loop_bars']} bars).")
+
     @app.post("/p/{pid}/length")
     def length(request: Request, pid: str, csrf: str = Form(""), seconds: int = Form(30)):
         return act(request, csrf, pid, lambda u, p: studio.set_length(p, seconds))

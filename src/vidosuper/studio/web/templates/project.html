@@ -35,10 +35,15 @@
 </section>
 {% if p.song_seconds and p.song_seconds < p.length - 1 %}
 <section class="card notice">
-  <b>Heads-up about the length.</b> Your song is {{ p.song_seconds|int }} s long, so your video will be about {{ [p.song_seconds - 1.5, 8]|max|int }} s, not the {{ p.length|int }} s you picked. Choose a longer song, or set the length to match:
+  <b>Heads-up about the length.</b> Your song is {{ p.song_seconds|int }} s long, so your video will be about {{ [p.song_seconds - 1.5, 8]|max|int }} s, not the {{ p.length|int }} s you picked. Extend the song, choose a longer one, or shorten the video:
+  <form method="post" action="/p/{{ p.id }}/extend" class="top-gap" data-busy-text="Extending your song…">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn primary" type="submit">Extend the song to fit {{ p.length|int }} s</button>
+    <p class="muted small">It repeats the strongest bars of your song on the beat and keeps its real ending. Your upload is kept.</p>
+  </form>
   <form method="post" action="/p/{{ p.id }}/length" class="chips top-gap">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    {% for n in LENGTHS if n <= p.song_seconds %}<button class="btn" type="submit" name="seconds" value="{{ n }}">Make it {{ n }} s</button>{% endfor %}
+    {% for n in LENGTHS if n <= p.song_seconds %}<button class="btn" type="submit" name="seconds" value="{{ n }}">Or make the video {{ n }} s</button>{% endfor %}
   </form>
 </section>
 {% endif %}

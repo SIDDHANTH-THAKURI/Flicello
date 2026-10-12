@@ -170,3 +170,11 @@
   var replay = document.getElementById("intro-replay");
   if (replay) replay.addEventListener("click", play);
 })();
+
+// buttons that take a few seconds say so (the song extender)
+document.querySelectorAll("form[data-busy-text]").forEach(function (form) {
+  form.addEventListener("submit", function () {
+    var btn = form.querySelector("button[type=submit]");
+    if (btn) { btn.textContent = form.dataset.busyText; btn.disabled = true; }
+  });
+});

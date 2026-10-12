@@ -150,6 +150,39 @@ class Studio:
             self.db.set_stage(project["id"], JOB_STAGE[kind])
         return job
 
+    def extend_song(self, project: dict) -> dict:
+        """Repeat the strongest bars of a song that is shorter than the video asked for (see songfit.py). The upload is
+        kept next to the new file. Runs inside the web request (a few seconds for a short song)."""
+        from ..music import load_or_analyze  # noqa: F401 - analysis is cached under the project's workspace
+        from .pipeline import Pipeline
+        from .songfit import SongTooShort, extend_song
+
+        self._guard(project, "setup")
+        work = workdir(self.s, project["user_id"], project["id"]).ensure()
+        song = work.song_path()
+        if song is None:
+            raise ActionError("Add a song first.")
+        music_cache = Pipeline(work, self.cfg, None).project.music
+        if song.stem != "song" or song.suffix == ".part":
+            raise ActionError("That song can't be extended.")
+        original = work.music / f"original-song{song.suffix}"
+        target = work.music / "extended.wav"
+        try:
+            info = extend_song(song, target, project["length"], music_cache)
+        except SongTooShort as exc:
+            raise ActionError(str(exc)) from exc
+        except ValueError as exc:
+            raise ActionError(str(exc)) from exc
+        if not original.exists():
+            song.replace(original)  # keep the upload (the song glob only matches song.*)
+        else:
+            song.unlink()
+        target.replace(work.music / "song.wav")
+        name = (project["song"] or "song").rsplit(" (extended)", 1)[0] + " (extended)"
+        self.db.run("UPDATE projects SET song=?, song_seconds=?, updated=? WHERE id=?",
+                    (name, info["seconds"], time.time(), project["id"]))
+        return info
+
     def set_length(self, project: dict, length: int) -> None:
         self._guard(project, "setup")
         if int(length) not in LENGTHS:

@@ -505,3 +505,47 @@ def test_the_page_warns_when_the_song_is_shorter_than_the_length(studio):
     client.post(f"/p/{p['id']}/length", data={"csrf": csrf, "seconds": 15})
     assert studio.db.project(p["id"])["length"] == 15.0
     assert "Heads-up about the length" not in client.get(f"/p/{p['id']}").text
+
+
+def test_a_short_song_is_extended_on_the_beat_and_keeps_its_ending(media, tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from vidosuper.music import analyze_music
+    from vidosuper.studio.songfit import extend_song
+
+    out = tmp_path / "ext.wav"
+    info = extend_song(media / "music.wav", out, 75.0, tmp_path / "cache")  # the test song is 30 s at 120 BPM
+    audio, sr = sf.read(str(out), always_2d=True)
+    assert len(audio) / sr >= 77.0 and info["repeats"] >= 1 and info["loop_bars"] in (8, 4, 2)
+    assert float(np.abs(audio).max()) < 1.0
+    song = analyze_music(out)
+    assert abs(song.tempo - 120.0) < 2.0  # the beat didn't wobble across the joins
+    # the clicks of the synthetic song stay on a 0.5 s grid through every join
+    env = np.convolve(np.abs(audio[:, 0]), np.ones(int(0.01 * sr)) / int(0.01 * sr), mode="same")
+    loud = env > 0.15
+    edges = np.flatnonzero(loud[1:] & ~loud[:-1]) / sr
+    onsets = edges[np.concatenate([[True], np.diff(edges) > 0.2])]  # one onset per click, not per wiggle
+    assert len(onsets) > 140  # ~2 clicks a second for 77 s
+    phase = np.mod(onsets - onsets[0], 0.5)
+    assert np.mean(np.minimum(phase, 0.5 - phase) < 0.02) > 0.95
+
+
+def test_the_page_extends_a_short_song_and_the_video_can_then_be_long(studio, media):
+    from vidosuper.studio.storage import workdir
+
+    friend = _friend(studio, "Lou")
+    p = studio.create_project(friend, "x", "9:16", 60, "")
+    work = workdir(studio.s, friend["id"], p["id"]).ensure()
+    (work.music / "song.wav").write_bytes((media / "music.wav").read_bytes())
+    studio.db.run("UPDATE projects SET song='mine.wav', song_seconds=30.0 WHERE id=?", (p["id"],))
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Lou", "password": "a long password 2"})
+    page = client.get(f"/p/{p['id']}").text
+    assert "Extend the song to fit 60 s" in page
+    r = client.post(f"/p/{p['id']}/extend", data={"csrf": _csrf(page)}, follow_redirects=True)
+    assert r.status_code == 200 and "Done: the song now runs" in r.text
+    after = studio.db.project(p["id"])
+    assert after["song"] == "mine.wav (extended)" and after["song_seconds"] >= 62
+    assert (work.music / "original-song.wav").exists() and (work.music / "song.wav").exists()
+    assert "Heads-up about the length" not in client.get(f"/p/{p['id']}").text
