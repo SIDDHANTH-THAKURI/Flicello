@@ -500,7 +500,7 @@ def test_the_page_warns_when_the_song_is_shorter_than_the_length(studio):
     client = TestClient(create_app(studio))
     client.post("/login", data={"name": "Kit", "password": "a long password 2"})
     page = client.get(f"/p/{p['id']}").text
-    assert "Heads-up about the length" in page and "about 14 s" in page and "Make it 15 s" in page
+    assert "Heads-up about the length" in page and "about 14 s" in page and "Or make the video 15 s" in page
     csrf = _csrf(page)
     client.post(f"/p/{p['id']}/length", data={"csrf": csrf, "seconds": 15})
     assert studio.db.project(p["id"])["length"] == 15.0
