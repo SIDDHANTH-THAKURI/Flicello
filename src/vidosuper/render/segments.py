@@ -78,6 +78,8 @@ def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: 
     # newer options only enter the key when used, so shots cached before they existed stay valid
     if seg.zoom > 1.0001:
         payload["zoom"] = [round(seg.zoom, 4), [round(v, 4) for v in seg.zoom_center]]
+    if seg.flip:
+        payload["flip"] = 1
     if tuple(seg.frame_center) != (0.5, 0.5):
         payload["frame_center"] = [round(v, 4) for v in seg.frame_center]
     if seg.freeze > 0:

@@ -40,7 +40,7 @@ from ..render import render_edl
 from ..schemas import ClipAnalysis, Moment, Transition
 from ..template import Template, autofill
 from ..workspace import Project, write_text_atomic
-from .brain.context import beat_map, clip_facts, load_catalog, moment_by_id
+from .brain.context import HITS_WORDS, beat_map, clip_facts, load_catalog, moment_by_id
 from .brain.core import StoryContext, brief_text, to_design
 from .brain.schemas import DesignPlan, StoryPitch
 from .brain.strikes import Hit, plan_on_strikes
@@ -285,7 +285,9 @@ class Pipeline:
         for short, f in ctx.facts.items():
             sig = self.project.load_signals(f.clip_id)
             hits += [Hit(short, float(t), float(db)) for t, db in (sig.impacts if sig else [])]
-        return plan_on_strikes(ctx.facts, signals, ctx.beats, hits, pitch.title, pitch.logline, seed, density, max_zoom)
+        hit_led = len(hits) >= 2 and bool(HITS_WORDS.search(ctx.intent or ""))  # they asked for the hits on the beats
+        return plan_on_strikes(ctx.facts, signals, ctx.beats, hits, pitch.title, pitch.logline, seed, density, max_zoom,
+                               hit_led)
 
     def revise_strikes(self, ctx: StoryContext, pitch: StoryPitch, feedback: str, round_no: int = 1) -> DesignPlan:
         """A new cut of the same idea: other stretches of footage, and the cut density follows what they said."""

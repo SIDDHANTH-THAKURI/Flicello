@@ -60,6 +60,9 @@ class Shot(BaseModel):
         "into the shot; the peak is refined from the clip's own sound and motion. cut and hold shots only."))
     zoom: float = Field(1.0, ge=1.0, le=2.5, description="A punch-in on the shot (a reused moment looks different).")
     zoom_center: tuple[float, float] = Field((0.5, 0.5), description="Where that punch-in is centred (fractions).")
+    flip: bool = Field(False, description="Mirror the shot left-right (another take, in effect).")
+    crack_db: float | None = Field(None, description=(
+        "How loud the real sound of the action peak is played (dB peak, default -5): lower it for a hit shown many times."))
 
 
 class Design(BaseModel):
@@ -276,7 +279,7 @@ def build_template(design: Design, project: Project) -> Template:
     footage = _Footage(project)
     items = _expand(design.plan)
     t0, pos, slots = at(0), 0.0, []
-    impacts: list[tuple[int, str, float, float]] = []  # slot index, clip, the action's instant in the clip, timeline second
+    impacts: list[tuple[int, str, float, float, float]] = []  # slot index, clip, the action's instant in the clip, timeline second
     for n, (shot, rep) in enumerate(items):
         start, end = at(pos) - t0, at(pos + shot.beats) - t0
         seconds = end - start
@@ -310,7 +313,7 @@ def build_template(design: Design, project: Project) -> Template:
                     speed=slot_speed,
                     ramp=ramp_pts, push=shot.push if shot.push is not None else push, fx=fx, transition_in=transition,
                     frame_center=shot.frame or (0.5, 0.5), graphics=shot.graphics if rep == 0 else [],
-                    zoom=shot.zoom, zoom_center=shot.zoom_center)
+                    zoom=shot.zoom, zoom_center=shot.zoom_center, flip=shot.flip)
         d_in = transition.duration if n and transition.type != "cut" else 0.0
         nxt = items[n + 1] if n + 1 < len(items) else None
         d_out = nxt[0].transition[1] if nxt and nxt[1] == 0 and nxt[0].transition else 0.0
@@ -323,17 +326,18 @@ def build_template(design: Design, project: Project) -> Template:
             src = round(src + max(0, rep - 1) * 0.12, 2)
         slots.append(slot.model_copy(update={"src_in": src}))
         if synced and (peak_t := footage.peak_of(moment, refine=True)) is not None:
-            impacts.append((len(slots) - 1, moment.clip, peak_t, start + max(0.0, shot.peak_beat) * period))
+            impacts.append((len(slots) - 1, moment.clip, peak_t, start + max(0.0, shot.peak_beat) * period,
+                            -5.0 if shot.crack_db is None else shot.crack_db))
         pos += shot.beats
     sounds = _sound_design(items, slots, footage) if design.sound_design else []
     sounds += [SoundLayer(source=f"sfx:{name}", at=round(t, 3), duration=1.8, gain_db=gain, fade_in=0.0, fade_out=0.05)
                for t, name, gain in design.sfx]
     exact = 0
-    for idx, short, peak_t, on_beat in impacts:
+    for idx, short, peak_t, on_beat, crack in impacts:
         slot = slots[idx]
         plays_at = slot.start + (peak_t - slot.src_in) / slot.speed  # where the impact really plays in this shot
         exact += abs(plays_at - on_beat) < 0.03  # a shot kept inside its clip can play it a little off the beat
-        if design.sound_design and (layer := footage.ambience(short, plays_at - 0.04, peak_t - 0.04, 0.4, -19.0, 0.005, 0.2, shortest=0.3, peak_db=-5.0)):
+        if design.sound_design and (layer := footage.ambience(short, plays_at - 0.04, peak_t - 0.04, 0.4, -19.0, 0.005, 0.2, shortest=0.3, peak_db=crack)):
             sounds.append(layer)  # the real sound of the impact, with the picture (never over a voice)
     return Template(name=design.name, music=MusicSpec(path=design.song, start=round(t0, 3), fade_out=design.music_fade_out,
                                                       grid_shift=round(shift, 4)),

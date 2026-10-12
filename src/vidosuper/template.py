@@ -44,6 +44,7 @@ class Slot(BaseModel):
     graphics: list[Graphic] = Field(default_factory=list, description="Motion graphics drawn into this shot.")
     zoom: float = Field(1.0, ge=1.0, le=2.5, description="A punch-in on the whole shot.")
     zoom_center: tuple[float, float] = Field((0.5, 0.5), description="Where the punch-in is centred (fractions).")
+    flip: bool = Field(False, description="Mirror the shot left-right.")
 
 
 class IntroSpec(BaseModel):
@@ -190,7 +191,7 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
             id=slot.id, clip_id=pick["clip"].clip_id, src_in=round(start, 4), src_out=round(start + need, 4),
             framing="fill" if template.vertical else "auto",  # full-bleed 9:16; frame_center keeps the subject
             speed=slot.speed, ramp=slot.ramp, push=slot.push, fx=slot.fx, frame_center=slot.frame_center,
-            zoom=slot.zoom, zoom_center=slot.zoom_center,
+            zoom=slot.zoom, zoom_center=slot.zoom_center, flip=slot.flip,
             graphics=_resolve_tiles(slot.graphics, clips, shorts),
             transition_in=Transition(type=slot.transition_in.type, duration=trans[k] / fps) if trans[k] else Transition(),
             out_sync="free",

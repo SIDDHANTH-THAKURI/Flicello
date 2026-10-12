@@ -101,6 +101,8 @@ def segment_video_filter(clip: ClipInfo, seg: Segment, width: int, height: int, 
                    ":interpol=bicubic")
     if (crop := zoom_filter(seg)) is not None:
         pre.append(crop)
+    if seg.flip:
+        pre.append("hflip")
     pre.append(setpts_expr(seg))
     pre.append(f"fps={fps}")
     if moving_frames is not None and seg.freeze > 0:

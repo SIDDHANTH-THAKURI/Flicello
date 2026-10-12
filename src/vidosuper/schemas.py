@@ -246,6 +246,8 @@ class Segment(BaseModel):
         "edge; 4K sources allow up to 2x at 1080p without softness."))
     zoom_center: tuple[float, float] = Field((0.5, 0.5), description=(
         "Where the punched-in frame is centred, as fractions of the source width and height (0-1)."))
+    flip: bool = Field(False, description="Mirror the shot left-right (a reused shot looks like another take; never "
+                                          "for shots with text or signs in them).")
     freeze: float = Field(0.0, ge=0.0, le=4.0, description="Hold the last frame this many seconds (adds to the shot).")
     ramp: list[RampPoint] = Field(default_factory=list, description=(
         "Speed ramp (replaces speed): keyframes in source seconds after src_in; speed changes smoothly "

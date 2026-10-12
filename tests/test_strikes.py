@@ -116,3 +116,24 @@ def test_the_beat_made_for_a_video_is_a_clean_readable_beat(tmp_path):
     assert x.shape[1] == 2 and info["seconds"] >= 20 and float(np.abs(x).max()) <= 0.75
     analysis = analyze_music(tmp_path / "b.wav")
     assert abs(analysis.tempo - info["bpm"]) < 1.5 and analysis.strikes
+
+
+def test_hit_led_every_cut_shows_a_real_hit_on_the_cut_and_repeats_look_different():
+    beats = _beats(48, strikes=[k + 0.75 for k in range(1, 46, 3)])
+    hits = [Hit("c01", t, -10.0) for t in (12.0, 25.0, 41.0)]
+    facts = {"c01": _clip(impacts=[h.t for h in hits])}
+    plan = plan_on_strikes(facts, _signals(), beats, hits, "Hits", "idea", hit_led=True)
+    assert abs(sum(s.beats for s in plan.plan) - beats.target) < 1e-9
+    pool = {m.key: m for m in plan.pool}
+    assert all(pool[s.key].peak in (12.0, 25.0, 41.0) for s in plan.plan)  # every shot is a hit
+    plain = [s for s in plan.plan if s.peak_beat == 0.0]
+    assert len(plain) > 20 and all(s.crack_db is not None for s in plain)  # the contact is on the cut
+    shown = {}
+    for s in plain:
+        shown.setdefault(pool[s.key].peak, []).append((s.zoom, tuple(s.zoom_center), s.flip))
+    for variants in shown.values():
+        assert len(set(variants)) > 3 and any(v[2] for v in variants)  # framed or mirrored differently each time
+        assert all(v[0] <= 1.3 for v in variants)
+    peaks = [pool[s.key].peak for s in plan.plan]
+    assert all(a != b for a, b in zip(peaks, peaks[1:]) if a is not None)  # never the same hit twice running
+    assert plan.plan[0].zoom == 1.0

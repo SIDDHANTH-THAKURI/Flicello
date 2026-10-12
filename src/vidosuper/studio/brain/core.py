@@ -323,7 +323,8 @@ def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: boo
         elif reuses:  # a new framing each time, but never so tight that an action moment's hit is lost
             zoom, center = reuse_framing(reuses, action=m.peak is not None)
         shots.append(Shot(kind=kind, beats=s.beats, key=s.key, count=s.count if kind == "stutter" else 1, speed=speed,
-                          transition=tr, frame=frame, peak_beat=peak_beat, zoom=zoom, zoom_center=center))
+                          transition=tr, frame=frame, peak_beat=peak_beat, zoom=zoom, zoom_center=center,
+                          flip=bool(s.flip), crack_db=s.crack_db))
     return Design(name=plan.name, song=song_path, look=look, stabilize=True, intro=None, sound_design=True,
                   fade_in=0.0 if ctx.pace in ("fast", "every") else 0.5,
                   vertical=vertical, pool={k: PoolEntry(clip=m.clip, start=m.start, end=m.end, peak=m.peak)

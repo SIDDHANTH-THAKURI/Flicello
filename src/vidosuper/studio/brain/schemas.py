@@ -60,6 +60,8 @@ class PlanShot(BaseModel):
         "jump, the splash) lands exactly on a beat. Usually 1 or 2. Empty = decided for you (the second beat)."))
     zoom: float | None = Field(None, description="Leave empty: set by the tool for reused moments.")
     zoom_center: tuple[float, float] | None = Field(None, description="Leave empty.")
+    flip: bool | None = Field(None, description="Leave empty.")
+    crack_db: float | None = Field(None, description="Leave empty.")
 
 
 class DesignPlan(BaseModel):

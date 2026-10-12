@@ -145,8 +145,20 @@ def place_heroes(pts: list[float], beats: BeatMap, hits: list[Hit], facts: dict[
     return sorted(out, key=lambda h: h["k"])
 
 
+# How the n-th showing of the same hit is framed: another punch-in, then its mirror image, so a hit shown a dozen
+# times still looks like another take (the first showing is plain; no crop is tight enough to hide the action).
+HIT_FRAMES = ((1.0, (0.5, 0.5)), (1.14, (0.5, 0.56)), (1.26, (0.42, 0.5)), (1.08, (0.58, 0.44)), (1.2, (0.55, 0.6)),
+              (1.3, (0.45, 0.42)), (1.18, (0.4, 0.58)), (1.1, (0.6, 0.52)))
+
+
+def hit_framing(n: int, max_zoom: float) -> tuple[float, tuple[float, float], bool]:
+    zoom, centre = HIT_FRAMES[(n // 2) % len(HIT_FRAMES)]
+    return min(zoom, max_zoom), centre, bool(n % 2)
+
+
 def plan_on_strikes(facts: dict[str, ClipFacts], signals: Signals, beats: BeatMap, hits: list[Hit], name: str,
-                    idea: str, seed: int = 0, density: str = "strikes", max_zoom: float = 1.3) -> DesignPlan:
+                    idea: str, seed: int = 0, density: str = "strikes", max_zoom: float = 1.3,
+                    hit_led: bool = False) -> DesignPlan:
     rng = np.random.default_rng(seed)
     period = beats.period
     pts = cut_points(beats, density)
@@ -172,7 +184,36 @@ def plan_on_strikes(facts: dict[str, ClipFacts], signals: Signals, beats: BeatMa
 
     chosen: dict[int, tuple[str, float, int]] = {}  # shot -> clip, start, how often that stretch was seen before
     energy = [_energy_at(beats, a) for a, _b, _h in shots]
-    for si in sorted((x for x in range(len(shots)) if shots[x][2] is None), key=lambda x: -energy[x]):
+    shown: dict[int, int] = {}  # hit index -> how often it has been shown
+    hit_shot: dict[int, tuple[int, int]] = {}  # shot -> hit index, which showing
+    if hit_led and hits:  # every cut shows a hit, the contact on the cut: hits come round again, framed differently
+        usable = [i for i, h in enumerate(hits) if h.t - 0.1 >= 0 and h.t + 1.0 <= facts[h.short].duration]
+        order: list[int] = []
+        previous = None
+
+        def next_hit() -> int:  # a shuffled round of the hits, never the one just shown
+            nonlocal order
+            for _ in range(2):
+                if not order:
+                    order = [int(x) for x in rng.permutation(usable)]
+                for k in range(len(order) - 1, -1, -1):
+                    if order[k] != previous or len(usable) == 1:
+                        return order.pop(k)
+                order = []
+            return usable[0]
+
+        for si in range(len(shots)):
+            hero = shots[si][2]
+            if hero is not None:
+                previous = hits.index(hero["hit"])
+                continue
+            if not usable:
+                continue
+            pick = next_hit()
+            hit_shot[si] = (pick, shown.get(pick, 0))
+            shown[pick] = shown.get(pick, 0) + 1
+            previous = pick
+    for si in sorted((x for x in range(len(shots)) if shots[x][2] is None and x not in hit_shot), key=lambda x: -energy[x]):
         a, b, _ = shots[si]
         seconds = (b - a) * period
         n = max(2, int(math.ceil(seconds / STEP)) + 1)
@@ -211,6 +252,18 @@ def plan_on_strikes(facts: dict[str, ClipFacts], signals: Signals, beats: BeatMa
             plan.append(PlanShot(kind="cut", beats=hero["span"], key=key, peak_beat=hero["lead"], zoom=1.0,
                                  zoom_center=(0.5, 0.5)))
             continue
+        if si in hit_shot:
+            hit_index, nth = hit_shot[si]
+            hit = hits[hit_index]
+            f = facts[hit.short]
+            seconds = (b - a) * period
+            zoom, centre, flip = hit_framing(nth, max_zoom)
+            pool.append(PoolMoment(key=key, clip=hit.short, start=round(max(0.0, hit.t - 0.1), 2),
+                                   end=round(min(f.duration, hit.t + seconds + 0.15), 2), peak=round(hit.t, 3)))
+            plan.append(PlanShot(kind="cut", beats=b - a, key=key, peak_beat=0.0, zoom=zoom, zoom_center=centre,
+                                 flip=flip, crack_db=-5.0 if nth == 0 else -11.0))
+            reused += 1 if nth else 0
+            continue
         if si not in chosen:
             continue
         short, start, seen = chosen[si]
@@ -225,6 +278,11 @@ def plan_on_strikes(facts: dict[str, ClipFacts], signals: Signals, beats: BeatMa
                                end=round(min(f.duration, start + seconds + 0.2), 2), peak=None))
         plan.append(PlanShot(kind="cut", beats=b - a, key=key, zoom=zoom, zoom_center=centre))
     lengths = [s.beats * period for s in plan]
+    if hit_led and hit_shot:
+        notes = (f"One shot per hit of the music: {len(plan)} shots, {sum(lengths) / len(lengths):.2f} s on average, each "
+                 f"showing a real hit with its contact on the cut ({len(hits)} hits come round again, each time framed or "
+                 f"mirrored differently); {len(heroes)} of them with their wind-up.")
+        return DesignPlan(name=name, idea=idea, pool=pool, plan=plan, notes=notes)
     notes = (f"One shot per hit of the music: {len(plan)} shots, {sum(lengths) / len(lengths):.2f} s on average. "
              f"{len(heroes)} real hit{'s' if len(heroes) != 1 else ''} in the footage, each on a beat with its own "
              f"wind-up and follow-through; {reused} shot{'s' if reused != 1 else ''} reuse footage with a new framing.")
