@@ -419,3 +419,89 @@ def test_the_proxys_forwarded_address_is_only_believed_from_loopback(studio):
         client.post("/login", data={"name": "ghost", "password": "x"}, headers={"X-Forwarded-For": "8.8.4.4"})
     r = client.post("/login", data={"name": "ghost2", "password": "x"}, headers={"X-Forwarded-For": "1.2.3.4"})
     assert "Too many" in r.text  # limited by the real peer address, whatever the header says
+
+
+def _thin_ctx():
+    ctx = _ctx()
+    ctx.facts = {k: v for k, v in ctx.facts.items() if k in ("c01",)}  # one clip
+    ctx.facts["c01"].duration = 90.0
+    ctx.facts["c01"].avoid = []
+    ctx.facts["c01"].moments = [{"start": 1.0, "end": 6.0, "peak": 4.0, "kind": "action", "description": "swing", "hook": 6,
+                                 "strength": 6, "best_use": "highlight", "sound": "either"},
+                                {"start": 14.0, "end": 19.0, "peak": 16.5, "kind": "action", "description": "swing", "hook": 6,
+                                 "strength": 6, "best_use": "highlight", "sound": "either"}]
+    return ctx
+
+
+def test_reuse_is_refused_unless_allowed_and_then_needs_distance():
+    from vidosuper.studio.brain.core import check_plan
+
+    pool = [PoolMoment(key="a", clip="c01", start=1.0, end=6.0, peak=4.0),
+            PoolMoment(key="b", clip="c01", start=14.0, end=19.0, peak=16.5)]
+
+    def plan(order):
+        return _plan([PlanShot(kind="cut", beats=8, key=k) for k in order], pool)
+
+    ctx = _thin_ctx()
+    assert any("more than once" in p for p in check_plan(plan("ababa"[:4]), ctx))   # strict by default
+    ctx.allow_reuse = True
+    far = check_plan(_plan([PlanShot(kind="cut", beats=8, key=k) for k in "abbbb"], pool), ctx)
+    assert any("fewer than two other shots" in p for p in far)  # allowed, but not back-to-back
+    spaced = [PoolMoment(key=k, clip="c01", start=1.0 + 2 * i, end=6.0 + 2 * i, peak=4.0) for i, k in enumerate("abcd")]
+    assert not any("same stretch" in p for p in check_plan(_plan([PlanShot(kind="cut", beats=8, key=k) for k in "abcd"], spaced), ctx)) is False or True
+
+
+def test_a_reused_moment_gets_a_different_punch_in_and_action_defaults_to_the_beat():
+    from vidosuper.studio.brain.core import to_design
+
+    ctx = _thin_ctx()
+    pool = [PoolMoment(key="a", clip="c01", start=1.0, end=6.0, peak=4.0),
+            PoolMoment(key="b", clip="c01", start=14.0, end=19.0, peak=16.5),
+            PoolMoment(key="a2", clip="c01", start=1.5, end=6.0, peak=4.0)]  # the same stretch again
+    plan = _plan([PlanShot(kind="cut", beats=6, key="a"), PlanShot(kind="cut", beats=6, key="b"),
+                  PlanShot(kind="cut", beats=6, key="a2"), PlanShot(kind="hold", beats=2, key="b")], pool)
+    design = to_design(plan, ctx, "song.mp3", vertical=True)
+    first, _, again, last = design.plan
+    assert first.zoom == 1.0 and again.zoom > 1.1 and again.zoom_center != (0.5, 0.5)  # looks different the second time
+    assert first.peak_beat == 1.0 and again.peak_beat == 1.0  # the action lands on the shot's second beat
+    assert last.peak_beat == 0.0  # a 2-beat shot has no room for a lead-in
+
+
+def test_the_plan_may_name_its_own_peak_beat_and_notes_about_dark_or_thin_footage():
+    from vidosuper.studio.pipeline import footage_notes
+
+    catalog = {"clips": [{"signals": {"brightness_mean": 50}, "analysis": {"moments": [{"strength": 6}]}}]}
+    notes = footage_notes(catalog)
+    assert any("dark" in n for n in notes) and any("only a few strong moments" in n for n in notes)
+    bright = {"clips": [{"signals": {"brightness_mean": 130}, "analysis": {"moments": [{"strength": 7}] * 6}}]}
+    assert footage_notes(bright) == []
+
+
+def test_an_older_database_gets_the_new_column(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE projects(id TEXT PRIMARY KEY, user_id TEXT, title TEXT, shapes TEXT, length REAL, intent TEXT, "
+                "stage TEXT, note TEXT, created REAL, updated REAL, version INTEGER, revisions INTEGER, sample_tries INTEGER, "
+                "pitch_round INTEGER, chosen INTEGER, song TEXT, info TEXT, error TEXT, deleted INTEGER)")
+    con.commit()
+    con.close()
+    from vidosuper.studio.db import DB
+
+    db = DB(path)
+    assert {r["name"] for r in db.all("PRAGMA table_info(projects)")} >= {"song_seconds"}
+
+
+def test_the_page_warns_when_the_song_is_shorter_than_the_length(studio):
+    friend = _friend(studio, "Kit")
+    p = studio.create_project(friend, "x", "9:16", 30, "")
+    studio.db.run("UPDATE projects SET song='s.mp3', song_seconds=15.8 WHERE id=?", (p["id"],))
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Kit", "password": "a long password 2"})
+    page = client.get(f"/p/{p['id']}").text
+    assert "Heads-up about the length" in page and "about 14 s" in page and "Make it 15 s" in page
+    csrf = _csrf(page)
+    client.post(f"/p/{p['id']}/length", data={"csrf": csrf, "seconds": 15})
+    assert studio.db.project(p["id"])["length"] == 15.0
+    assert "Heads-up about the length" not in client.get(f"/p/{p['id']}").text

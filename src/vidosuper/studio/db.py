@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS projects(
   intent TEXT NOT NULL DEFAULT '', stage TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created REAL NOT NULL,
   updated REAL NOT NULL, version INTEGER NOT NULL DEFAULT 0, revisions INTEGER NOT NULL DEFAULT 0,
   sample_tries INTEGER NOT NULL DEFAULT 0, pitch_round INTEGER NOT NULL DEFAULT 0, chosen INTEGER,
-  song TEXT, info TEXT, error TEXT, deleted INTEGER NOT NULL DEFAULT 0);
+  song TEXT, info TEXT, error TEXT, deleted INTEGER NOT NULL DEFAULT 0, song_seconds REAL);
 CREATE TABLE IF NOT EXISTS clips(
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL, file TEXT NOT NULL, bytes INTEGER NOT NULL,
   seconds REAL, width INTEGER, height INTEGER, created REAL NOT NULL);
@@ -84,6 +84,14 @@ class DB:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as con:
             con.executescript(SCHEMA)
+            self._migrate(con)
+
+    @staticmethod
+    def _migrate(con: sqlite3.Connection) -> None:
+        """Columns added after the first release (CREATE TABLE IF NOT EXISTS leaves older databases as they were)."""
+        have = {r[1] for r in con.execute("PRAGMA table_info(projects)")}
+        if "song_seconds" not in have:
+            con.execute("ALTER TABLE projects ADD COLUMN song_seconds REAL")
 
     def connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path, timeout=15, isolation_level=None, check_same_thread=False)

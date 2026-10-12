@@ -308,6 +308,10 @@ def create_app(studio: Studio) -> FastAPI:
             return back(f"/p/{pid}", str(exc))
         return back(f"/p/{pid}")
 
+    @app.post("/p/{pid}/length")
+    def length(request: Request, pid: str, csrf: str = Form(""), seconds: int = Form(30)):
+        return act(request, csrf, pid, lambda u, p: studio.set_length(p, seconds))
+
     @app.post("/p/{pid}/start")
     def start(request: Request, pid: str, csrf: str = Form("")):
         return act(request, csrf, pid, lambda u, p: studio.start(p))

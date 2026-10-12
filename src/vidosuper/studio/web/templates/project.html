@@ -33,6 +33,15 @@
   </label>
   <ul class="files" id="song-list"></ul>
 </section>
+{% if p.song_seconds and p.song_seconds < p.length - 1 %}
+<section class="card notice">
+  <b>Heads-up about the length.</b> Your song is {{ p.song_seconds|int }} s long, so your video will be about {{ [p.song_seconds - 1.5, 8]|max|int }} s, not the {{ p.length|int }} s you picked. Choose a longer song, or set the length to match:
+  <form method="post" action="/p/{{ p.id }}/length" class="chips top-gap">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% for n in LENGTHS if n <= p.song_seconds %}<button class="btn" type="submit" name="seconds" value="{{ n }}">Make it {{ n }} s</button>{% endfor %}
+  </form>
+</section>
+{% endif %}
 <form method="post" action="/p/{{ p.id }}/start" class="center">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <button class="btn primary big" type="submit" id="start-btn" {% if not clips or not p.song %}disabled{% endif %}>Start: watch my clips</button>
@@ -49,6 +58,11 @@
 </section>
 
 {% elif p.stage == 'choose' %}
+{% if info and info.notes %}
+<section class="card notice">
+  {% for n in info.notes %}<p>{{ n }}</p>{% endfor %}
+</section>
+{% endif %}
 <p class="lead">Three ways to tell it. Pick the one you'd post.</p>
 <div class="pitches">
   {% for item in pitches if not item.rejected %}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -31,6 +32,9 @@ def rules_text(rules: list[dict]) -> str:
     if not rules:
         return "(none yet: this person is new; follow the craft rules and their request)"
     return "\n".join(f"- [{r['id']}] {r['text']}" for r in rules)
+
+
+REUSE_WORDS = re.compile(r"\b(repeat\w*|re-?use\w*|again|loop\w*|same shots?)\b", re.IGNORECASE)
 
 
 @dataclass

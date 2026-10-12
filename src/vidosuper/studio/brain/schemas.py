@@ -55,6 +55,9 @@ class PlanShot(BaseModel):
     transition_beats: float = Field(0.0, description="Length of a non-cut transition, in beats (0.5-2).")
     frame_x: float | None = Field(None, description="Vertical videos: where the subject is across the frame, 0-1 "
                                                     "(0.5 = centre). Leave empty when unsure.")
+    peak_beat: float | None = Field(None, description=(
+        "cut/hold on an action moment: how many beats into the shot its action peak (the swing meeting the ball, the "
+        "jump, the splash) lands exactly on a beat. Usually 1 or 2. Empty = decided for you (the second beat)."))
 
 
 class DesignPlan(BaseModel):

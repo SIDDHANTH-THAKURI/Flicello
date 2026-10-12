@@ -207,3 +207,6 @@ html.intro-on body { overflow: hidden; }
 @keyframes tagIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes introOut { to { opacity: 0; visibility: hidden; } }
 @media (prefers-reduced-motion: reduce) { html.intro-on #intro { display: none; } }
+
+.notice { border-color: rgba(245, 196, 81, .45); background: rgba(245, 196, 81, .06); }
+.notice p { margin: .3rem 0; }

@@ -157,6 +157,7 @@ class Pipeline:
         song = self.song()
         skipped = [c.rel_path for c in clips if not c.usable]
         return {"clips": len(usable), "skipped": skipped, "footage_seconds": round(sum(c.duration for c in usable), 1),
+                "notes": footage_notes(catalog),
                 "analysed": sum(1 for e in catalog["clips"] if e["analysis"]), "song_seconds": round(song.duration, 1),
                 "tempo": round(song.tempo, 1), "seconds": round(time.monotonic() - t0, 1)}
 
@@ -169,8 +170,12 @@ class Pipeline:
     def context(self, shapes: list[str], length: float, intent: str, rules: list[dict]) -> StoryContext:
         catalog = load_catalog(self.project.root)
         song = self.song()
-        return StoryContext(catalog=catalog, facts=clip_facts(catalog), song=song, beats=beat_map(song, length),
-                            shapes=shapes, intent=intent, rules=rules)
+        ctx = StoryContext(catalog=catalog, facts=clip_facts(catalog), song=song, beats=beat_map(song, length),
+                           shapes=shapes, intent=intent, rules=rules)
+        good = sum(1 for f in ctx.facts.values() for m in f.moments if m["strength"] >= 4)
+        ctx.allow_reuse = good < -(-ctx.beats.target // 4)  # fewer good moments than a shot every 4 beats: reuse them
+        ctx.reuse_if_asked(intent, *[r["text"] for r in rules])
+        return ctx
 
     # ------------------------------------------------------------ pitch
     def pitch(self, ctx: StoryContext, n: int = 3, rejected: list[StoryPitch] | None = None, reason: str = "",
@@ -263,6 +268,20 @@ class Pipeline:
             kept = [_studio_level(asdict(f)) for f in findings if self.owner or f.check not in OWNER_ONLY_CHECKS]
             out.append(RenderInfo(shape, Path(result.output).name, round(result.duration, 2), seconds, kept))
         return out
+
+
+def footage_notes(catalog: dict) -> list[str]:
+    """Plain heads-ups about the footage, shown before anyone waits for a result it can't deliver."""
+    notes = []
+    sigs = [e["signals"] for e in catalog["clips"] if e.get("signals")]
+    if sigs and sum(s["brightness_mean"] for s in sigs) / len(sigs) < 75:
+        notes.append("Your footage is quite dark. It will be brightened, but footage shot in better light always looks "
+                     "better.")
+    moments = [m for e in catalog["clips"] if e.get("analysis") for m in e["analysis"]["moments"] if m["strength"] >= 5]
+    if len(moments) < 4:
+        notes.append("There are only a few strong moments in these clips, so the video may reuse some of them (cut "
+                     "differently). More clips, or clips from more angles, give a richer video.")
+    return notes
 
 
 def _studio_level(f: dict) -> dict:

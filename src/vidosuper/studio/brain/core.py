@@ -24,7 +24,7 @@ from ...music.analysis import MusicAnalysis
 from ...schemas import ClipAnalysis, ClipInfo, ClipSignals
 from ..settings import Models
 from .backends import BrainError, Request, SpendFn, Usage, structured
-from .context import BeatMap, ClipFacts, catalog_text, craft_rules, moment_by_id, prompt, rules_text
+from .context import REUSE_WORDS, BeatMap, ClipFacts, catalog_text, craft_rules, moment_by_id, prompt, rules_text
 from .schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StoryBeat, StoryPitch, StyleRule
 
 SLOWMO_FPS = 47.0  # real slow motion only from 50/60 fps footage
@@ -41,6 +41,11 @@ class StoryContext:
     shapes: list[str]  # "9:16" and/or "16:9"
     intent: str
     rules: list[dict]  # the person's style rules: {"id", "text", ...}
+    allow_reuse: bool = False  # thin footage, or the person said repeats are fine: a moment may come back, made to look different
+
+    def reuse_if_asked(self, *texts: str) -> None:
+        if any(REUSE_WORDS.search(t or "") for t in texts):
+            self.allow_reuse = True
 
     def header(self) -> str:
         shape = " and ".join({"9:16": "9:16 vertical (Reels/Shorts)", "16:9": "16:9 landscape (YouTube)"}[s]
@@ -51,6 +56,10 @@ class StoryContext:
             "# Their request\n" + (self.intent.strip() or "(nothing specific: surprise them)"),
             f"# Shape and length\n{shape}; about {self.beats.seconds:.0f} seconds.",
             "# The song, in beats\n" + self.beats.text(self.song),
+            *(["# Reusing footage\nThe footage is thin or the person said repeats are fine: you may use a moment more than "
+               "once, but each time it must look different (another part of the moment, a different punch-in "
+               "zoom/centre, a different speed), with at least two other shots between, so the repeat is never obvious."]
+              if self.allow_reuse else []),
         ])
 
 
@@ -109,6 +118,31 @@ def source_need(shot: PlanShot, period: float, fps: float) -> float:
 
 def plan_beats(plan: DesignPlan) -> float:
     return sum(s.beats * (s.count if s.kind == "stutter" else 1) for s in plan.plan)
+
+
+def _overlap(a: PoolMoment, b: PoolMoment) -> float:
+    """How much of the shorter window the two share (0-1); windows of different clips share nothing."""
+    if a.clip != b.clip:
+        return 0.0
+    both = min(a.end, b.end) - max(a.start, b.start)
+    return max(0.0, both) / max(1e-6, min(a.end - a.start, b.end - b.start))
+
+
+def _overlapping_windows(plan: DesignPlan, pool: dict[str, PoolMoment], uses: dict[str, list[int]],
+                         allowed: bool) -> list[str]:
+    """Two different pool keys on the same stretch of footage are the same shot twice."""
+    out = []
+    keys = [k for k in uses if k in pool]
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            if _overlap(pool[a], pool[b]) > 0.5:
+                gap = min(abs(x - y) for x in uses[a] for y in uses[b])
+                if not allowed:
+                    out.append(f"'{a}' and '{b}' are the same stretch of {pool[a].clip}: use one of them once")
+                elif gap < 3:
+                    out.append(f"'{a}' and '{b}' are the same stretch of {pool[a].clip} and sit {gap} shot(s) apart: "
+                               "put at least two other shots between them")
+    return out
 
 
 def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
@@ -175,10 +209,19 @@ def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
             if s.kind != "stutter" and secs > limit:
                 problems.append(f"shot {i + 1} lasts {secs:.1f}s; keep shots under {limit:g}s "
                                 f"({int(limit / beats.period)} beats) - split it or move on")
-    repeated = [k for k, idx in uses.items() if len(idx) > 1 and not (len(idx) == 2 and idx[-1] == last)]
-    if repeated:
-        problems.append(f"keys used more than once: {', '.join(repeated)} (each moment once; only the closing shot may "
-                        "return to an earlier one)")
+    if ctx.allow_reuse:
+        for k, idx in uses.items():
+            close = [(a, b) for a, b in zip(idx, idx[1:]) if b - a < 3]
+            if close:
+                problems.append(f"'{k}' comes back after fewer than two other shots (shots {close[0][0] + 1} and "
+                                f"{close[0][1] + 1}): put at least two shots between a moment and its reuse")
+        problems += _overlapping_windows(plan, pool, uses, allowed=True)
+    else:
+        repeated = [k for k, idx in uses.items() if len(idx) > 1 and not (len(idx) == 2 and idx[-1] == last)]
+        if repeated:
+            problems.append(f"keys used more than once: {', '.join(repeated)} (each moment once; only the closing shot may "
+                            "return to an earlier one)")
+        problems += _overlapping_windows(plan, pool, uses, allowed=False)
     if beats.drop is not None:
         on_drop = starts.get(float(beats.drop))
         if on_drop is None:
@@ -193,16 +236,33 @@ def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: boo
     """The plan as the renderer's Design: slow motion only where the frames exist, transitions in seconds."""
     pool = {m.key: m for m in plan.pool}
     shots = []
+    seen: list[PoolMoment] = []  # the windows already used, to tell a reuse
     for s in plan.plan:
-        f = ctx.facts[pool[s.key].clip]
+        m = pool[s.key]
+        f = ctx.facts[m.clip]
         kind = s.kind
         if kind == "ramp" and f.fps < SLOWMO_FPS:  # a ramp into 0.4x needs real slow-motion frames
             kind = "cut"
         speed = 1.0 if kind in ("hold", "hit") and f.fps < SLOWMO_FPS else None
         tr = None if s.transition == "cut" else (s.transition, round(max(0.25, s.transition_beats) * ctx.beats.period, 3))
         frame = (min(1.0, max(0.0, s.frame_x)), 0.5) if vertical and s.frame_x is not None else None
+        # an action moment's peak lands on a beat: the one the plan names, else the shot's second beat
+        peak_beat = s.peak_beat
+        if kind in ("cut", "hold") and (peak_beat is not None or m.peak is not None):
+            if peak_beat is None:
+                peak_beat = 1.0 if s.beats >= 3 else 0.0
+            peak_beat = round(max(0.0, min(peak_beat, s.beats - 0.5)) * 2) / 2
+        else:
+            peak_beat = None
+        # the same footage again looks different: a punch-in on another part of the frame, alternating
+        reuses = sum(1 for w in seen if _overlap(w, m) > 0.5)
+        seen.append(m)
+        zoom, center = 1.0, (0.5, 0.5)
+        if reuses:
+            zoom = min(1.8, 1.2 + 0.18 * (reuses - 1) + (0.1 if reuses % 2 == 0 else 0.0))
+            center = ((0.34, 0.45), (0.66, 0.45), (0.5, 0.6), (0.5, 0.35))[(reuses - 1) % 4]
         shots.append(Shot(kind=kind, beats=s.beats, key=s.key, count=s.count if kind == "stutter" else 1, speed=speed,
-                          transition=tr, frame=frame))
+                          transition=tr, frame=frame, peak_beat=peak_beat, zoom=zoom, zoom_center=center))
     return Design(name=plan.name, song=song_path, look=look, stabilize=True, intro=None, sound_design=True,
                   vertical=vertical, pool={k: PoolEntry(clip=m.clip, start=m.start, end=m.end, peak=m.peak)
                                            for k, m in pool.items()}, plan=shots)
@@ -281,10 +341,12 @@ class Brain:
         return self._ask(req, lambda p: check_plan(p, ctx))
 
     def design(self, ctx: StoryContext, pitch: StoryPitch, note: str = "") -> DesignPlan:
+        ctx.reuse_if_asked(note)
         extra = f"# Their note on an earlier sample\n{note}" if note else ""
         return self._design(ctx, pitch, extra, "design")
 
     def revise(self, ctx: StoryContext, pitch: StoryPitch, current: DesignPlan, feedback: str) -> DesignPlan:
+        ctx.reuse_if_asked(feedback)
         extra = ("# The current plan (the video they watched)\n" + json.dumps(current.model_dump(), indent=1) +
                  "\n\n# What they want changed\n" + feedback +
                  "\n\nChange what they asked for and keep what works; don't rebuild a plan they mostly liked.")

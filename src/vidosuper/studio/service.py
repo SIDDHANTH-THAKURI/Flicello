@@ -150,6 +150,12 @@ class Studio:
             self.db.set_stage(project["id"], JOB_STAGE[kind])
         return job
 
+    def set_length(self, project: dict, length: int) -> None:
+        self._guard(project, "setup")
+        if int(length) not in LENGTHS:
+            raise ActionError("Pick one of the lengths.")
+        self.db.run("UPDATE projects SET length=?, updated=? WHERE id=?", (float(length), time.time(), project["id"]))
+
     def start(self, project: dict) -> None:
         self._guard(project, "setup")
         if not self.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (project["id"],), 0):

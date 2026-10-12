@@ -35,6 +35,14 @@ Rules:
   only at the very end or a deliberate pause. Follow the person's rules about hard cuts.
 - **Vertical (9:16)**: set `frame_x` (0-1) for shots from landscape clips where the subject is off-centre,
   so the crop keeps them in.
+- **Action on the beat**: when a moment has a clear action peak (a swing meeting the ball, a jump, a splash, a kick), the
+  tool lands that exact instant (found from the clip's own sound and motion) on a beat. `peak_beat` says how many beats
+  into the shot: usually 1 or 2, so there is a lead-in and then the hit on the beat; leave it empty and it is the second
+  beat. Give action moments the right length so the lead-in fits inside the moment, and set `peak` on the pool entry.
+  The person who films sport or dance cares most about this: their action should hit the music.
+- **Reusing footage** (only when told it is allowed): the same moment may come back as another pool entry or the same key,
+  with at least two shots between. The tool makes each reuse look different (a punch-in on another part of the frame),
+  so choose a different part of the moment for it where you can.
 - **Pacing**: the first shot ends by 4.5 s and grabs within 2 s (the strongest image, never a slow
   establishing shot); no shot runs past 7 s (the closing shot may hold to 9 s). Short videos lose viewers
   in long openings.

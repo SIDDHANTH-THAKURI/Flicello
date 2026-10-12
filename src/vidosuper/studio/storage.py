@@ -202,7 +202,8 @@ def finish_upload(db: DB, s: StudioSettings, up: dict, project: dict) -> dict:
         for old in work.music.glob("song.*"):
             old.unlink()
         os.replace(part, work.music / f"song{up['ext']}")
-        db.run("UPDATE projects SET song=?, updated=? WHERE id=?", (up["name"], time.time(), project["id"]))
+        db.run("UPDATE projects SET song=?, song_seconds=?, updated=? WHERE id=?",
+               (up["name"], meta["seconds"], time.time(), project["id"]))
         result = {"song": up["name"], "seconds": round(meta["seconds"], 1)}
     db.run("UPDATE uploads SET status='done', updated=? WHERE id=?", (time.time(), up["id"]))
     return result

@@ -55,6 +55,11 @@ class Shot(BaseModel):
     transition: tuple[str, float] | None = None
     frame: tuple[float, float] | None = Field(None, description="Where the crop sits (fractions), e.g. on the subject in 9:16.")
     graphics: list[Graphic] = Field(default_factory=list, description="Motion graphics drawn into this shot.")
+    peak_beat: float | None = Field(None, description=(
+        "Put the moment's action peak (the bat meeting the ball, the jump, the splash) exactly on the beat this many beats "
+        "into the shot; the peak is refined from the clip's own sound and motion. cut and hold shots only."))
+    zoom: float = Field(1.0, ge=1.0, le=2.5, description="A punch-in on the shot (a reused moment looks different).")
+    zoom_center: tuple[float, float] = Field((0.5, 0.5), description="Where that punch-in is centred (fractions).")
 
 
 class Design(BaseModel):
@@ -142,13 +147,38 @@ class _Footage:
 
         return float(min(starts, key=worst))
 
-    def source_in(self, m: Moment, need: float, lead: float | None) -> float:
-        """Where the shot starts: on the action (peak - lead) or the steadiest stretch of the moment."""
+    def refine_peak(self, short: str, peak: float, reach: float = 0.8, motion: bool = True) -> tuple[float, str]:
+        """The instant of the action, to the frame: the nearest sudden sound (the crack of a bat, a splash, a clap)
+        within `reach` seconds of the logged peak, else the busiest frame of motion there, else the logged peak.
+        The logged peak comes from contact sheets half a second apart; this is what makes an impact land on a beat."""
+        clip = self.clip(short)
+        sig = self.project.load_signals(clip.clip_id)
+        if sig is not None and sig.audio_peaks:
+            near = [p for p in sig.audio_peaks if abs(p - peak) <= reach]
+            if near:
+                return float(min(near, key=lambda p: abs(p - peak))), "sound"
+        if motion:
+            t, _, energy = self.signals(short)
+            w = (t >= peak - 0.5) & (t <= peak + 0.5)
+            if w.any():
+                return float(t[w][np.argmax(energy[w])]), "motion"
+        return float(peak), "logged"
+
+    def peak_of(self, m: Moment, refine: bool | str = False) -> float | None:
+        """The moment's action peak: the logged one, else the busiest frame; refined to the frame when asked
+        (True: by sound, else motion; "sound": only when a real sound marks it)."""
         peak = m.peak
-        if lead is not None and peak is None:  # an action shot without a logged peak: the busiest frame
+        if peak is None:
             t, _, motion = self.signals(m.clip)
             w = (t >= m.start) & (t <= m.end)
             peak = float(t[w][np.argmax(motion[w])]) if w.any() else None
+        if refine and peak is not None:
+            peak = self.refine_peak(m.clip, peak, motion=refine is True)[0]
+        return peak
+
+    def source_in(self, m: Moment, need: float, lead: float | None, refine: bool | str = False) -> float:
+        """Where the shot starts: on the action (peak - lead) or the steadiest stretch of the moment."""
+        peak = self.peak_of(m, refine) if lead is not None else None
         if lead is not None and peak is not None:
             s = peak - lead
         else:
@@ -239,6 +269,7 @@ def build_template(design: Design, project: Project) -> Template:
     footage = _Footage(project)
     items = _expand(design.plan)
     t0, pos, slots = at(0), 0.0, []
+    impacts: list[tuple[int, str, float, float]] = []  # slot index, clip, the action's instant in the clip, timeline second
     for n, (shot, rep) in enumerate(items):
         start, end = at(pos) - t0, at(pos + shot.beats) - t0
         seconds = end - start
@@ -248,7 +279,7 @@ def build_template(design: Design, project: Project) -> Template:
         fx, ramp_pts, lead = [], [], None
         if shot.kind == "hit":
             fx = [Fx(type="flash", at=0.0, duration=0.35, strength=0.9), Fx(type="pulse", at=0.0, duration=0.6, strength=1.2)]
-            lead = 0.15
+            lead = 0.15  # (a real sound at the impact moves it onto the downbeat: see refine below)
         elif shot.kind == "ramp":
             fast = 0.45 * seconds * 2.0  # source seconds played at 2x before slowing
             ramp_pts = [RampPoint(at=0.0, speed=2.0), RampPoint(at=round(fast, 3), speed=2.0),
@@ -263,28 +294,46 @@ def build_template(design: Design, project: Project) -> Template:
             if design.bar_pulses and abs(pos % 4) < 1e-6 and pos > 0:
                 fx = [Fx(type="pulse", at=0.0, duration=0.4, strength=0.8)]
         moment = design.pool[shot.key]
+        slot_speed = shot.speed if shot.speed is not None else speed
+        synced = shot.peak_beat is not None and shot.kind in ("cut", "hold") and rep == 0
+        if synced:  # the action's peak lands on a beat: it's this many on-screen seconds into the shot
+            lead = max(0.0, min(shot.peak_beat, shot.beats - 0.25)) * period * slot_speed
         slot = Slot(id=f"s{n + 1:02d}", start=round(start, 3), end=round(end, 3), energy=energy,
                     want=f"{shot.kind} {shot.key}", clip=moment.clip,
-                    speed=shot.speed if shot.speed is not None else speed,
+                    speed=slot_speed,
                     ramp=ramp_pts, push=shot.push if shot.push is not None else push, fx=fx, transition_in=transition,
-                    frame_center=shot.frame or (0.5, 0.5), graphics=shot.graphics if rep == 0 else [])
+                    frame_center=shot.frame or (0.5, 0.5), graphics=shot.graphics if rep == 0 else [],
+                    zoom=shot.zoom, zoom_center=shot.zoom_center)
         d_in = transition.duration if n and transition.type != "cut" else 0.0
         nxt = items[n + 1] if n + 1 < len(items) else None
         d_out = nxt[0].transition[1] if nxt and nxt[1] == 0 and nxt[0].transition else 0.0
         need = _span(slot, seconds + d_in / 2 + d_out / 2) + 0.05
-        src = footage.source_in(moment, need, lead)
+        refine = True if synced else ("sound" if shot.kind == "hit" else False)
+        if refine == "sound" and (heard := footage.peak_of(moment, "sound")) is not None and heard != footage.peak_of(moment):
+            lead = 0.04  # a sound marks the impact: it lands on the downbeat (a frame early, so the flash meets it)
+        src = footage.source_in(moment, need, lead, refine=refine)
         if shot.kind == "stutter":  # A A B C ...: repeat, then step on
             src = round(src + max(0, rep - 1) * 0.12, 2)
         slots.append(slot.model_copy(update={"src_in": src}))
+        if synced and (peak_t := footage.peak_of(moment, refine=True)) is not None:
+            impacts.append((len(slots) - 1, moment.clip, peak_t, start + max(0.0, shot.peak_beat) * period))
         pos += shot.beats
     sounds = _sound_design(items, slots, footage) if design.sound_design else []
     sounds += [SoundLayer(source=f"sfx:{name}", at=round(t, 3), duration=1.8, gain_db=gain, fade_in=0.0, fade_out=0.05)
                for t, name, gain in design.sfx]
+    exact = 0
+    for idx, short, peak_t, on_beat in impacts:
+        slot = slots[idx]
+        plays_at = slot.start + (peak_t - slot.src_in) / slot.speed  # where the impact really plays in this shot
+        exact += abs(plays_at - on_beat) < 0.03  # a shot kept inside its clip can play it a little off the beat
+        if design.sound_design and (layer := footage.ambience(short, plays_at - 0.04, peak_t - 0.04, 0.5, -19.0, 0.01, 0.25)):
+            sounds.append(layer)  # the real sound of the impact, with the picture (never over a voice)
     return Template(name=design.name, music=MusicSpec(path=design.song, start=round(t0, 3), fade_out=design.music_fade_out,
                                                       grid_shift=round(shift, 4)),
                     look=design.look, stabilize=design.stabilize, fade_in=design.fade_in, fade_out=design.fade_out,
                     slots=slots, music_credit=design.music_credit, sounds=sounds, intro=design.intro,
-                    vertical=design.vertical)
+                    vertical=design.vertical,
+                    idea=f"{exact} of {len(impacts)} action peaks land on a beat" if impacts else "")
 
 
 def design_summary(template: Template) -> str:
