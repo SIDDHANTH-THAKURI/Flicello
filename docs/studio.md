@@ -155,3 +155,19 @@ limits:
 
 It runs every step and prints the time and the AI cost of each (`--brain api` once the key is set, `local` for no
 AI). The clips folder is only read.
+
+## One shot per beat, music optional, time estimates (2026-10-12)
+
+- **Cutting style "One shot per beat"** (`pace=every`, also chosen when the note says "cut on every beat" or "one shot per
+  beat"): `brain/strikes.py` makes the plan without an AI call. The song's hits (`MusicAnalysis.strikes`: kick, snare and
+  stabs on the sixteenth-note grid) plus the beats between them are the cuts. Real impacts in the footage (`find_impacts`)
+  land on a beat with a wind-up and follow-through, and their own sound is mixed in, levelled by its peak. Every other
+  shot is the most active stretch of the footage (motion signal) in step with how hard the music hits, never the same
+  stretch twice until the footage runs out; a reuse gets a new framing (`reuse_framing`). Hits never show inside plain shots.
+- **Music is optional.** Without a song the pipeline makes one (`music/house.py`: synthesised, original, tempo from the
+  pace, 120 BPM at most because the beat tracker halves faster tempos).
+- **The note is read back** ("How I read your note" on the setup page): `read_note`, `pace_from_note`, `look_from_note`
+  ("bright" gives the `bright` look).
+- **Time estimates**: `Studio.eta` / `total_estimate` use the median of the last finished jobs of that kind (first guesses
+  until there are some), corrected by the running job's progress; shown on the setup page and the progress card.
+- `vido studio run ... --pace every` (and no `--song`) for a run from the command line.

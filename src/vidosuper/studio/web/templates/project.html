@@ -24,12 +24,19 @@
   </ul>
   <ul class="files" id="upload-list"></ul>
 </section>
+{% if note_lines %}
 <section class="card">
-  <h2>2 · Your song</h2>
-  <p class="muted small">The cut follows its beat and its drop. Use a song you're allowed to post.</p>
+  <h2>How I read your note</h2>
+  <ul class="small">{% for line in note_lines %}<li>{{ line }}</li>{% endfor %}</ul>
+  <p class="muted small">Not right? Start over with a new video and change the note or the cutting style.</p>
+</section>
+{% endif %}
+<section class="card">
+  <h2>2 · Music <span class="muted small">(optional)</span></h2>
+  <p class="muted small">The cut follows its beat and its drop. Use a song you're allowed to post. No song? We make a beat to cut on, made for your video.</p>
   <label class="drop small-drop">
     <input type="file" id="song-input" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg">
-    <span>{% if p.song %}♪ {{ p.song }} · tap to change{% else %}Tap to choose a song{% endif %}</span>
+    <span>{% if p.song %}♪ {{ p.song }} · tap to change{% else %}Tap to choose a song, or skip it{% endif %}</span>
   </label>
   <ul class="files" id="song-list"></ul>
 </section>
@@ -49,8 +56,8 @@
 {% endif %}
 <form method="post" action="/p/{{ p.id }}/start" class="center">
   <input type="hidden" name="csrf" value="{{ csrf }}">
-  <button class="btn primary big" type="submit" id="start-btn" {% if not clips or not p.song %}disabled{% endif %}>Start: watch my clips</button>
-  <p class="muted small">It takes a few minutes. You can close the page meanwhile.</p>
+  <button class="btn primary big" type="submit" id="start-btn" {% if not clips %}disabled{% endif %}>Start: watch my clips</button>
+  <p class="muted small">Takes {{ total_eta|eta }} in all. You can close the page meanwhile.</p>
 </form>
 
 {% elif p.stage in BUSY %}
@@ -59,6 +66,7 @@
   <h2 id="job-label">{{ STAGES.get(p.stage) }}</h2>
   <div class="bar"><span id="bar" data-progress="{{ job.progress if job else 0 }}"></span></div>
   <p id="job-msg" class="muted">{% if job and job.status == 'queued' %}Waiting for its turn…{% else %}{{ job.message if job else '' }}{% endif %}</p>
+  <p id="job-eta" class="muted small">{% if eta %}{{ eta|eta }} left{% endif %}</p>
   <p class="muted small">You can close this page; it keeps going.</p>
 </section>
 

@@ -462,7 +462,7 @@ def test_a_reused_moment_gets_a_different_punch_in_and_action_defaults_to_the_be
                   PlanShot(kind="cut", beats=6, key="a2"), PlanShot(kind="hold", beats=2, key="b")], pool)
     design = to_design(plan, ctx, "song.mp3", vertical=True)
     first, _, again, last = design.plan
-    assert first.zoom == 1.0 and 1.0 < again.zoom <= 1.08 and again.zoom_center != (0.5, 0.5)  # a hair different, never a big crop
+    assert first.zoom == 1.0 and 1.0 < again.zoom <= 1.12 and again.zoom_center != (0.5, 0.5)  # a new framing, never a crop that hides the action
     assert first.peak_beat == 1.0 and again.peak_beat == 1.0  # the action lands on the shot's second beat
     assert last.peak_beat == 0.0  # a 2-beat shot has no room for a lead-in
 
@@ -685,7 +685,7 @@ def test_reuse_barely_changes_the_framing_and_new_videos_remember_the_pace(studi
             PoolMoment(key="a3", clip="c01", start=1.2, end=6.0, peak=4.0)]
     plan = _plan([PlanShot(kind="cut", beats=2, key=k) for k in ("a", "a2", "a3")], pool)
     zooms = [s.zoom for s in to_design(plan, ctx, "song.mp3", vertical=True).plan]
-    assert zooms[0] == 1.0 and max(zooms) <= 1.08  # never the 1.4x crops that hid the hit
+    assert zooms[0] == 1.0 and 1.0 < max(zooms) <= 1.12  # a new framing each time, never the 1.4x crops that hid the hit
     assert to_design(plan, ctx, "song.mp3", vertical=True).fade_in == 0.5
     ctx.pace = "fast"
     assert to_design(plan, ctx, "song.mp3", vertical=True).fade_in == 0.0  # a fast video starts on the picture
@@ -727,3 +727,54 @@ def test_shots_the_renderer_finds_too_short_are_folded_away_and_the_edl_validate
     assert not problems and healed.slots[-1].end == 3.4  # the same length
     folded = fold_slots(t, {"s02"})
     assert [s.id for s in folded.slots] == ["s01", "s03", "s04"] and folded.slots[0].end == 1.2
+
+
+def test_a_video_needs_no_song_and_the_note_picks_one_shot_per_beat(studio, media, monkeypatch):
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    friend = _friend(studio, "Eli")
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Eli", "password": "a long password 2"})
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
+    r = client.post("/new", data={"csrf": csrf, "title": "Beat", "shapes": "9:16", "length": 15, "pace": "balanced",
+                                  "intent": "Cut on every beat, bright, and the bat crack lands on a beat."},
+                    follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    assert studio.db.project(pid)["pace"] == "every"  # the note said so, the default chip didn't
+    page = client.get(f"/p/{pid}").text
+    assert "How I read your note" in page and "one shot per hit" in page and "optional" in page
+    assert "Takes" in page  # the estimate for the whole video
+    for name in ("a_stable.mp4", "c_pan.mp4"):
+        _upload(client, csrf, pid, media / "clips" / name, "clip")
+    assert client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=False).status_code == 303
+    status = client.get(f"/api/p/{pid}/status").json()
+    assert status["busy"] and status["eta"] > 0
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "Make this one" in page, studio.db.all("SELECT * FROM events")
+    work = studio.s.users_dir / friend["id"] / "projects" / pid
+    assert (work / "music" / "song.wav").exists()  # no upload: a beat was made
+    pitch_id = int(re.search(r'name="pitch" value="(\d+)"', page).group(1))
+    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": pitch_id})
+    _drain(studio)
+    client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
+    _drain(studio)
+    finals = studio.renders(studio.db.project(pid), "final")
+    assert finals and all(f["level"] != "fail" for r in finals for f in json.loads(r["findings"]))
+    plan = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
+    assert len(plan["plan"]) > 15  # one shot per hit of a beat: many short shots, not a few long ones
+
+
+def test_the_time_estimate_learns_from_finished_jobs(studio):
+    friend = _friend(studio, "Fay")
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+    assert studio.typical_seconds("render") == 300.0  # the first guess
+    for k, took in enumerate((100.0, 120.0, 140.0)):
+        studio.db.run("INSERT INTO jobs(project_id, user_id, kind, status, created, started, finished) VALUES (?,?,?,?,?,?,?)",
+                      (p["id"], friend["id"], "render", "done", 1.0, 10.0 + k, 10.0 + k + took))
+    assert studio.typical_seconds("render") == 120.0
+    now = time.time()
+    job = {"kind": "render", "status": "running", "started": now - 60, "progress": 0.5}
+    assert 50 <= studio.eta(job) <= 70  # halfway after a minute
+    assert studio.eta({"kind": "render", "status": "queued", "started": None, "progress": 0}) == 120
+    assert studio.eta(None) is None

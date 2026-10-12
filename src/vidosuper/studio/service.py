@@ -20,6 +20,7 @@ from dataclasses import asdict
 
 from .alerts import alert
 from .brain import BrainError, BudgetExceeded, Usage, brain_kind_for, make_brain
+from .brain.context import look_from_note, pace_from_note
 from .brain.schemas import DesignPlan, StoryPitch
 from .db import DB
 from .pipeline import Pipeline, UserError, remove_project_files, studio_config
@@ -48,6 +49,7 @@ FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad sho
                  "too long", "didn't follow my idea", "colour", "sound"]
 LENGTHS = (15, 30, 45, 60)
 MAX_SAMPLE_TRIES = 3
+TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180}  # first guesses, until real jobs have run
 
 
 class ActionError(ValueError):
@@ -103,8 +105,9 @@ class Studio:
             raise ActionError("Pick a shape.")
         if int(length) not in LENGTHS:
             raise ActionError("Pick a length.")
-        if pace not in ("calm", "balanced", "fast"):
+        if pace not in ("calm", "balanced", "fast", "every"):
             raise ActionError("Pick how fast it should cut.")
+        pace = pace_from_note(pace, intent)
         pid = "p" + secrets.token_hex(6)
         now = time.time()
         title = " ".join(title.split())[:60] or time.strftime("My video, %d %b")
@@ -185,6 +188,31 @@ class Studio:
                     (name, info["seconds"], time.time(), project["id"]))
         return info
 
+    def typical_seconds(self, kind: str) -> float:
+        """How long this kind of job usually takes here: the median of the last finished ones, else a first guess."""
+        rows = self.db.all("SELECT finished - started AS d FROM jobs WHERE kind=? AND status='done' AND started IS NOT NULL "
+                           "AND finished IS NOT NULL ORDER BY id DESC LIMIT 15", (kind,))
+        spent = sorted(r["d"] for r in rows if r["d"] and r["d"] > 5)
+        return float(spent[len(spent) // 2]) if spent else float(TYPICAL_SECONDS.get(kind, 120))
+
+    def eta(self, job: dict | None) -> int | None:
+        """Seconds left for the running job: what such jobs usually take, corrected by how far this one has got."""
+        if not job:
+            return None
+        typical = self.typical_seconds(job["kind"])
+        if job["status"] != "running" or not job["started"]:
+            return int(typical)
+        elapsed = time.time() - job["started"]
+        by_history = max(15.0, typical - elapsed)
+        p = float(job["progress"] or 0.0)
+        if p >= 0.1 and elapsed > 8:
+            return int(p * (elapsed * (1 - p) / p) + (1 - p) * by_history)
+        return int(by_history)
+
+    def total_estimate(self) -> int:
+        """Start to a finished video, in seconds, for the page that asks to start."""
+        return int(sum(self.typical_seconds(k) for k in ("prepare", "pitch", "sample", "render")))
+
     def set_length(self, project: dict, length: int) -> None:
         self._guard(project, "setup")
         if int(length) not in LENGTHS:
@@ -195,8 +223,6 @@ class Studio:
         self._guard(project, "setup")
         if not self.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (project["id"],), 0):
             raise ActionError("Add at least one clip first.")
-        if not project["song"]:
-            raise ActionError("Add a song first.")
         footage = float(self.db.value("SELECT COALESCE(SUM(seconds), 0) FROM clips WHERE project_id=?", (project["id"],), 0.0))
         if footage < 0.6 * project["length"]:
             raise ActionError(f"That's {footage:.0f} s of footage for a {project['length']:.0f} s video: add more clips, "
@@ -355,7 +381,7 @@ class Studio:
 
     def _job_prepare(self, job, project, user):
         pipe = self._pipeline(job, project, user, 0.0, 0.8)
-        info = pipe.analyse()
+        info = pipe.analyse(project["length"], project["pace"])
         self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
         if info["skipped"]:
             self.db.event(project["id"], f"{len(info['skipped'])} file(s) couldn't be read and were left out.", "warn")
@@ -388,7 +414,7 @@ class Studio:
         plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
                               (project["id"], "design", pid, plan.model_dump_json(), time.time()))
         shape = self.shapes(project)[0]
-        info = pipe.sample(ctx, plan, shape, f"sample-{plan_id}", look=self.profile(user).look)
+        info = pipe.sample(ctx, plan, shape, f"sample-{plan_id}", look=look_from_note(project["intent"], self.profile(user).look))
         self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, created) "
                     "VALUES (?,?,?,?,?,?,?,?,?)", (project["id"], plan_id, project["version"], "sample", shape, info.path,
                                                    info.seconds, info.render_seconds, time.time()))
@@ -396,7 +422,7 @@ class Studio:
 
     def _render_plan(self, job, project, user, pipe: Pipeline, ctx, plan: DesignPlan, plan_id: int) -> None:
         version = project["version"] + 1
-        infos = pipe.render(ctx, plan, self.shapes(project), version, look=self.profile(user).look)
+        infos = pipe.render(ctx, plan, self.shapes(project), version, look=look_from_note(project["intent"], self.profile(user).look))
         for info in infos:
             self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
                         "findings, created) VALUES (?,?,?,?,?,?,?,?,?,?)",

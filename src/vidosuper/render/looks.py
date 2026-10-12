@@ -21,6 +21,9 @@ VIVID_BASE = ("curves=all='0/0 0.25/0.235 0.5/0.5 0.75/0.775 1/1',"
 LOOKS["vivid"] = "eq=contrast=1.08:saturation=1.2:gamma=0.97," + VIVID_BASE + ",vibrance=intensity=0.2"
 
 
+LOOKS["bright"] = "eq=gamma=1.2:brightness=0.025:contrast=1.07:saturation=1.22," + VIVID_BASE + ",vibrance=intensity=0.2"
+
+
 def look_filter(name: str | None) -> str:
     if not name or name == "natural":
         return ""

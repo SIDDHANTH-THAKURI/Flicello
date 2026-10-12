@@ -208,7 +208,8 @@ def run_checks(video: Path, edl: EDL, project: Project, *, head: float = 0.0, ta
                                                                                          / period)) * period < 0.01
                       for j in edl.music.jumps)
         if on_grid:
-            grid = np.sort(np.concatenate([beats, beats + period / 2]))
+            strikes = np.asarray(song.strikes) + edl.music.grid_shift - edl.music.start + head  # the song's own off-beat hits
+            grid = np.sort(np.concatenate([beats, beats + period / 2, strikes]))
             if edl.music.jumps:  # extend the grid past the song's end by the beats the jumps add
                 extra = beats[-1] + period * np.arange(1, 64)
                 grid = np.sort(np.concatenate([grid, extra, extra + period / 2]))

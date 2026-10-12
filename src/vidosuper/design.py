@@ -187,8 +187,11 @@ class _Footage:
         return round(max(0.0, min(s, self.clip(m.clip).duration - need - 0.05)), 2)
 
     def ambience(self, short: str, at: float, src: float, seconds: float, target_db: float,
-                 fade_in: float = 0.5, fade_out: float = 0.6) -> SoundLayer | None:
-        """The shot's own sound (real time), levelled to target_db RMS and stopped before any voice."""
+                 fade_in: float = 0.5, fade_out: float = 0.6, shortest: float = 0.8,
+                 peak_db: float | None = None) -> SoundLayer | None:
+        """The shot's own sound (real time), levelled to target_db RMS (or, for an impact, so its loudest instant
+        peaks at peak_db: the crack stands out of the music however quiet the room around it was) and stopped before
+        any voice."""
         import soundfile as sf
 
         clip = self.clip(short)
@@ -196,14 +199,17 @@ class _Footage:
         if not clip.audio_wav or any(u["start"] <= src < u["end"] for u in utter):
             return None
         stop = min([src + seconds] + [u["start"] - 0.3 for u in utter if u["start"] > src])
-        if stop - src < 0.8:
+        if stop - src < shortest:
             return None
         x, sr = sf.read(clip.audio_wav, start=int(src * 48000), stop=int(stop * 48000), always_2d=True)
         if not len(x):
             return None
         rms = 20 * np.log10(float(np.sqrt(np.mean(x.mean(1) ** 2))) + 1e-12)
+        gain = target_db - rms
+        if peak_db is not None:
+            gain = peak_db - 20 * np.log10(float(np.abs(x).max()) + 1e-9)
         return SoundLayer(source=f"clip:{short}", at=round(max(0.0, at), 3), duration=round(stop - src, 3),
-                          src_in=round(src, 3), gain_db=round(max(-12.0, min(12.0, target_db - rms)), 1),
+                          src_in=round(src, 3), gain_db=round(max(-12.0, min(24.0 if peak_db is not None else 12.0, gain)), 1),
                           fade_in=fade_in, fade_out=fade_out)
 
 
@@ -327,7 +333,7 @@ def build_template(design: Design, project: Project) -> Template:
         slot = slots[idx]
         plays_at = slot.start + (peak_t - slot.src_in) / slot.speed  # where the impact really plays in this shot
         exact += abs(plays_at - on_beat) < 0.03  # a shot kept inside its clip can play it a little off the beat
-        if design.sound_design and (layer := footage.ambience(short, plays_at - 0.04, peak_t - 0.04, 0.5, -19.0, 0.01, 0.25)):
+        if design.sound_design and (layer := footage.ambience(short, plays_at - 0.04, peak_t - 0.04, 0.4, -19.0, 0.005, 0.2, shortest=0.3, peak_db=-5.0)):
             sounds.append(layer)  # the real sound of the impact, with the picture (never over a voice)
     return Template(name=design.name, music=MusicSpec(path=design.song, start=round(t0, 3), fade_out=design.music_fade_out,
                                                       grid_shift=round(shift, 4)),

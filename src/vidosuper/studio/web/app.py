@@ -28,6 +28,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import accounts
+from ..brain.context import read_note
 from ..profiles import QUESTIONS
 from ..service import BUSY, FEEDBACK_TAGS, LENGTHS, STAGES, ActionError, Studio
 from ..storage import UploadError, finish_upload, safe_child, start_upload, workdir, write_chunk
@@ -36,6 +37,18 @@ HERE = Path(__file__).parent
 COOKIE = "vs_session"
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 DEVICE = "vs_device"  # a browser the person has signed in from before (login throttling)
+def eta_text(seconds) -> str:
+    """'about 3 min' for the progress card; nothing when unknown."""
+    if seconds is None:
+        return ""
+    s = int(seconds)
+    if s < 45:
+        return "under a minute"
+    if s < 90:
+        return "about a minute"
+    return f"about {round(s / 60)} min"
+
+
 MOMENT_ID = re.compile(r"\(?\b[cC]\d{2,3}#\d+\b\)?:?\s*")  # catalog ids like c04#1 mean nothing to people
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; "
        "style-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
@@ -57,6 +70,7 @@ def create_app(studio: Studio) -> FastAPI:
     templates.env.filters["ago"] = _ago
     templates.env.filters["mmss"] = lambda x: f"{int(x or 0) // 60}:{int(x or 0) % 60:02d}"
     templates.env.filters["shapes"] = lambda x: "9:16 + 16:9" if x == "both" else x
+    templates.env.filters["eta"] = eta_text
     templates.env.filters["noids"] = lambda t: MOMENT_ID.sub("", str(t or "")).strip()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
@@ -295,6 +309,8 @@ def create_app(studio: Studio) -> FastAPI:
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
         return page(request, "project.html", user, sess, p=p, job=job, clips=clips, pitches=pitches,
+                    eta=studio.eta(job), total_eta=studio.total_estimate(),
+                    note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
                     info=json.loads(p["info"]) if p["info"] else None,
                     revisions_left=None if studio.is_owner(user) else max(0, s.limits.revisions_per_video - p["revisions"]),
@@ -457,7 +473,8 @@ def create_app(studio: Studio) -> FastAPI:
         job = studio.db.active_job(pid)
         return {"stage": p["stage"], "label": STAGES.get(p["stage"], p["stage"]), "busy": p["stage"] in BUSY,
                 "progress": round(job["progress"], 3) if job else None, "message": job["message"] if job else "",
-                "queued": bool(job and job["status"] == "queued"), "version": p["version"], "updated": p["updated"]}
+                "queued": bool(job and job["status"] == "queued"), "version": p["version"], "updated": p["updated"],
+                "eta": studio.eta(job)}
 
     # ------------------------------------------------------------------ media
     @app.get("/m/{pid}/{kind}/{name}")

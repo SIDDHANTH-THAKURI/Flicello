@@ -107,11 +107,11 @@ def status() -> None:
 
 @studio_app.command("run")
 def run(clips: Path = typer.Argument(..., help="A folder of clips (only read, never written)"),
-        song: Path = typer.Option(..., help="The song to cut on"),
+        song: Path = typer.Option(None, help="The song to cut on (none: a beat is made for the video)"),
         shape: str = typer.Option("9:16", help="9:16, 16:9 or both"),
         length: float = typer.Option(30.0, help="Seconds"),
         intent: str = typer.Option("", help="What the video should be about (optional)"),
-        pace: str = typer.Option("balanced", help="calm | balanced | fast: how quickly it cuts"),
+        pace: str = typer.Option("balanced", help="calm | balanced | fast | every: how quickly it cuts (every: one shot per hit)"),
         brain: str = typer.Option("local", help="local | claude_code | api"),
         pick: int = typer.Option(1, help="Which of the three pitches to make"),
         out: Path = typer.Option(None, help="Working folder (default: a new one under the studio home)"),
@@ -134,7 +134,8 @@ def run(clips: Path = typer.Argument(..., help="A folder of clips (only read, ne
         raise typer.BadParameter("shape is 9:16, 16:9 or both")
     root = out or s.home / "runs" / time.strftime("%Y%m%d-%H%M%S")
     work = Workdir(root, clips_dir=clips.expanduser().resolve()).ensure()
-    shutil.copy2(song, work.music / f"song{song.suffix.lower()}")
+    if song is not None:
+        shutil.copy2(song, work.music / f"song{song.suffix.lower()}")
     usages: list[Usage] = []
     stages: list[tuple[str, float]] = []
 
@@ -152,7 +153,7 @@ def run(clips: Path = typer.Argument(..., help="A folder of clips (only read, ne
         stages.append((name, time.monotonic() - t0))
         return result
 
-    info = stage("analyse", pipeline.analyse)
+    info = stage("analyse", lambda: pipeline.analyse(length, pace))
     console.print(escape(json.dumps(info)))
     ctx = pipeline.context(shapes, length, intent, rules, pace)
     console.print(escape(ctx.beats.text(ctx.song)))

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from collections.abc import Callable
@@ -23,6 +24,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from ..config import Config, load_config
 from ..design import Design, build_template
@@ -41,6 +43,7 @@ from ..workspace import Project, write_text_atomic
 from .brain.context import beat_map, clip_facts, load_catalog, moment_by_id
 from .brain.core import StoryContext, brief_text, to_design
 from .brain.schemas import DesignPlan, StoryPitch
+from .brain.strikes import Hit, plan_on_strikes
 
 class UserError(ValueError):
     """A problem the person can fix, in words made for them. Anything else is ours to fix and is never shown raw."""
@@ -129,7 +132,7 @@ class Pipeline:
         self.project = Project(work.clips, cfg)
 
     # ------------------------------------------------------------ analyse
-    def analyse(self) -> dict:
+    def analyse(self, length: float = 30.0, pace: str = "balanced") -> dict:
         """Everything the story steps need; finished parts are kept, so a retry only redoes what failed."""
         t0 = time.monotonic()
         self.progress(0.02, "Looking at your clips")
@@ -161,6 +164,7 @@ class Pipeline:
         self.progress(0.88, "Making the catalog")
         catalog = build_catalog(project)
         self.progress(0.93, "Listening to the song")
+        self.ensure_song(length, pace)
         song = self.song()
         skipped = [c.rel_path for c in clips if not c.usable]
         return {"clips": len(usable), "skipped": skipped, "footage_seconds": round(sum(c.duration for c in usable), 1),
@@ -207,7 +211,18 @@ class Pipeline:
             raise UserError("No song yet: upload one first.")
         return load_or_analyze(path, self.project.music)
 
+    def ensure_song(self, length: float, pace: str) -> bool:
+        """No music uploaded: make a beat to cut on (see music/house.py). True when it made one."""
+        if self.work.song_path() is not None:
+            return False
+        from ..music.house import make_beat
+
+        self.progress(0.02, "Making a beat to cut on")
+        make_beat(self.work.music / "song.wav", length + 8, pace)
+        return True
+
     def context(self, shapes: list[str], length: float, intent: str, rules: list[dict], pace: str = "balanced") -> StoryContext:
+        self.ensure_song(length, pace)
         catalog = load_catalog(self.project.root)
         song = self.song()
         ctx = StoryContext(catalog=catalog, facts=clip_facts(catalog), song=song, beats=beat_map(song, length),
@@ -254,10 +269,35 @@ class Pipeline:
     # ------------------------------------------------------------ design, sample, render
     def design(self, ctx: StoryContext, pitch: StoryPitch, note: str = "") -> DesignPlan:
         self.progress(0.05, "Planning the cut on the song's beats")
+        if ctx.pace == "every":
+            return self.strike_plan(ctx, pitch)
         return self.brain.design(ctx, pitch, note)
+
+    def strike_plan(self, ctx: StoryContext, pitch: StoryPitch, seed: int = 0, density: str = "strikes",
+                    max_zoom: float = 1.3) -> DesignPlan:
+        """The one-shot-per-hit plan (see brain/strikes.py): made from the song's hits and the footage's motion and
+        real impacts, no AI call."""
+        def signals(short: str):
+            with np.load(self.project.signals_npz(ctx.facts[short].clip_id)) as d:
+                return d["t"], d["shake"], d["motion"]
+
+        hits = []
+        for short, f in ctx.facts.items():
+            sig = self.project.load_signals(f.clip_id)
+            hits += [Hit(short, float(t), float(db)) for t, db in (sig.impacts if sig else [])]
+        return plan_on_strikes(ctx.facts, signals, ctx.beats, hits, pitch.title, pitch.logline, seed, density, max_zoom)
+
+    def revise_strikes(self, ctx: StoryContext, pitch: StoryPitch, feedback: str, round_no: int = 1) -> DesignPlan:
+        """A new cut of the same idea: other stretches of footage, and the cut density follows what they said."""
+        text = feedback.lower()
+        density = "beats" if re.search(r"too (fast|busy|many|frantic)|slow(er)? down|calmer", text) else "strikes"
+        zoom = 1.12 if re.search(r"zoom|crop|too close|can'?t see", text) else 1.3
+        return self.strike_plan(ctx, pitch, seed=round_no, density=density, max_zoom=zoom)
 
     def revise(self, ctx: StoryContext, pitch: StoryPitch, current: DesignPlan, feedback: str) -> DesignPlan:
         self.progress(0.05, "Working your changes into the plan")
+        if ctx.pace == "every":
+            return self.revise_strikes(ctx, pitch, feedback, 1 + len(current.plan) % 7)
         return self.brain.revise(ctx, pitch, current, feedback)
 
     def _template(self, ctx: StoryContext, plan: DesignPlan, shape: str, look: str) -> tuple[Design, Template]:

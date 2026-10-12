@@ -58,7 +58,7 @@ def test_a_punch_in_and_the_sound_of_the_impact_reach_the_template(ingested, med
     project, clips, _ = ingested
     a = sorted(c.clip_id for c in clips.values() if c.duration >= 4 and c.has_audio)[0]
     monkeypatch.setattr(_Footage, "refine_peak", lambda self, short, peak, reach=0.8, motion=True: (peak, "sound"))
-    monkeypatch.setattr(_Footage, "ambience", lambda self, short, at, src, seconds, db, fi=0.5, fo=0.6:
+    monkeypatch.setattr(_Footage, "ambience", lambda self, short, at, src, seconds, db, fi=0.5, fo=0.6, **kw:
                         SoundLayer(source=f"clip:{short}", at=round(at, 3), duration=seconds, src_in=round(src, 3), gain_db=db))
     design = Design.model_validate({
         "name": "t", "song": str(media / "music.wav"), "sound_design": True,
@@ -66,7 +66,7 @@ def test_a_punch_in_and_the_sound_of_the_impact_reach_the_template(ingested, med
         "plan": [["cut", 4, "swing", {"peak_beat": 1, "zoom": 1.3, "zoom_center": [0.3, 0.5]}]]})
     template = build_template(design, project)
     assert template.slots[0].zoom == 1.3 and tuple(template.slots[0].zoom_center) == (0.3, 0.5)
-    assert any(layer.source.startswith("clip:") and layer.duration == 0.5 for layer in template.sounds)
+    assert any(layer.source.startswith("clip:") and layer.duration == 0.4 for layer in template.sounds)
 
 
 def test_the_exact_impact_beats_the_coarse_sound_peak(ingested):

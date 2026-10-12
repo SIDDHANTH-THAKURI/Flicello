@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
-MUSIC_VERSION = 6  # 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum; 6: beat level re-checked;
+MUSIC_VERSION = 7  # 7: strikes; 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum; 6: beat level re-checked;
 #                   5: drops on the beat where the kick comes in, bars phased from the main drop
 SR = 22050
 HOP = 512
@@ -35,6 +35,9 @@ class MusicAnalysis(BaseModel):
     energy: list[float] = Field(description="0-1 loudness/intensity per second")
     sections: list[MusicSection]
     drops: list[float] = Field(default_factory=list, description="Bar starts where intensity jumps up sharply")
+    strikes: list[float] = Field(default_factory=list, description=(
+        "Seconds of the clear hits (kick, snare, claps, stabs), each on the beat grid's sixteenth notes: what a cut "
+        "can land on. Wider than the beats: dance tracks hit about 2-3 times a second."))
     pulse: list[float] = Field(default_factory=list, description=(
         f"Beat clarity per {PULSE_CHUNK:.0f} s: onset strength on the beats / on the half-beats (1.4+ clear, "
         "~1 or less: no audible beat on the grid there)"))
@@ -331,12 +334,48 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
         path=str(path), fingerprint=fingerprint_file(path), duration=round(duration, 3), tempo=round(tempo, 2),
         beats=[round(float(b), 3) for b in beats], downbeats=[round(float(b), 3) for b in downbeats],
         energy=[round(float(e), 3) for e in energy], sections=sections, drops=drops,
+        strikes=find_strikes(y, sr, beats),
         # dance music puts loud hi-hats on the off-beats and busy bass lines in the low band, so also
         # listen to the low band and to the kick drum alone
         pulse=[max(a, b, c) for a, b, c in zip(
             beat_dominance(onset_env, beats, duration), beat_dominance(low_band, beats, duration),
             beat_dominance(kick_env, beats, duration))],
     )
+
+
+def find_strikes(y: np.ndarray, sr: int, beats: np.ndarray, min_gap: float = 0.2, strength: float = 0.5) -> list[float]:
+    """The clear hits of the track, each snapped to the sixteenth-note grid the beats make (a hit that isn't on it is
+    noise or a swung fill: skipped). Spectral flux on a fine hop; the hit's strength is relative to the loud ones."""
+    import librosa
+
+    if len(beats) < 4:
+        return []
+    hop = 128
+    spec = np.abs(librosa.stft(y, n_fft=1024, hop_length=hop)) ** 2
+    mel = librosa.power_to_db(librosa.feature.melspectrogram(S=spec, sr=sr, n_mels=40, fmax=min(12000, sr // 2)))
+    flux = np.maximum(0.0, np.diff(mel, axis=1, prepend=mel[:, :1])).sum(axis=0)
+    flux = flux / (np.percentile(flux, 99) + 1e-9)
+    peaks, _ = find_peaks(flux, height=strength, distance=max(1, int(min_gap * sr / hop / 2)))
+    period = float(np.median(np.diff(beats)))
+    out: dict[float, float] = {}
+    for k in peaks:
+        t = float(k * hop / sr) - 0.5 * 1024 / sr * 0.5  # the flux frame peaks a little after the attack
+        i = int(np.argmin(np.abs(beats - t)))
+        x = (t - beats[i]) / period
+        q = round(x * 4) / 4
+        if abs(x - q) * period > 0.045:
+            continue
+        at = float(beats[i] + q * period)
+        out[at] = max(out.get(at, 0.0), float(flux[k]))
+    times = sorted(out)
+    kept: list[float] = []
+    for t in times:  # two hits closer than min_gap are one attack: keep the stronger
+        if kept and t - kept[-1] < min_gap - 1e-6:
+            if out[t] > out[kept[-1]]:
+                kept[-1] = t
+            continue
+        kept.append(t)
+    return [round(t, 3) for t in kept if t >= 0]
 
 
 def beat_dominance(onset_env: np.ndarray, beats: np.ndarray, duration: float) -> list[float]:

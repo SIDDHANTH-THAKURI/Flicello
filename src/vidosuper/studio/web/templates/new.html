@@ -30,6 +30,7 @@
         <label class="chip"><input type="radio" name="pace" value="calm" {% if default_pace == 'calm' %}checked{% endif %}><span>Calm and cinematic</span></label>
         <label class="chip"><input type="radio" name="pace" value="balanced" {% if default_pace not in ('calm', 'fast') %}checked{% endif %}><span>A mix</span></label>
         <label class="chip"><input type="radio" name="pace" value="fast" {% if default_pace == 'fast' %}checked{% endif %}><span>Fast cuts on the beat</span></label>
+        <label class="chip"><input type="radio" name="pace" value="every" {% if default_pace == 'every' %}checked{% endif %}><span>One shot per beat <i>every hit of the music</i></span></label>
       </div>
     </fieldset>
     <label>What's it about? <span class="muted">(optional: leave empty to be surprised)</span>

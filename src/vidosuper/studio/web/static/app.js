@@ -120,6 +120,12 @@
         if (st.stage !== stage || !st.busy) { location.reload(); return; }
         if (bar && st.progress !== null) bar.style.width = Math.max(3, Math.round(st.progress * 100)) + "%";
         if (msg) msg.textContent = st.queued ? "Waiting for its turn…" : (st.message || "Working…");
+        const eta = document.getElementById("job-eta");
+        if (eta) {
+          const s = st.eta;
+          eta.textContent = s === null || s === undefined ? "" :
+            (s < 45 ? "under a minute" : s < 90 ? "about a minute" : "about " + Math.round(s / 60) + " min") + " left";
+        }
       } catch (err) {
         misses += 1;
         if (err.status === 401) { location.href = "/login"; return; }

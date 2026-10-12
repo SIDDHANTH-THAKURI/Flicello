@@ -282,6 +282,16 @@ def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
     return problems
 
 
+REUSE_FRAMES = ((1.14, (0.5, 0.56)), (1.26, (0.42, 0.5)), (1.08, (0.58, 0.44)), (1.2, (0.55, 0.6)), (1.32, (0.45, 0.42)))
+
+
+def reuse_framing(reuses: int, action: bool = False) -> tuple[float, tuple[float, float]]:
+    """How the n-th reuse of a moment is framed: a different punch-in each time (the viewer must still see the
+    whole action: an action moment is cropped less)."""
+    zoom, centre = REUSE_FRAMES[(reuses - 1) % len(REUSE_FRAMES)]
+    return (min(zoom, 1.12) if action else zoom), centre
+
+
 def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: bool, look: str = "vivid") -> Design:
     """The plan as the renderer's Design: slow motion only where the frames exist, transitions in seconds."""
     pool = {m.key: m for m in plan.pool}
@@ -301,20 +311,21 @@ def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: boo
         if kind in ("cut", "hold") and (peak_beat is not None or m.peak is not None):
             if peak_beat is None:
                 peak_beat = 1.0 if s.beats >= 3 else 0.0
-            peak_beat = round(max(0.0, min(peak_beat, s.beats - 0.5)) * 2) / 2
+            peak_beat = round(max(0.0, min(peak_beat, s.beats - 0.25)) * 4) / 4
         else:
             peak_beat = None
         # the same footage again looks different: a punch-in on another part of the frame, alternating
         reuses = sum(1 for w in seen if _overlap(w, m) > 0.5)
         seen.append(m)
         zoom, center = 1.0, (0.5, 0.5)
-        if reuses:  # barely: the viewer must still see the whole action (a bigger crop hid the hit and blurred a small clip)
-            zoom = round(1.0 + min(0.08, 0.03 * reuses), 3)
-            center = ((0.45, 0.5), (0.55, 0.5))[(reuses - 1) % 2]
+        if s.zoom is not None:
+            zoom, center = s.zoom, tuple(s.zoom_center or (0.5, 0.5))
+        elif reuses:  # a new framing each time, but never so tight that an action moment's hit is lost
+            zoom, center = reuse_framing(reuses, action=m.peak is not None)
         shots.append(Shot(kind=kind, beats=s.beats, key=s.key, count=s.count if kind == "stutter" else 1, speed=speed,
                           transition=tr, frame=frame, peak_beat=peak_beat, zoom=zoom, zoom_center=center))
     return Design(name=plan.name, song=song_path, look=look, stabilize=True, intro=None, sound_design=True,
-                  fade_in=0.0 if ctx.pace == "fast" else 0.5,
+                  fade_in=0.0 if ctx.pace in ("fast", "every") else 0.5,
                   vertical=vertical, pool={k: PoolEntry(clip=m.clip, start=m.start, end=m.end, peak=m.peak)
                                            for k, m in pool.items()}, plan=shots)
 

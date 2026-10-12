@@ -34,6 +34,43 @@ def rules_text(rules: list[dict]) -> str:
     return "\n".join(f"- [{r['id']}] {r['text']}" for r in rules)
 
 
+FAST_WORDS = re.compile(r"\b(fast|quick|rapid|punchy|snappy|energetic|hype|frantic)\b", re.IGNORECASE)
+EVERY_WORDS = re.compile(r"\b(?:every|each|per)\s+(?:single\s+)?(?:beat|strike|drum\s?hit|drum)s?\b|"
+                         r"\bone\s+(?:shot|cut|clip)\s+(?:per|for\s+(?:each|every)|on\s+(?:each|every))\b", re.IGNORECASE)
+BRIGHT_WORDS = re.compile(r"\b(bright|brighter|light|airy|sunny|vibrant)\b", re.IGNORECASE)
+HITS_WORDS = re.compile(r"\b(hit|hits|hitting|crack|bat|impact|punch|slam|smash)\b", re.IGNORECASE)
+
+
+def pace_from_note(pace: str, intent: str) -> str:
+    """The pace they picked, unless they left it at the default and the note says what they want: one shot per beat, or
+    fast cuts."""
+    if pace in ("calm", "every", "fast"):
+        return pace
+    if EVERY_WORDS.search(intent or ""):
+        return "every"
+    return "fast" if FAST_WORDS.search(intent or "") else pace
+
+
+def read_note(intent: str, pace: str) -> list[str]:
+    """What the tool takes from the person's note, in plain words, shown back to them so a miss is visible at once."""
+    out = {"every": "Cuts on every beat and strike of the music: one shot per hit",
+           "fast": "Fast cuts on the beat", "calm": "Calm, cinematic cutting"}.get(pace)
+    lines = [out] if out else ["A mix of fast and slow cuts"]
+    if HITS_WORDS.search(intent or ""):
+        lines.append("Every real impact in your clips (a hit, a clap, a splash) lands exactly on a beat, with its own sound")
+    if REUSE_WORDS.search(intent or ""):
+        lines.append("Clips can come back, each time framed differently so it isn't obvious")
+    if BRIGHT_WORDS.search(intent or ""):
+        lines.append("A bright look")
+    if re.search(r"\b(full|whole|entire)\b[^.]{0,12}\b(length|video|song)\b", intent or "", re.IGNORECASE):
+        lines.append("The video fills the full length you chose")
+    return lines
+
+
+def look_from_note(intent: str, look: str) -> str:
+    return "bright" if look == "vivid" and BRIGHT_WORDS.search(intent or "") else look
+
+
 REUSE_WORDS = re.compile(r"\b(repeat\w*|re-?use\w*|again|loop\w*|same shots?)\b", re.IGNORECASE)
 
 
@@ -48,6 +85,7 @@ class BeatMap:
     target: int  # beats the plan must add up to (a whole number of bars)
     drop: int | None  # beat of the main drop inside the target, if any
     sections: list[tuple[str, int, int, float]] = field(default_factory=list)  # label, from beat, to beat, energy
+    strikes: list[float] = field(default_factory=list)  # the song's clear hits, in beats from beat 0 (sixteenth notes)
 
     @property
     def seconds(self) -> float:
@@ -98,7 +136,8 @@ def beat_map(song: MusicAnalysis, target_seconds: float) -> BeatMap:
         a, b = max(0, at_beat(s.start)), max(0, at_beat(s.end))
         if b > a:
             sections.append((s.label, a, b, s.energy))
-    return BeatMap(first, t0, period, available, target, drop_beat, sections)
+    strikes = sorted({round((t - t0) / period * 4) / 4 for t in song.strikes if 0 < (t - t0) / period < target})
+    return BeatMap(first, t0, period, available, target, drop_beat, sections, strikes)
 
 
 def catalog_text(catalog: dict) -> str:
