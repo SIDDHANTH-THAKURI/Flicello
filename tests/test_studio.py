@@ -829,3 +829,36 @@ def test_no_song_asks_for_a_made_beat_or_no_music_and_no_music_means_none_plays(
     work = studio.s.users_dir / friend["id"] / "projects" / pid
     edl = json.loads(next((work / "out").glob("v1-*.edl.json")).read_text(encoding="utf-8"))
     assert edl["music"] is None  # nothing plays under the cut
+
+
+def test_the_improvement_routine_starts_after_five_new_ratings_once(studio, monkeypatch):
+    import os
+
+    from vidosuper.studio import improve
+
+    if os.name != "nt":
+        pytest.skip("the routine is started with PowerShell")
+    started = []
+    monkeypatch.setattr(improve.subprocess, "Popen", lambda cmd, **kw: started.append(cmd))
+    friend = _friend(studio, "Hal")
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+
+    def rate(n):
+        for _ in range(n):
+            studio.db.run("INSERT INTO feedback(project_id, user_id, stage, version, match, liked, tags, text, created) "
+                          "VALUES (?,?,?,?,?,?,?,?,?)", (p["id"], friend["id"], "final", 1, 3, 5, "[]", "", time.time()))
+    rate(5)
+    assert improve.due(studio.db) == 5 and not improve.maybe_start(studio)  # off unless the owner turned it on
+    studio.s.improve_auto = True
+    rate(0)
+    assert improve.maybe_start(studio) and len(started) == 1
+    assert improve.running(studio.s.home) and not improve.maybe_start(studio)  # one run at a time
+    improve.lock_path(studio.s.home).unlink()
+    studio.db.run("INSERT INTO heartbeat(name, at, info) VALUES ('digest', ?, '')", (time.time() + 1,))  # the digest ran
+    rate(0)
+    assert improve.due(studio.db) == 0 and not improve.maybe_start(studio)
+    studio.db.run("UPDATE heartbeat SET at=? WHERE name='digest'", (time.time() - 1000,))
+    rate(4)
+    assert improve.due(studio.db) == 9 or improve.due(studio.db) >= 4
+    studio.s.improve_every = 99
+    assert not improve.maybe_start(studio)

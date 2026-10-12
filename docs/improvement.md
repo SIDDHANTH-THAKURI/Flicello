@@ -42,3 +42,10 @@ folded shots) and the ratings move the right way over weeks.
 
 See the table in the owner's last report: subject tracking for auto-reframe, upscaling and frame interpolation for soft
 clips, a visual swing/jump detector, stem-based music strikes, captions, a licensed sound-effect set.
+
+## When it runs
+
+After every 5th new rating of a finished video the studio starts `scripts/improve.ps1` by itself (`improve_auto: true`
+and `improve_every: 5` in `studio.yaml`; the count restarts at each digest). A lock file keeps it to one run at a time.
+The script runs in its own git worktree on branch `improve/<date-time>`: the live studio's files are never touched.
+Run it by hand any time with `powershell -File scripts\improve.ps1`.

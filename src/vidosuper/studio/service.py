@@ -23,6 +23,7 @@ from .brain import BrainError, BudgetExceeded, Usage, brain_kind_for, make_brain
 from .brain.context import look_from_note, pace_from_note
 from .brain.schemas import DesignPlan, StoryPitch
 from .db import DB
+from .improve import maybe_start as maybe_start_improve
 from .pipeline import Pipeline, UserError, remove_project_files, studio_config
 from .profiles import Profile, owner_seed_rules
 from .settings import StudioSettings
@@ -280,6 +281,7 @@ class Studio:
                                                    max(1, min(5, match)), max(1, min(10, liked)), json.dumps(tags),
                                                    " ".join(text.split())[:1000], time.time()))
         self.db.enqueue("learn", project["id"], user["id"], {}, PRIORITY["learn"])
+        maybe_start_improve(self)  # after every 5th rating the improvement routine looks at what people said
         fix = " ".join(fix.split())[:1000]
         if fix:
             if project["revisions"] >= self.s.limits.revisions_per_video and not self.is_owner(user):

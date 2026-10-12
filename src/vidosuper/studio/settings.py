@@ -83,6 +83,9 @@ class StudioSettings(_Strict):
                                                     "Only short messages, never footage or names of files.")
     session_days: int = 14
     invite_days: int = 7
+    improve_every: int = Field(5, description="Start the improvement routine after this many new ratings.")
+    improve_auto: bool = Field(False, description="Let the studio start the improvement routine (scripts/improve.ps1) "
+                                                  "by itself when improve_every ratings have come in.")
 
     @property
     def db_path(self) -> Path:
