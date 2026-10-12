@@ -59,7 +59,7 @@ class PlanShot(BaseModel):
         "cut/hold on an action moment: how many beats into the shot its action peak (the swing meeting the ball, the "
         "jump, the splash) lands exactly on a beat. Usually 1 or 2. Empty = decided for you (the second beat)."))
     zoom: float | None = Field(None, description="Leave empty: set by the tool for reused moments.")
-    zoom_center: tuple[float, float] | None = Field(None, description="Leave empty.")
+    zoom_center: list[float] | None = Field(None, description="Leave empty.")  # a list: tuples make a schema Claude Code refuses
     flip: bool | None = Field(None, description="Leave empty.")
     crack_db: float | None = Field(None, description="Leave empty.")
 

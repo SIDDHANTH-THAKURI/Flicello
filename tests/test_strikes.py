@@ -137,3 +137,16 @@ def test_hit_led_every_cut_shows_a_real_hit_on_the_cut_and_repeats_look_differen
     peaks = [pool[s.key].peak for s in plan.plan]
     assert all(a != b for a, b in zip(peaks, peaks[1:]) if a is not None)  # never the same hit twice running
     assert plan.plan[0].zoom == 1.0
+
+
+def test_the_plan_schema_has_nothing_claude_code_refuses():
+    """Claude Code's --json-schema is strict: tuples (prefixItems) made every video fail at the design step."""
+    import json
+
+    from vidosuper.studio.brain.backends import model_schema
+    from vidosuper.studio.brain.schemas import DesignPlan, Pitches, ProfileUpdate
+    from vidosuper.studio.brain.core import ClipAnalysis
+
+    for model in (DesignPlan, Pitches, ProfileUpdate, ClipAnalysis):
+        text = json.dumps(model_schema(model))
+        assert "prefixItems" not in text, model.__name__
