@@ -182,8 +182,10 @@ def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
     uses: dict[str, list[int]] = {}
     for i, s in enumerate(plan.plan):
         starts[round(pos, 3)] = s
-        if s.beats < 0.25:
-            problems.append(f"shot {i + 1}: {s.beats} beats is too short (0.25 at least)")
+        if s.beats * beats.period < 0.21:
+            problems.append(f"shot {i + 1}: {s.beats} beats is only {s.beats * beats.period:.2f}s at this tempo: shots (and "
+                            f"stutter pieces) must last at least 0.21s, so use at least {math.ceil(0.21 / beats.period * 2) / 2:g} "
+                            "beats")
         if s.kind == "stutter" and not 2 <= s.count <= 16:
             problems.append(f"shot {i + 1}: a stutter needs 2-16 pieces")
         if s.transition != "cut" and not 0.25 <= s.transition_beats <= max(0.25, s.beats / 2):

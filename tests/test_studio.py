@@ -549,3 +549,57 @@ def test_the_page_extends_a_short_song_and_the_video_can_then_be_long(studio, me
     assert after["song"] == "mine.wav (extended)" and after["song_seconds"] >= 62
     assert (work.music / "original-song.wav").exists() and (work.music / "song.wav").exists()
     assert "Heads-up about the length" not in client.get(f"/p/{p['id']}").text
+
+
+def test_slivers_are_folded_into_a_neighbour_not_an_error():
+    from vidosuper.schemas import MusicSpec, Transition
+    from vidosuper.studio.pipeline import heal_template, slice_template
+    from vidosuper.template import Slot, Template
+
+    def tpl(bounds):
+        slots = [Slot(id=f"s{i + 1:02d}", start=a, end=b, clip="c01", src_in=0.0,
+                      transition_in=Transition(type="dissolve", duration=0.2)) for i, (a, b) in enumerate(zip(bounds, bounds[1:]))]
+        return Template(name="t", music=MusicSpec(path="x.mp3", start=0.0), slots=slots)
+
+    # the cut-off sample that failed for a real person: the last shot was 0.07 s long
+    cut = slice_template(tpl([0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0]), 0.0, 12.07)
+    assert min(s.end - s.start for s in cut.slots) < 0.1
+    healed = heal_template(cut)
+    assert all(s.end - s.start >= 0.21 for s in healed.slots) and healed.slots[-1].end == 12.07  # same length, no sliver
+    assert [s.start for s in healed.slots][:3] == [0.0, 2.0, 4.0]  # every other cut where it was
+    first = heal_template(tpl([0.0, 0.1, 2.0, 4.0]))  # a sliver at the very start
+    assert first.slots[0].start == 0.0 and first.slots[0].transition_in.type == "cut" and len(first.slots) == 2
+    assert len(heal_template(tpl([0.0, 0.1])).slots) == 1  # never removes the only shot
+
+
+def test_a_failed_step_never_shows_our_internals(studio):
+    from vidosuper.studio.pipeline import UserError
+
+    friend = _friend(studio, "Mo")
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+    studio.db.run("UPDATE projects SET stage='sampling' WHERE id=?", (p["id"],))
+    job_id = studio.db.enqueue("sample", p["id"], friend["id"], {"pitch": 1})
+
+    def boom(job, project, user):
+        raise ValueError("The edit has errors:\n  - ERROR: [s06] shot is only 0.07s on screen (minimum 0.2s)")
+
+    studio._job_sample = boom
+    for _ in range(2):  # the first failure is retried once
+        job = studio.db.claim() or {}
+        if not job:
+            studio.db.run("UPDATE jobs SET after=NULL WHERE id=?", (job_id,))
+            job = studio.db.claim()
+        studio.run_job(job)
+    shown = studio.db.project(p["id"])
+    assert shown["stage"] == "failed" and "s06" not in shown["error"] and "owner has been told" in shown["error"]
+    assert studio.db.one("SELECT * FROM alerts WHERE kind='job'")  # the owner is told, with the detail
+    assert "s06" in studio.db.one("SELECT message FROM events WHERE level='error'")["message"]
+
+    class Fixable(UserError):
+        pass
+
+    studio.db.run("UPDATE projects SET stage='sampling', error=NULL WHERE id=?", (p["id"],))
+    studio._job_sample = lambda job, project, user: (_ for _ in ()).throw(UserError("None of the uploaded files could be read as video."))
+    studio.db.enqueue("sample", p["id"], friend["id"], {"pitch": 1})
+    studio.run_job(studio.db.claim())
+    assert studio.db.project(p["id"])["error"] == "None of the uploaded files could be read as video."  # made for people: shown

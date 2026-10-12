@@ -22,7 +22,7 @@ from .alerts import alert
 from .brain import BrainError, BudgetExceeded, Usage, brain_kind_for, make_brain
 from .brain.schemas import DesignPlan, StoryPitch
 from .db import DB
-from .pipeline import Pipeline, remove_project_files, studio_config
+from .pipeline import Pipeline, UserError, remove_project_files, studio_config
 from .profiles import Profile, owner_seed_rules
 from .settings import StudioSettings
 from .storage import UploadError, user_dir, workdir
@@ -333,8 +333,7 @@ class Studio:
         except Exception as exc:  # noqa: BLE001 - every failure is recorded, retried once, then shown
             detail = traceback.format_exc()
             self.db.event(project["id"], f"{job['kind']} failed (try {job['attempts']}): {detail[-3000:]}", "error", job["id"])
-            user_fixable = isinstance(exc, (UploadError, ActionError)) or (isinstance(exc, ValueError)
-                                                                           and not isinstance(exc, BrainError))
+            user_fixable = isinstance(exc, (UploadError, ActionError, UserError))  # only these have words made for people
             if job["attempts"] < 2 and not user_fixable:
                 self.db.requeue(job["id"], delay=20.0, error=str(exc)[:500])
                 return

@@ -41,6 +41,10 @@ from .brain.context import beat_map, clip_facts, load_catalog, moment_by_id
 from .brain.core import StoryContext, brief_text, to_design
 from .brain.schemas import DesignPlan, StoryPitch
 
+class UserError(ValueError):
+    """A problem the person can fix, in words made for them. Anything else is ours to fix and is never shown raw."""
+
+
 Progress = Callable[[float, str], None]
 SHAPES = {"9:16": (1080, 1920), "16:9": (1920, 1080)}
 SAMPLE_SECONDS = 8.0
@@ -131,7 +135,7 @@ class Pipeline:
         project, clips = ingest_folder(self.work.clips, self.cfg)
         usable = [c for c in clips if c.usable]
         if not usable:
-            raise ValueError("None of the uploaded files could be read as video.")
+            raise UserError("None of the uploaded files could be read as video.")
         self.progress(0.15, "Measuring shake, light and motion")
         measure_project(project, self.cfg)
         self.progress(0.3, "Listening for speech and making contact sheets")
@@ -164,7 +168,7 @@ class Pipeline:
     def song(self) -> MusicAnalysis:
         path = self.work.song_path()
         if path is None:
-            raise ValueError("No song yet: upload one first.")
+            raise UserError("No song yet: upload one first.")
         return load_or_analyze(path, self.project.music)
 
     def context(self, shapes: list[str], length: float, intent: str, rules: list[dict]) -> StoryContext:
@@ -222,7 +226,7 @@ class Pipeline:
 
     def _template(self, ctx: StoryContext, plan: DesignPlan, shape: str, look: str) -> tuple[Design, Template]:
         design = to_design(plan, ctx, str(self.work.song_path()), vertical=shape == "9:16", look=look)
-        return design, build_template(design, self.project)
+        return design, heal_template(build_template(design, self.project))
 
     def sample(self, ctx: StoryContext, plan: DesignPlan, shape: str, name: str, look: str = "vivid") -> RenderInfo:
         """About 8 seconds at draft quality: through the drop if there is one early enough, else the opening."""
@@ -232,7 +236,7 @@ class Pipeline:
         start = 0.0
         if hits and hits[0].start <= 25.0:
             start = max(0.0, hits[0].start - SAMPLE_SECONDS * 0.55)
-        part = slice_template(template, start, start + SAMPLE_SECONDS)
+        part = heal_template(slice_template(template, start, start + SAMPLE_SECONDS))
         w, h = SHAPES[shape]
         edl = autofill(part, self.project, width=w, height=h)
         edl.meta.true_peak_db = -2.3  # the AAC encode overshoots the limiter by up to ~0.9 dB
@@ -294,6 +298,28 @@ def _studio_level(f: dict) -> dict:
         if m and float(m.group(2)) <= -1.0 and abs(float(m.group(1)) + 14.0) <= 1.5:
             f = {**f, "level": "ok"}
     return f
+
+
+MIN_SHOT = 0.21  # seconds on screen; the renderer refuses anything under 0.2 (a stutter piece of 0.22 s is fine)
+
+
+def heal_template(t: Template, minimum: float = MIN_SHOT) -> Template:
+    """No shot too short to show: a sliver (a stutter piece at a fast tempo, the end of a cut-off sample) is folded into
+    its neighbour so the timeline keeps its length and every other cut stays on its beat. Never an error for the person."""
+    slots = [s.model_copy() for s in t.slots]
+    i = 0
+    while i < len(slots) and len(slots) > 1:
+        s = slots[i]
+        if s.end - s.start >= minimum:
+            i += 1
+            continue
+        if i > 0:  # the shot before holds on a little longer
+            slots[i - 1] = slots[i - 1].model_copy(update={"end": s.end})
+        else:  # the first shot: the next one starts a little earlier
+            slots[1] = slots[1].model_copy(update={"start": s.start, "transition_in": Transition()})
+        del slots[i]
+        i = max(0, i - 1)
+    return t.model_copy(update={"slots": slots})
 
 
 def slice_template(t: Template, start: float, end: float) -> Template:
