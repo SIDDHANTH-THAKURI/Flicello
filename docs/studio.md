@@ -49,6 +49,23 @@ logging a clip costs about $0.03-0.04 (Sonnet, ~12 s each, several at once), and
 the cut about $0.39 (Opus, ~45 s each). That's **about $0.60 for a 6-clip video and about $1 for 15 clips**, plus
 ~$0.15-0.25 per revision. The admin page shows the real numbers per step.
 
+## The public link (friends need nothing installed)
+
+Since 2026-10-12 the studio is also published with Tailscale Funnel, so a friend only needs a link and an invite:
+
+```powershell
+tailscale funnel --bg --https=10000 http://127.0.0.1:8765     # on:  https://<this-pc>.<tailnet>.ts.net:10000
+tailscale funnel --https=10000 off                             # off (the owner's other funnel on 443 is separate)
+```
+
+- Anyone can *open* the address, but there is nothing to see without an invite: every page except sign-in and join
+  needs a session, uploads and videos are served only to their owner, and an invite works once.
+- It's HTTPS (Tailscale's certificate), cookies are Secure/HttpOnly/SameSite=Strict, the site tells search engines
+  to stay away (header, meta tag, robots.txt), and failed sign-ins are slowed per account, per address and
+  overall (a person's own browser, once signed in, is exempt).
+- The computer must be on and awake, with Tailscale running and `studio.cmd` open, or the link says unreachable.
+- To go back to private-only, turn the funnel off; the tailnet-only address (`:8765`) keeps working for your devices.
+
 ## Letting friends in: Tailscale
 
 Tailscale makes a private, encrypted network between your devices and the people you share with. Nothing is
