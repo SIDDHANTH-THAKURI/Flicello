@@ -337,6 +337,10 @@ def create_app(studio: Studio) -> FastAPI:
             return back(f"/p/{pid}", str(exc))
         return back(f"/p/{pid}", f"Done: the song now runs {info['seconds']:.0f} s (it repeats its strongest {info['loop_bars']} bars).")
 
+    @app.post("/p/{pid}/music")
+    def music(request: Request, pid: str, csrf: str = Form(""), choice: str = Form("made")):
+        return act(request, csrf, pid, lambda u, p: studio.set_music(p, choice))
+
     @app.post("/p/{pid}/length")
     def length(request: Request, pid: str, csrf: str = Form(""), seconds: int = Form(30)):
         return act(request, csrf, pid, lambda u, p: studio.set_length(p, seconds))

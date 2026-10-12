@@ -129,6 +129,7 @@ class Pipeline:
         self.brain = brain
         self.progress = progress or (lambda f, m: None)
         self.owner = owner
+        self.no_music = False  # set by the studio when the person chose no music
         self.project = Project(work.clips, cfg)
 
     # ------------------------------------------------------------ analyse
@@ -312,6 +313,8 @@ class Pipeline:
         The person never hears about it."""
         for _ in range(8):
             edl = autofill(template, self.project, width=width, height=height)
+            if self.no_music:  # the cut still follows the (unheard) beat grid; nothing plays under it
+                edl.music = None
             clips = self.project.clips()
             signals = {cid: s for cid in clips if (s := self.project.load_signals(cid)) is not None}
             short = {i.segment for i in validate_edl(edl, clips, signals, repair=False)

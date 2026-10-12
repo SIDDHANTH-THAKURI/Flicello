@@ -164,7 +164,7 @@ AI). The clips folder is only read.
   land on a beat with a wind-up and follow-through, and their own sound is mixed in, levelled by its peak. Every other
   shot is the most active stretch of the footage (motion signal) in step with how hard the music hits, never the same
   stretch twice until the footage runs out; a reuse gets a new framing (`reuse_framing`). Hits never show inside plain shots.
-- **Music is optional.** Without a song the pipeline makes one (`music/house.py`: synthesised, original, tempo from the
+- **Music is optional.** With no song the person chooses (project page): a beat made for the video (default), or no music at all (`projects.music`: made | none; none leaves the EDL without a music track, the cut still follows the unheard grid). A beat is made (the pipeline makes one (`music/house.py`: synthesised, original, tempo from the
   pace, 120 BPM at most because the beat tracker halves faster tempos).
 - **The note is read back** ("How I read your note" on the setup page): `read_note`, `pace_from_note`, `look_from_note`
   ("bright" gives the `bright` look).

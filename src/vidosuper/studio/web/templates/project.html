@@ -33,12 +33,21 @@
 {% endif %}
 <section class="card">
   <h2>2 · Music <span class="muted small">(optional)</span></h2>
-  <p class="muted small">The cut follows its beat and its drop. Use a song you're allowed to post. No song? We make a beat to cut on, made for your video.</p>
+  <p class="muted small">The cut follows its beat and its drop. Use a song you're allowed to post, or choose below.</p>
   <label class="drop small-drop">
     <input type="file" id="song-input" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg">
     <span>{% if p.song %}♪ {{ p.song }} · tap to change{% else %}Tap to choose a song, or skip it{% endif %}</span>
   </label>
   <ul class="files" id="song-list"></ul>
+  {% if not p.song %}
+  <p class="muted small top-gap">No song? Pick one:</p>
+  <form method="post" action="/p/{{ p.id }}/music" class="chips">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn {% if p.music != 'none' %}primary{% endif %}" type="submit" name="choice" value="made">{% if p.music != 'none' %}✓ {% endif %}A beat made for you (AI-made)</button>
+    <button class="btn {% if p.music == 'none' %}primary{% endif %}" type="submit" name="choice" value="none">{% if p.music == 'none' %}✓ {% endif %}No music</button>
+  </form>
+  <p class="muted small">{% if p.music == 'none' %}Your video plays with its own sound only. The cuts still follow a steady rhythm.{% else %}We compose a short original beat to cut on, made for your video. It is ours, so you can post it anywhere.{% endif %}</p>
+  {% endif %}
 </section>
 {% if p.song_seconds and p.song_seconds < p.length - 1 %}
 <section class="card notice">

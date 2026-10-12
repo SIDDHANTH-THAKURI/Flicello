@@ -763,6 +763,21 @@ def test_a_video_needs_no_song_and_the_note_picks_one_shot_per_beat(studio, medi
     assert finals and all(f["level"] != "fail" for r in finals for f in json.loads(r["findings"]))
     plan = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
     assert len(plan["plan"]) > 15  # one shot per hit of a beat: many short shots, not a few long ones
+    # the improvement tools see this video: a replay plans it again with today's code, the digest quotes its rating
+    from vidosuper.studio.bench import replay
+    from vidosuper.studio.digest import build_digest, to_markdown, write_digest
+
+    row = replay(studio, studio.db.project(pid))
+    assert row["shots"] > 15 and row["pace"] == "every" and row["mean_shot"] < 1.0
+    studio.db.run("INSERT INTO feedback(project_id, user_id, stage, version, match, liked, tags, text, created) "
+                  "VALUES (?,?,?,?,?,?,?,?,?)", (pid, friend["id"], "final", 1, 2, 4, json.dumps(["too slow"]),
+                                                 "not on the beat", time.time()))
+    digest = build_digest(studio.db, days=1)
+    assert digest["tags"] == {"too slow": 1} and digest["ratings"][0]["text"] == "not on the beat"
+    assert "pace" in to_markdown(digest) and "not on the beat" in to_markdown(digest)
+    path, _ = write_digest(studio.db, studio.s.home, days=1)
+    assert path.exists() and (path.parent / "metrics.jsonl").exists()
+    assert build_digest(studio.db)["ratings"] == []  # the mark moved on: the next digest is only what is new
 
 
 def test_the_time_estimate_learns_from_finished_jobs(studio):
@@ -778,3 +793,39 @@ def test_the_time_estimate_learns_from_finished_jobs(studio):
     assert 50 <= studio.eta(job) <= 70  # halfway after a minute
     assert studio.eta({"kind": "render", "status": "queued", "started": None, "progress": 0}) == 120
     assert studio.eta(None) is None
+
+
+def test_no_song_asks_for_a_made_beat_or_no_music_and_no_music_means_none_plays(studio, media, monkeypatch):
+    from vidosuper.studio.service import ActionError
+
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    friend = _friend(studio, "Gus")
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Gus", "password": "a long password 2"})
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
+    r = client.post("/new", data={"csrf": csrf, "title": "Quiet", "shapes": "9:16", "length": 15, "pace": "every", "intent": ""},
+                    follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    page = client.get(f"/p/{pid}").text
+    assert "A beat made for you" in page and "No music" in page and studio.db.project(pid)["music"] == "made"
+    with pytest.raises(ActionError):
+        studio.set_music(studio.db.project(pid), "loud")
+    client.post(f"/p/{pid}/music", data={"csrf": csrf, "choice": "none"})
+    assert studio.db.project(pid)["music"] == "none"
+    assert "Your video plays with its own sound only" in client.get(f"/p/{pid}").text
+    for name in ("a_stable.mp4", "c_pan.mp4"):
+        _upload(client, csrf, pid, media / "clips" / name, "clip")
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    pitch_id = int(re.search(r'name="pitch" value="(\d+)"', page).group(1))
+    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": pitch_id})
+    _drain(studio)
+    client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
+    _drain(studio)
+    finals = studio.renders(studio.db.project(pid), "final")
+    assert finals and all(f["level"] != "fail" for r in finals for f in json.loads(r["findings"]))
+    work = studio.s.users_dir / friend["id"] / "projects" / pid
+    edl = json.loads(next((work / "out").glob("v1-*.edl.json")).read_text(encoding="utf-8"))
+    assert edl["music"] is None  # nothing plays under the cut

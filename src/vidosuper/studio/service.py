@@ -213,6 +213,13 @@ class Studio:
         """Start to a finished video, in seconds, for the page that asks to start."""
         return int(sum(self.typical_seconds(k) for k in ("prepare", "pitch", "sample", "render")))
 
+    def set_music(self, project: dict, choice: str) -> None:
+        """With no song uploaded: a beat made for the video ('made'), or no music at all ('none')."""
+        self._guard(project, "setup")
+        if choice not in ("made", "none"):
+            raise ActionError("Pick a beat made for you, or no music.")
+        self.db.run("UPDATE projects SET music=?, updated=? WHERE id=?", (choice, time.time(), project["id"]))
+
     def set_length(self, project: dict, length: int) -> None:
         self._guard(project, "setup")
         if int(length) not in LENGTHS:
@@ -332,6 +339,7 @@ class Studio:
             self.db.job_progress(job["id"], lo + (hi - lo) * f, msg)
 
         pipe = Pipeline(work, self.cfg, None, progress, owner=owner)
+        pipe.no_music = project["music"] == "none" and not project["song"]
         kind = brain_kind_for(self.s, owner)
         pipe.brain = make_brain(kind, self.s, self._spender(project, user["id"], job["id"]), work.brain,
                                 pipe.project.load_signals)
@@ -361,7 +369,8 @@ class Studio:
             alert(self.db, self.s, "budget", f"A job is waiting: {exc}.")
         except Exception as exc:  # noqa: BLE001 - every failure is recorded, retried once, then shown
             detail = traceback.format_exc()
-            self.db.event(project["id"], f"{job['kind']} failed (try {job['attempts']}): {detail[-3000:]}", "error", job["id"])
+            self.db.event(project["id"], f"{job['kind']} failed (try {job['attempts']}): {type(exc).__name__}: "
+                          f"{' '.join(str(exc).split())[:200]}\n{detail[-3000:]}", "error", job["id"])
             user_fixable = isinstance(exc, (UploadError, ActionError, UserError))  # only these have words made for people
             if job["attempts"] < 2 and not user_fixable:
                 self.db.requeue(job["id"], delay=20.0, error=str(exc)[:500])

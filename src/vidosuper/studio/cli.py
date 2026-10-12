@@ -105,6 +105,58 @@ def status() -> None:
         console.print(f"[red]{escape(a['kind'])}[/] {escape(a['message'])}")
 
 
+@studio_app.command("digest")
+def digest(days: float = typer.Option(None, help="Look back this many days (default: since the last digest, else 7)"),
+           show: bool = typer.Option(True, "--show/--quiet", help="Print the digest")) -> None:
+    """What people said and what broke since the last digest: one page to improve the studio from (see
+    docs/improvement.md). Saved under <home>/improve/, never in the repository."""
+    from .digest import write_digest
+    from .settings import settings as studio_settings
+    from .service import Studio
+
+    studio = Studio(studio_settings())
+    rules = {}
+    for u in studio.db.all("SELECT * FROM users WHERE disabled=0"):
+        rules[u["name"]] = [r["text"] for r in studio.profile(u).rules]
+    path, _ = write_digest(studio.db, studio.s.home, days, rules)
+    if show:
+        console.print(escape(path.read_text(encoding="utf-8")))
+    console.print(f"Saved: {escape(str(path))}")
+
+
+@studio_app.command("bench")
+def bench(project: str = typer.Option(None, help="Only this project id")) -> None:
+    """Plan every finished video again with today's code (no AI, no render) and record the numbers next to the git
+    commit and the rating the original got: the check that a change helps (docs/improvement.md)."""
+    from ..config import REPO_ROOT
+    from .bench import run_bench
+    from .service import Studio
+    from .settings import settings as studio_settings
+
+    studio = Studio(studio_settings())
+    table = Table("project", "pace", "shots", "mean s", "<0.5 s", "windows", "mirrored", "hits", "rated")
+    for r in run_bench(studio, REPO_ROOT, project):
+        if "error" in r:
+            console.print(f"[red]{escape(r['project'])}[/] {escape(r['error'])}")
+            continue
+        table.add_row(r["project"], r["pace"], str(r["shots"]), str(r["mean_shot"]), f"{r['under_half_second']:.0%}",
+                      str(r["distinct_windows"]), str(r["mirrored"]), r["hits"] or "-", str(r["rated_liked"]))
+    console.print(table)
+
+
+@studio_app.command("notify")
+def notify(message: str = typer.Argument(..., help="A line for the owner (shown by `studio status`; sent to the phone if an alert address is set)"),
+           kind: str = typer.Option("improve", help="alert kind")) -> None:
+    """Leave the owner a note, e.g. what the daily improvement routine did."""
+    from .alerts import alert
+    from .settings import settings as studio_settings
+    from .service import Studio
+
+    studio = Studio(studio_settings())
+    alert(studio.db, studio.s, kind, message, level="info")
+    console.print("Noted.")
+
+
 @studio_app.command("run")
 def run(clips: Path = typer.Argument(..., help="A folder of clips (only read, never written)"),
         song: Path = typer.Option(None, help="The song to cut on (none: a beat is made for the video)"),
