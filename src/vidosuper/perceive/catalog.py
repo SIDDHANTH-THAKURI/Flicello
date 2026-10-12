@@ -129,8 +129,13 @@ def render_markdown(catalog: dict) -> str:
             lines.append("Avoid: " + "; ".join(bad))
         if a["issues"]:
             lines.append("Issues: " + " ; ".join(a["issues"]))
+        hits = [t for t, _ in (sig or {}).get("impacts", [])]
+        if hits:
+            lines.append("Impact sounds (real hits, to the millisecond): " + ", ".join(f"{t:.2f}" for t in hits))
         for n, m in enumerate(sorted(a["moments"], key=lambda m: m["start"])):
+            inside = [t for t in hits if m["start"] <= t <= m["end"]]
             peak = f" peak {m['peak']:.1f}" if m.get("peak") is not None else ""
+            peak += f" IMPACT at {', '.join(f'{t:.2f}' for t in inside)}" if inside else ""
             notes = f" [{m['notes']}]" if m.get("notes") else ""
             motion = e.get("motion") or []
             moving = f" · {motion[n]}" if n < len(motion) and motion[n] else ""

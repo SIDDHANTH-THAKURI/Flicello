@@ -122,6 +122,7 @@ class ClipFacts:
     avoid: list[tuple[float, float]]  # what the analyst marked unusable (the automatic problem ranges are only
     # hints: the tool already picks the steadiest window inside each moment)
     moments: list[dict]  # sorted by start; moment n is "<short>#<n+1>"
+    impacts: list[float] = field(default_factory=list)  # real hit sounds, seconds into the clip
 
 
 def clip_facts(catalog: dict) -> dict[str, ClipFacts]:
@@ -134,7 +135,8 @@ def clip_facts(catalog: dict) -> dict[str, ClipFacts]:
         clip = e["clip"]
         out[e["short"]] = ClipFacts(e["short"], clip["clip_id"], float(clip["duration"]), float(clip["fps"]),
                                     clip["height"] > clip["width"], avoid,
-                                    sorted(a.get("moments") or [], key=lambda m: m["start"]))
+                                    sorted(a.get("moments") or [], key=lambda m: m["start"]),
+                                    [float(t) for t, _ in (e.get("signals") or {}).get("impacts", [])])
     return out
 
 

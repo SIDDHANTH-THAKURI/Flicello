@@ -462,7 +462,7 @@ def test_a_reused_moment_gets_a_different_punch_in_and_action_defaults_to_the_be
                   PlanShot(kind="cut", beats=6, key="a2"), PlanShot(kind="hold", beats=2, key="b")], pool)
     design = to_design(plan, ctx, "song.mp3", vertical=True)
     first, _, again, last = design.plan
-    assert first.zoom == 1.0 and again.zoom > 1.1 and again.zoom_center != (0.5, 0.5)  # looks different the second time
+    assert first.zoom == 1.0 and 1.0 < again.zoom <= 1.08 and again.zoom_center != (0.5, 0.5)  # a hair different, never a big crop
     assert first.peak_beat == 1.0 and again.peak_beat == 1.0  # the action lands on the shot's second beat
     assert last.peak_beat == 0.0  # a 2-beat shot has no room for a lead-in
 
@@ -603,3 +603,127 @@ def test_a_failed_step_never_shows_our_internals(studio):
     studio.db.enqueue("sample", p["id"], friend["id"], {"pitch": 1})
     studio.run_job(studio.db.claim())
     assert studio.db.project(p["id"])["error"] == "None of the uploaded files could be read as video."  # made for people: shown
+
+
+def test_impacts_are_found_to_the_millisecond_and_steady_noise_is_left_out(tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from vidosuper.perceive.audio_signals import find_impacts
+
+    sr = 48000
+    rng = np.random.default_rng(3)
+    audio = 0.01 * rng.standard_normal(sr * 20).astype(np.float32)  # a quiet room
+    for t in (3.2, 7.77, 12.4, 17.05):  # a bat on a ball: a short loud broadband crack
+        i = int(t * sr)
+        audio[i:i + 600] += (0.8 * rng.standard_normal(600) * np.exp(-np.arange(600) / 120)).astype(np.float32)
+    for t in np.arange(1.0, 19.0, 1.42):  # a steady rattle, much quieter and softer
+        i = int(t * sr)
+        audio[i:i + 400] += (0.05 * rng.standard_normal(400) * np.exp(-np.arange(400) / 200)).astype(np.float32)
+    path = tmp_path / "hits.wav"
+    sf.write(str(path), audio, sr)
+    found = [t for t, _ in find_impacts(path)]
+    assert len(found) == 4 and all(abs(a - b) < 0.006 for a, b in zip(found, (3.2, 7.77, 12.4, 17.05))), found
+    assert find_impacts(tmp_path / "hits.wav", min_sharpness=1e6) == []
+
+
+def test_every_real_hit_becomes_a_moment_or_snaps_the_one_that_covers_it(studio, media, monkeypatch):
+    from vidosuper.perceive import prep as prep_module
+    from vidosuper.perceive.transcribe import Transcript
+    from vidosuper.schemas import ClipAnalysis
+    from vidosuper.studio.pipeline import Pipeline, Workdir, studio_config
+    from vidosuper.workspace import Project
+
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    cfg = studio_config(studio.s.workspace, "ultrafast", studio.s.models_dir)
+    work = Workdir(studio.s.home / "t", clips_dir=media / "clips").ensure()
+    (work.music / "song.wav").write_bytes((media / "music.wav").read_bytes())
+    pipe = Pipeline(work, cfg, None)
+    from vidosuper.studio.brain import make_brain
+
+    pipe.brain = make_brain("local", studio.s, lambda u: None, None, pipe.project.load_signals)
+    pipe.analyse()
+    clip = next(c for c in pipe.project.clips().values() if c.usable and c.duration > 4)
+    sig = pipe.project.load_signals(clip.clip_id)
+    sig.impacts = [(2.0, -12.0), (3.5, -14.0)]  # one inside the existing moments, one outside
+    from vidosuper.workspace import write_model
+
+    write_model(pipe.project.signals_json(clip.clip_id), sig)
+    path = pipe.project.root / "perception" / clip.clip_id / "analysis.json"
+    a = ClipAnalysis.model_validate_json(path.read_text(encoding="utf-8"))
+    a.moments = [m for m in a.moments if not (m.start <= 2.0 <= m.end)][:1] or a.moments
+    a.moments = [m.model_copy(update={"start": 0.2, "end": 1.4, "peak": None}) for m in a.moments[:1]]
+    path.write_text(a.model_dump_json(), encoding="utf-8")
+    added = pipe.enrich_with_impacts(pipe.project, [clip])
+    after = ClipAnalysis.model_validate_json(path.read_text(encoding="utf-8"))
+    peaks = sorted(round(m.peak, 2) for m in after.moments if m.peak is not None)
+    assert added == 2 and 2.0 in peaks and 3.5 in peaks
+    assert all(m.start <= m.peak <= m.end for m in after.moments if m.peak is not None)
+    assert pipe.enrich_with_impacts(pipe.project, [clip]) == 0  # idempotent
+
+
+def test_a_fast_pace_is_enforced_and_hits_may_not_be_left_out():
+    from vidosuper.studio.brain.core import check_plan
+
+    ctx = _ctx()
+    ctx.pace = "fast"
+    ctx.facts["c01"].impacts = [20.0, 30.0, 40.0, 50.0, 60.0]  # nowhere near any pool window
+    shots = [PlanShot(kind="cut", beats=8, key="k1"), PlanShot(kind="cut", beats=8, key="k2"),
+             PlanShot(kind="hit", beats=8, key="k3"), PlanShot(kind="hold", beats=8, key="k4")]
+    problems = " | ".join(check_plan(_plan(shots), ctx))
+    assert "pace was asked to be fast" in problems and "last more than 4 beats" in problems
+    assert "real hits were found" in problems  # five hits in c01, none given a shot
+    ctx.pace = "balanced"
+    assert "pace was asked" not in " | ".join(check_plan(_plan(shots), ctx))
+
+
+def test_reuse_barely_changes_the_framing_and_new_videos_remember_the_pace(studio):
+    from vidosuper.studio.brain.core import to_design
+
+    ctx = _thin_ctx()
+    pool = [PoolMoment(key="a", clip="c01", start=1.0, end=6.0, peak=4.0), PoolMoment(key="a2", clip="c01", start=1.5, end=6.0, peak=4.0),
+            PoolMoment(key="a3", clip="c01", start=1.2, end=6.0, peak=4.0)]
+    plan = _plan([PlanShot(kind="cut", beats=2, key=k) for k in ("a", "a2", "a3")], pool)
+    zooms = [s.zoom for s in to_design(plan, ctx, "song.mp3", vertical=True).plan]
+    assert zooms[0] == 1.0 and max(zooms) <= 1.08  # never the 1.4x crops that hid the hit
+    assert to_design(plan, ctx, "song.mp3", vertical=True).fade_in == 0.5
+    ctx.pace = "fast"
+    assert to_design(plan, ctx, "song.mp3", vertical=True).fade_in == 0.0  # a fast video starts on the picture
+    friend = _friend(studio, "Ned")
+    p = studio.create_project(friend, "x", "9:16", 30, "", "fast")
+    assert studio.db.project(p["id"])["pace"] == "fast"
+    import pytest as _pt
+    from vidosuper.studio.service import ActionError
+    with _pt.raises(ActionError):
+        studio.create_project(friend, "y", "9:16", 30, "", "warp speed")
+
+
+def test_low_resolution_footage_gets_a_heads_up():
+    from vidosuper.studio.pipeline import footage_notes
+
+    catalog = {"clips": [{"clip": {"width": 480, "height": 848}, "signals": {"brightness_mean": 120},
+                          "analysis": {"moments": [{"strength": 7}] * 6}}]}
+    notes = footage_notes(catalog)
+    assert len(notes) == 1 and "480x848" in notes[0] and "soft" in notes[0]
+
+
+def test_shots_the_renderer_finds_too_short_are_folded_away_and_the_edl_validates(ingested, media):
+    from vidosuper.edit import validate_edl
+    from vidosuper.schemas import MusicSpec, Transition
+    from vidosuper.studio.pipeline import Pipeline, Workdir, fold_slots, studio_config
+    from vidosuper.template import Slot, Template
+
+    project, clips, _ = ingested
+    a = sorted(c.clip_id for c in clips.values() if c.duration >= 4)[0]
+    # five-sixths of a frame shorter than the renderer's minimum once a dissolve takes its frames
+    bounds = [0.0, 1.0, 1.2, 2.2, 3.4]
+    slots = [Slot(id=f"s{i + 1:02d}", start=x, end=y, clip=a, src_in=0.0,
+                  transition_in=Transition(type="dissolve", duration=0.3) if i else Transition())
+             for i, (x, y) in enumerate(zip(bounds, bounds[1:]))]
+    t = Template(name="t", music=MusicSpec(path=str(media / "music.wav"), start=0.0), slots=slots)
+    pipe = Pipeline(Workdir(project.root / "w", clips_dir=media / "clips").ensure(), project.cfg, None)
+    edl, healed = pipe.edl_for(t, 1080, 1920)
+    problems = [i for i in validate_edl(edl, project.clips(), repair=False) if i.level == "error"]
+    assert not problems and healed.slots[-1].end == 3.4  # the same length
+    folded = fold_slots(t, {"s02"})
+    assert [s.id for s in folded.slots] == ["s01", "s03", "s04"] and folded.slots[0].end == 1.2

@@ -153,10 +153,11 @@ class _Footage:
         The logged peak comes from contact sheets half a second apart; this is what makes an impact land on a beat."""
         clip = self.clip(short)
         sig = self.project.load_signals(clip.clip_id)
-        if sig is not None and sig.audio_peaks:
-            near = [p for p in sig.audio_peaks if abs(p - peak) <= reach]
-            if near:
-                return float(min(near, key=lambda p: abs(p - peak))), "sound"
+        if sig is not None:
+            for found in ([t for t, _ in sig.impacts], sig.audio_peaks):  # the millisecond impacts first, then the coarse ones
+                near = [p for p in found if abs(p - peak) <= reach]
+                if near:
+                    return float(min(near, key=lambda p: abs(p - peak))), "sound"
         if motion:
             t, _, energy = self.signals(short)
             w = (t >= peak - 0.5) & (t <= peak + 0.5)

@@ -67,3 +67,22 @@ def test_a_punch_in_and_the_sound_of_the_impact_reach_the_template(ingested, med
     template = build_template(design, project)
     assert template.slots[0].zoom == 1.3 and tuple(template.slots[0].zoom_center) == (0.3, 0.5)
     assert any(layer.source.startswith("clip:") and layer.duration == 0.5 for layer in template.sounds)
+
+
+def test_the_exact_impact_beats_the_coarse_sound_peak(ingested):
+    from vidosuper.design import _Footage
+    from vidosuper.workspace import write_model
+
+    project, clips, _ = ingested
+    clip = next(c for c in clips.values() if c.duration >= 4)
+    sig = project.load_signals(clip.clip_id)
+    old = (list(sig.audio_peaks), list(sig.impacts))
+    sig.audio_peaks, sig.impacts = [2.1], [(2.003, -12.0)]  # the 100 ms window said 2.1; the real crack is at 2.003
+    write_model(project.signals_json(clip.clip_id), sig)
+    try:
+        foot = _Footage(project)
+        short = next(k for k, v in foot.shorts.items() if v == clip.clip_id) if foot.shorts else clip.clip_id
+        assert abs(foot.refine_peak(short, 1.8)[0] - 2.003) < 1e-6
+    finally:
+        sig.audio_peaks, sig.impacts = old
+        write_model(project.signals_json(clip.clip_id), sig)

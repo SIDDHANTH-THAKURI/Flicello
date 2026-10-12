@@ -96,19 +96,21 @@ class Studio:
             raise ActionError("No such video.")
         return p
 
-    def create_project(self, user: dict, title: str, shapes: str, length: float, intent: str) -> dict:
+    def create_project(self, user: dict, title: str, shapes: str, length: float, intent: str, pace: str = "balanced") -> dict:
         if (left := self.videos_left(user)) is not None and left <= 0:
             raise ActionError("You've used all your videos for this trial. Thank you!")
         if shapes not in ("9:16", "16:9", "both"):
             raise ActionError("Pick a shape.")
         if int(length) not in LENGTHS:
             raise ActionError("Pick a length.")
+        if pace not in ("calm", "balanced", "fast"):
+            raise ActionError("Pick how fast it should cut.")
         pid = "p" + secrets.token_hex(6)
         now = time.time()
         title = " ".join(title.split())[:60] or time.strftime("My video, %d %b")
-        self.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated) "
-                    "VALUES (?,?,?,?,?,?,'setup',?,?)", (pid, user["id"], title, shapes, float(length),
-                                                         " ".join(intent.split())[:600], now, now))
+        self.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated, pace) "
+                    "VALUES (?,?,?,?,?,?,'setup',?,?,?)", (pid, user["id"], title, shapes, float(length),
+                                                           " ".join(intent.split())[:600], now, now, pace))
         workdir(self.s, user["id"], pid).ensure()
         return self.db.project(pid)
 
@@ -310,7 +312,8 @@ class Studio:
         return pipe
 
     def _context(self, pipe: Pipeline, project: dict, user: dict):
-        return pipe.context(self.shapes(project), project["length"], project["intent"], self.profile(user).rules)
+        return pipe.context(self.shapes(project), project["length"], project["intent"], self.profile(user).rules,
+                            project["pace"])
 
     def run_job(self, job: dict) -> None:
         project = self.db.project(job["project_id"]) if job["project_id"] else None

@@ -24,6 +24,14 @@
         {% for n in LENGTHS %}<label class="chip"><input type="radio" name="length" value="{{ n }}" {% if n == 30 %}checked{% endif %}><span>{{ n }} s</span></label>{% endfor %}
       </div>
     </fieldset>
+    <fieldset>
+      <legend>How should it cut?</legend>
+      <div class="chips">
+        <label class="chip"><input type="radio" name="pace" value="calm" {% if default_pace == 'calm' %}checked{% endif %}><span>Calm and cinematic</span></label>
+        <label class="chip"><input type="radio" name="pace" value="balanced" {% if default_pace not in ('calm', 'fast') %}checked{% endif %}><span>A mix</span></label>
+        <label class="chip"><input type="radio" name="pace" value="fast" {% if default_pace == 'fast' %}checked{% endif %}><span>Fast cuts on the beat</span></label>
+      </div>
+    </fieldset>
     <label>What's it about? <span class="muted">(optional: leave empty to be surprised)</span>
       <textarea name="intent" rows="3" maxlength="600" placeholder="A lazy Sunday at the beach with my dog. Make it feel warm and funny."></textarea></label>
     <button class="btn primary" type="submit">Next: add clips</button>

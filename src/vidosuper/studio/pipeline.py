@@ -26,15 +26,16 @@ import cv2
 
 from ..config import Config, load_config
 from ..design import Design, build_template
+from ..edit import validate_edl
 from ..ingest import ingest_folder
 from ..music import load_or_analyze
 from ..music.analysis import MusicAnalysis
 from ..perceive import measure_project
 from ..perceive.catalog import build_catalog, check_analysis as catalog_check
-from ..perceive.prep import analysis_path, prepare_perception
+from ..perceive.prep import analysis_path, load_transcript, prepare_perception
 from ..qa import run_checks
 from ..render import render_edl
-from ..schemas import Transition
+from ..schemas import ClipAnalysis, Moment, Transition
 from ..template import Template, autofill
 from ..workspace import Project, write_text_atomic
 from .brain.context import beat_map, clip_facts, load_catalog, moment_by_id
@@ -155,6 +156,8 @@ class Pipeline:
             self.progress(0.35, f"Watching {len(todo)} clip{'s' if len(todo) > 1 else ''}")
             with ThreadPoolExecutor(max_workers=max(1, getattr(self.brain, "parallel", 1))) as pool:
                 list(pool.map(watch, todo))  # the first failure (or a spending cap) stops the step
+        self.progress(0.86, "Listening for hits")
+        self.enrich_with_impacts(project, usable)
         self.progress(0.88, "Making the catalog")
         catalog = build_catalog(project)
         self.progress(0.93, "Listening to the song")
@@ -165,17 +168,50 @@ class Pipeline:
                 "analysed": sum(1 for e in catalog["clips"] if e["analysis"]), "song_seconds": round(song.duration, 1),
                 "tempo": round(song.tempo, 1), "seconds": round(time.monotonic() - t0, 1)}
 
+    def enrich_with_impacts(self, project: Project, clips: list) -> int:
+        """Every real hit sound in a clip (a bat meeting a ball, a clap, a splash: found to the millisecond from its own
+        audio) becomes a moment that is centred on it, or snaps the peak of the moment that already covers it. The
+        picture-only log can't tell where the hit really is (its frames are half a second apart); the sound can."""
+        added = 0
+        for clip in clips:
+            path = analysis_path(project, clip.clip_id)
+            sig = project.load_signals(clip.clip_id)
+            if not path.exists() or sig is None or not sig.impacts:
+                continue
+            analysis = ClipAnalysis.model_validate_json(path.read_text(encoding="utf-8"))
+            speech = [(u.start - 0.1, u.end + 0.1) for u in (getattr(load_transcript(project, clip.clip_id), "utterances", None) or [])]
+            changed = False
+            for t, _db in sig.impacts:
+                if any(a <= t <= b for a, b in speech):  # a hard consonant, not a hit
+                    continue
+                cover = next((m for m in analysis.moments if m.start - 0.05 <= t <= m.end + 0.05), None)
+                if cover is not None:
+                    if cover.peak is None or abs(cover.peak - t) > 0.12:
+                        cover.peak = round(min(cover.end, max(cover.start, t)), 3)
+                        changed = True
+                    continue
+                analysis.moments.append(Moment(
+                    start=round(max(0.0, t - 1.4), 2), end=round(min(clip.duration, t + 1.0), 2), peak=round(t, 3),
+                    kind="action", description=f"A sharp hit sound at {t:.1f} s (found from the clip's own audio)", hook=7,
+                    strength=6, best_use="highlight", sound="keep", notes="found from the sound"))
+                added += 1
+                changed = True
+            if changed:
+                analysis.moments.sort(key=lambda m: m.start)
+                write_text_atomic(path, analysis.model_dump_json(indent=1))
+        return added
+
     def song(self) -> MusicAnalysis:
         path = self.work.song_path()
         if path is None:
             raise UserError("No song yet: upload one first.")
         return load_or_analyze(path, self.project.music)
 
-    def context(self, shapes: list[str], length: float, intent: str, rules: list[dict]) -> StoryContext:
+    def context(self, shapes: list[str], length: float, intent: str, rules: list[dict], pace: str = "balanced") -> StoryContext:
         catalog = load_catalog(self.project.root)
         song = self.song()
         ctx = StoryContext(catalog=catalog, facts=clip_facts(catalog), song=song, beats=beat_map(song, length),
-                           shapes=shapes, intent=intent, rules=rules)
+                           shapes=shapes, intent=intent, rules=rules, pace=pace)
         good = sum(1 for f in ctx.facts.values() for m in f.moments if m["strength"] >= 4)
         ctx.allow_reuse = good < -(-ctx.beats.target // 4)  # fewer good moments than a shot every 4 beats: reuse them
         ctx.reuse_if_asked(intent, *[r["text"] for r in rules])
@@ -228,6 +264,21 @@ class Pipeline:
         design = to_design(plan, ctx, str(self.work.song_path()), vertical=shape == "9:16", look=look)
         return design, heal_template(build_template(design, self.project))
 
+    def edl_for(self, template: Template, width: int, height: int):
+        """The EDL for a template that the renderer will accept: a shot the renderer finds too short on screen (frames
+        taken by its transitions, rounding at the cut) is folded into its neighbour and the EDL rebuilt, until none is.
+        The person never hears about it."""
+        for _ in range(8):
+            edl = autofill(template, self.project, width=width, height=height)
+            clips = self.project.clips()
+            signals = {cid: s for cid in clips if (s := self.project.load_signals(cid)) is not None}
+            short = {i.segment for i in validate_edl(edl, clips, signals, repair=False)
+                     if i.level == "error" and "shot is only" in i.message and i.segment}
+            if not short or len(template.slots) <= 1:
+                break
+            template = fold_slots(template, short)
+        return edl, template
+
     def sample(self, ctx: StoryContext, plan: DesignPlan, shape: str, name: str, look: str = "vivid") -> RenderInfo:
         """About 8 seconds at draft quality: through the drop if there is one early enough, else the opening."""
         self.progress(0.3, "Cutting a short sample")
@@ -238,7 +289,7 @@ class Pipeline:
             start = max(0.0, hits[0].start - SAMPLE_SECONDS * 0.55)
         part = heal_template(slice_template(template, start, start + SAMPLE_SECONDS))
         w, h = SHAPES[shape]
-        edl = autofill(part, self.project, width=w, height=h)
+        edl, _ = self.edl_for(part, w, h)
         edl.meta.true_peak_db = -2.3  # the AAC encode overshoots the limiter by up to ~0.9 dB
         t0 = time.monotonic()
         result = render_edl(edl, self.project, self.cfg, quality="draft", out_path=self.work.out / f"{name}.mp4")
@@ -252,7 +303,7 @@ class Pipeline:
             self.progress(base + 0.05 * span, f"Rendering the {shape} video")
             _, template = self._template(ctx, plan, shape, look)
             w, h = SHAPES[shape]
-            edl = autofill(template, self.project, width=w, height=h)
+            edl, _ = self.edl_for(template, w, h)
             edl.meta.true_peak_db = -2.3
             name = f"v{version}-{shape.replace(':', 'x')}"
             (self.work.out / f"{name}.edl.json").write_text(edl.model_dump_json(indent=1), encoding="utf-8")
@@ -281,6 +332,10 @@ def footage_notes(catalog: dict) -> list[str]:
     if sigs and sum(s["brightness_mean"] for s in sigs) / len(sigs) < 75:
         notes.append("Your footage is quite dark. It will be brightened, but footage shot in better light always looks "
                      "better.")
+    small = [e for e in catalog["clips"] if e.get("clip") and min(e["clip"]["width"], e["clip"]["height"]) < 700]
+    if small:
+        notes.append(f"{len(small)} of your clips are low resolution (for example {small[0]['clip']['width']}x"
+                     f"{small[0]['clip']['height']}), so they will look soft once enlarged. Filming in 1080p or 4K helps a lot.")
     moments = [m for e in catalog["clips"] if e.get("analysis") for m in e["analysis"]["moments"] if m["strength"] >= 5]
     if len(moments) < 4:
         notes.append("There are only a few strong moments in these clips, so the video may reuse some of them (cut "
@@ -301,6 +356,21 @@ def _studio_level(f: dict) -> dict:
 
 
 MIN_SHOT = 0.21  # seconds on screen; the renderer refuses anything under 0.2 (a stutter piece of 0.22 s is fine)
+
+
+def fold_slots(t: Template, ids: set[str]) -> Template:
+    """Fold the named shots into their neighbours (the one before, or the next for the first), keeping the timeline."""
+    slots = [x.model_copy() for x in t.slots]
+    for sid in ids:
+        i = next((k for k, x in enumerate(slots) if x.id == sid), None)
+        if i is None or len(slots) <= 1:
+            continue
+        if i > 0:
+            slots[i - 1] = slots[i - 1].model_copy(update={"end": slots[i].end})
+        else:
+            slots[1] = slots[1].model_copy(update={"start": slots[0].start, "transition_in": Transition()})
+        del slots[i]
+    return t.model_copy(update={"slots": slots})
 
 
 def heal_template(t: Template, minimum: float = MIN_SHOT) -> Template:

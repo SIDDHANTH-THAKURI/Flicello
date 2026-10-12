@@ -42,6 +42,7 @@ class StoryContext:
     intent: str
     rules: list[dict]  # the person's style rules: {"id", "text", ...}
     allow_reuse: bool = False  # thin footage, or the person said repeats are fine: a moment may come back, made to look different
+    pace: str = "balanced"  # calm | balanced | fast: how quickly the video cuts
 
     def reuse_if_asked(self, *texts: str) -> None:
         if any(REUSE_WORDS.search(t or "") for t in texts):
@@ -56,11 +57,38 @@ class StoryContext:
             "# Their request\n" + (self.intent.strip() or "(nothing specific: surprise them)"),
             f"# Shape and length\n{shape}; about {self.beats.seconds:.0f} seconds.",
             "# The song, in beats\n" + self.beats.text(self.song),
+            self.pace_text(),
             *(["# Reusing footage\nThe footage is thin or the person said repeats are fine: you may use a moment more than "
-               "once, but each time it must look different (another part of the moment, a different punch-in "
-               "zoom/centre, a different speed), with at least two other shots between, so the repeat is never obvious."]
+               "once, but each time it must look different (another part of the moment, another swing or take, a different "
+               "speed), with at least two other shots between, so the repeat is never obvious. Never zoom in to hide a "
+               "repeat: the viewer must see the whole action."]
               if self.allow_reuse else []),
+            *self.impact_text(),
         ])
+
+    def pace_text(self) -> str:
+        per_beat = self.beats.period
+        return {
+            "fast": f"# Pace: FAST\nThe person wants fast cuts that follow the beat. Aim for shots of 1-2 beats "
+                    f"({per_beat:.2f}-{2 * per_beat:.2f} s); never more than 4 beats except one deliberate breath (a hold) "
+                    "and the shot on the drop. Hard cuts only; no dissolves or whips. Average shot well under 2.5 beats.",
+            "calm": "# Pace: CALM\nThe person wants a relaxed, cinematic pace: shots of 4-8 beats, long holds, dissolves "
+                    "where the music breathes; fast cuts only at the drop.",
+        }.get(self.pace, "# Pace: BALANCED\nA mix: mostly 2-4 beat shots, bursts of 1-beat cuts at the peak, a hold where "
+                         "the music breathes.")
+
+    def impact_text(self) -> list[str]:
+        lines = []
+        for short, f in self.facts.items():
+            if f.impacts:
+                lines.append(f"- {short}: " + ", ".join(f"{t:.2f}" for t in f.impacts) + " s")
+        if not lines:
+            return []
+        return ["# Real hits in the footage (found from the clips' own sound, to the millisecond)\n" + "\n".join(lines) +
+                "\nThese are the heroes: a bat meeting a ball, a clap, a slam, a splash. Give every hit its own shot, "
+                "once (set `peak` on the pool entry to the hit's time): the tool lands each exactly on a beat and keeps its "
+                "real sound. Spread them through the video and put the loudest one on the drop. Fill the beats between the "
+                "hits with the clip's other action, kept short. Frame wide enough to see the whole action."]
 
 
 # ---------------------------------------------------------------- checks shared by both brains
@@ -211,6 +239,26 @@ def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
             if s.kind != "stutter" and secs > limit:
                 problems.append(f"shot {i + 1} lasts {secs:.1f}s; keep shots under {limit:g}s "
                                 f"({int(limit / beats.period)} beats) - split it or move on")
+    hits = [(short, t) for short, f in facts.items() for t in f.impacts]
+    if hits and plan.plan:  # real hits are the heroes: don't leave them out for repeats
+        used = [(short, t) for short, t in hits if any(m.clip == short and m.start - 0.05 <= t <= m.end + 0.05 for m in plan.pool)]
+        need = math.ceil(0.8 * min(len(hits), len(plan.plan)))
+        if len(used) < need:
+            left = [f"{short} at {t:.2f}" for short, t in hits if (short, t) not in used][:6]
+            problems.append(f"{len(hits)} real hits were found in the footage but the plan uses only {len(used)}: give "
+                            f"each hit its own shot (pool window around it, `peak` = its time). Unused: {', '.join(left)}")
+    if ctx.pace == "fast" and plan.plan:
+        lengths = [s.beats * (s.count if s.kind == "stutter" else 1) for s in plan.plan]
+        mean = sum(lengths) / len(lengths)
+        if mean > 2.6:
+            problems.append(f"the pace was asked to be fast but the shots average {mean:.1f} beats: make most shots 1-2 "
+                            "beats (fewer than 4 beats except one breath and the drop)")
+        long_cuts = [i + 1 for i, s in enumerate(plan.plan) if s.kind == "cut" and s.beats > 4]
+        if long_cuts:
+            problems.append(f"fast pace: shots {', '.join(map(str, long_cuts[:6]))} last more than 4 beats; split them")
+        slow = [i + 1 for i, s in enumerate(plan.plan) if s.transition not in ("cut",) and i > 0 and s.kind != "hold"]
+        if len(slow) > 1:
+            problems.append("fast pace: use hard cuts (no dissolves or whips) except at most one for the breath")
     if ctx.allow_reuse:
         for k, idx in uses.items():
             close = [(a, b) for a, b in zip(idx, idx[1:]) if b - a < 3]
@@ -260,12 +308,13 @@ def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: boo
         reuses = sum(1 for w in seen if _overlap(w, m) > 0.5)
         seen.append(m)
         zoom, center = 1.0, (0.5, 0.5)
-        if reuses:
-            zoom = min(1.8, 1.2 + 0.18 * (reuses - 1) + (0.1 if reuses % 2 == 0 else 0.0))
-            center = ((0.34, 0.45), (0.66, 0.45), (0.5, 0.6), (0.5, 0.35))[(reuses - 1) % 4]
+        if reuses:  # barely: the viewer must still see the whole action (a bigger crop hid the hit and blurred a small clip)
+            zoom = round(1.0 + min(0.08, 0.03 * reuses), 3)
+            center = ((0.45, 0.5), (0.55, 0.5))[(reuses - 1) % 2]
         shots.append(Shot(kind=kind, beats=s.beats, key=s.key, count=s.count if kind == "stutter" else 1, speed=speed,
                           transition=tr, frame=frame, peak_beat=peak_beat, zoom=zoom, zoom_center=center))
     return Design(name=plan.name, song=song_path, look=look, stabilize=True, intro=None, sound_design=True,
+                  fade_in=0.0 if ctx.pace == "fast" else 0.5,
                   vertical=vertical, pool={k: PoolEntry(clip=m.clip, start=m.start, end=m.end, peak=m.peak)
                                            for k, m in pool.items()}, plan=shots)
 

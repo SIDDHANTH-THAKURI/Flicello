@@ -119,6 +119,8 @@ class ClipSignals(BaseModel):
     best_windows: list[Window] = Field(default_factory=list)
     scene_changes: list[float] = Field(default_factory=list)
     audio_peaks: list[float] = Field(default_factory=list)
+    impacts: list[tuple[float, float]] = Field(default_factory=list, description=(
+        "Sharp loud sounds, to the millisecond (a bat or ball hit, a clap, a slam): (seconds, dB level)."))
 
 
 # ---------------------------------------------------------------------------

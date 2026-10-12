@@ -260,17 +260,19 @@ def create_app(studio: Studio) -> FastAPI:
     @app.get("/new", response_class=HTMLResponse)
     def new_page(request: Request):
         user, sess = need_user(request)
-        return page(request, "new.html", user, sess, left=studio.videos_left(user))
+        return page(request, "new.html", user, sess, left=studio.videos_left(user),
+                    default_pace=studio.profile(user).answers.get("pace", "balanced"))
 
     @app.post("/new")
     def new_post(request: Request, csrf: str = Form(""), title: str = Form(""), shapes: str = Form("9:16"),
-                 length: int = Form(30), intent: str = Form("")):
+                 length: int = Form(30), intent: str = Form(""), pace: str = Form("balanced")):
         user, sess = need_user(request)
         check_csrf(sess, csrf)
         try:
-            project = studio.create_project(user, title, shapes, length, intent)
+            project = studio.create_project(user, title, shapes, length, intent, pace)
         except ActionError as exc:
-            return page(request, "new.html", user, sess, left=studio.videos_left(user), error=str(exc))
+            return page(request, "new.html", user, sess, left=studio.videos_left(user), error=str(exc),
+                        default_pace=pace)
         return back(f"/p/{project['id']}")
 
     def owned(user: dict, pid: str) -> dict:

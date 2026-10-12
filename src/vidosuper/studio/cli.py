@@ -111,6 +111,7 @@ def run(clips: Path = typer.Argument(..., help="A folder of clips (only read, ne
         shape: str = typer.Option("9:16", help="9:16, 16:9 or both"),
         length: float = typer.Option(30.0, help="Seconds"),
         intent: str = typer.Option("", help="What the video should be about (optional)"),
+        pace: str = typer.Option("balanced", help="calm | balanced | fast: how quickly it cuts"),
         brain: str = typer.Option("local", help="local | claude_code | api"),
         pick: int = typer.Option(1, help="Which of the three pitches to make"),
         out: Path = typer.Option(None, help="Working folder (default: a new one under the studio home)"),
@@ -153,7 +154,7 @@ def run(clips: Path = typer.Argument(..., help="A folder of clips (only read, ne
 
     info = stage("analyse", pipeline.analyse)
     console.print(escape(json.dumps(info)))
-    ctx = pipeline.context(shapes, length, intent, rules)
+    ctx = pipeline.context(shapes, length, intent, rules, pace)
     console.print(escape(ctx.beats.text(ctx.song)))
     pitches = stage("pitch", lambda: pipeline.pitch(ctx))
     for i, p in enumerate(pitches, 1):

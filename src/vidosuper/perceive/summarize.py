@@ -15,10 +15,10 @@ from scipy.ndimage import uniform_filter1d
 from ..config import Config
 from ..schemas import ClipInfo, ClipSignals, Interval, Window
 from ..workspace import Project, write_model
-from .audio_signals import AudioSeries, audio_peaks, measure_audio
+from .audio_signals import AudioSeries, audio_peaks, find_impacts, measure_audio
 from .video_signals import VideoSeries, measure_video
 
-SIGNALS_VERSION = 6
+SIGNALS_VERSION = 7  # 7: impact sounds found to the millisecond
 
 # Camera shake: RMS jitter velocity, fraction of the frame diagonal per second.
 SHAKE_OK, SHAKE_BAD = 0.05, 0.25
@@ -167,6 +167,7 @@ def measure_clip(clip: ClipInfo, project: Project, cfg: Config) -> ClipSignals:
     fs = series.sample_fps
     audio = measure_audio(clip.audio_wav16k) if clip.audio_wav16k else None
     peaks = audio_peaks(audio) if audio is not None else []
+    impacts = find_impacts(clip.audio_wav or clip.audio_wav16k) if (clip.audio_wav or clip.audio_wav16k) else []
     shake, pan = (np.nan_to_num(a, nan=0.0, posinf=0.0, neginf=0.0) for a in camera_shake(series))
     q, penalties = quality_curve(series, shake)
     q = np.nan_to_num(q, nan=0.0)  # an unmeasurable sample counts as bad, never as NaN in the cache
@@ -203,6 +204,7 @@ def measure_clip(clip: ClipInfo, project: Project, cfg: Config) -> ClipSignals:
         best_windows=windows,
         scene_changes=scene_changes(series.t, series.cut),
         audio_peaks=peaks,
+        impacts=impacts,
     )
     write_model(project.signals_json(clip.clip_id), summary)
     return summary

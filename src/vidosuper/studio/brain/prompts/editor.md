@@ -40,9 +40,14 @@ Rules:
   into the shot: usually 1 or 2, so there is a lead-in and then the hit on the beat; leave it empty and it is the second
   beat. Give action moments the right length so the lead-in fits inside the moment, and set `peak` on the pool entry.
   The person who films sport or dance cares most about this: their action should hit the music.
+- **Real hits first**: when the footage lists real hits (a bat meeting a ball, a clap, a splash, found from the clips' own
+  sound), each one is a hero shot: its own shot, used once, with `peak` set to its time. Don't invent moments to repeat
+  while real hits sit unused. Frame wide: never crop in to the point that the action is cut off or unclear.
+- **Pace**: follow the pace the request header names (fast: 1-2 beat shots and hard cuts; calm: long holds). A person
+  who asked for fast cuts is watching the clock: don't give them 4-8 beat shots.
 - **Reusing footage** (only when told it is allowed): the same moment may come back as another pool entry or the same key,
-  with at least two shots between. The tool makes each reuse look different (a punch-in on another part of the frame),
-  so choose a different part of the moment for it where you can.
+  with at least two shots between. Make each reuse a different part of the moment (another swing, another second); the
+  tool only shifts the framing a hair. Never zoom in to hide a repeat.
 - **Pacing**: the first shot ends by 4.5 s and grabs within 2 s (the strongest image, never a slow
   establishing shot); no shot runs past 7 s (the closing shot may hold to 9 s). Short videos lose viewers
   in long openings.
