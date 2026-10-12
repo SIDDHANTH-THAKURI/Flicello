@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% from "_logo.html" import mark %}
 {% block title %}Welcome · {{ app_name }}{% endblock %}
 {% block content %}
 <section class="card narrow">
-  <h1>Welcome{% if invite.label %}, {{ invite.label }}{% endif %}!</h1>
+  <div class="hero">{{ mark("hero-mark") }}<h1>Welcome{% if invite.label %}, {{ invite.label }}{% endif %}!</h1><p>Your clips. One story. On the beat.</p></div>
   <p>You upload clips and a song; the studio pitches story ideas, cuts a short sample for you to check, and
      then makes the finished video for Reels, Shorts or YouTube. Rate it, and it learns your style.</p>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}

@@ -1,0 +1,19 @@
+{# The Flicello mark: three beat bars rising into a play triangle. `bare` leaves out the coloured tile (the intro draws its own). #}
+{% macro mark(cls="", bare=false) -%}
+<svg class="{{ cls }}" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  {% if not bare %}
+  <defs>
+    <linearGradient id="fl-bg-{{ cls|replace(' ', '-') }}" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffa24a"/><stop offset="0.55" stop-color="#ff4f8b"/><stop offset="1" stop-color="#7a5cff"/>
+    </linearGradient>
+  </defs>
+  <rect class="tile" width="64" height="64" rx="17" fill="url(#fl-bg-{{ cls|replace(' ', '-') }})"/>
+  {% endif %}
+  <g fill="#fff">
+    <rect class="b1" x="10" y="33" width="6" height="14" rx="3" fill-opacity="0.6"/>
+    <rect class="b2" x="19" y="25" width="6" height="22" rx="3" fill-opacity="0.8"/>
+    <rect class="b3" x="28" y="17" width="6" height="30" rx="3"/>
+    <path class="tri" d="M41 18 L41 46 L56 32 Z" stroke="#fff" stroke-width="4" stroke-linejoin="round"/>
+  </g>
+</svg>
+{%- endmacro %}

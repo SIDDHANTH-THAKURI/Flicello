@@ -121,15 +121,20 @@ def login(db: DB, s: StudioSettings, name: str, password: str, ip: str, device: 
     user = db.one("SELECT * FROM users WHERE name=?", (" ".join(name.split()),))
     known = _known_device(db, device, user["id"] if user else None)
     keys = [f"dev:{known}"] if known else [f"user:{name.strip().lower()}"]
-    if not known and ip not in ("127.0.0.1", "::1", "?"):  # behind `tailscale serve` everyone arrives from loopback
-        keys.append(f"ip:{ip}")
+    unknown_ip = ip in ("127.0.0.1", "::1", "?")  # a proxy that didn't say who called: no per-address limit possible
+    if not known:
+        if not unknown_ip:
+            keys.append(f"ip:{ip}")
+        # a spray of guesses across many accounts and addresses: slow everyone but known browsers
+        if _limited(db, ["all"], s.limits.login_attempts * 12):
+            raise AccountError("Too many tries from everywhere right now. Wait a few minutes and try again.")
     if _limited(db, keys, s.limits.login_attempts):
         raise AccountError("Too many tries. Wait 15 minutes and try again.")
     ok = user is not None and not user["disabled"] and verify_password(password, user["pw"])
     if not ok:
         if user is None:
             verify_password(password, "scrypt$32768$8$1$00$00")  # same work either way: no name probing by timing
-        for k in keys:
+        for k in keys + ([] if known else ["all"]):
             db.run("INSERT INTO attempts(key, at) VALUES (?,?)", (k, time.time()))
         raise AccountError("That name and password don't match.")
     return user, new_session(db, s, user["id"], ip)

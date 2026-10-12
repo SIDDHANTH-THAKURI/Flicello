@@ -1,3 +1,4 @@
+{% from "_logo.html" import mark %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -5,14 +6,29 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="csrf" content="{{ csrf }}">
   <meta name="theme-color" content="#111115">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="{{ app_name }}">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <script src="/static/intro.js"></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body{% block body_attrs %}{% endblock %}>
+  <div id="intro" aria-hidden="true">
+    <div class="intro-stage">
+      {{ mark("intro-mark", bare=true) }}
+      <div class="intro-word"><span>F</span><span>l</span><span>i</span><span>c</span><span>e</span><span>l</span><span>l</span><span>o</span></div>
+      <div class="intro-line"></div>
+      <p class="intro-tag">Your clips. One story. On the beat.</p>
+    </div>
+    <button type="button" class="intro-skip" id="intro-skip">Skip</button>
+  </div>
   <header class="top">
-    <a class="brand" href="/"><span class="logo"></span>{{ app_name }}</a>
+    <a class="brand" href="/">{{ mark("logo") }}<span class="brand-name">{{ app_name }}</span></a>
     {% if user %}
     <nav>
       <a href="/">My videos</a>
@@ -29,6 +45,9 @@
     {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
     {% block content %}{% endblock %}
   </main>
-  <footer class="foot">Your clips stay private to you and are deleted after a while. We never train anything on your footage.</footer>
+  <footer class="foot">
+    <span>{{ app_name }} · your clips stay private to you and are deleted after a while. We never train anything on your footage.</span>
+    <button type="button" class="link" id="intro-replay">Watch the intro</button>
+  </footer>
 </body>
 </html>

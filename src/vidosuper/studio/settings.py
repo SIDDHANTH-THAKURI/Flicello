@@ -69,7 +69,7 @@ def price_for(model: str) -> tuple[float, float, float, float]:
 
 class StudioSettings(_Strict):
     home: Path
-    name: str = "VidoSuper Studio"
+    name: str = "Flicello"
     brain: BrainKind = Field("api", description="The brain for invited people's videos.")
     owner_brain: BrainKind = Field("claude_code", description="The brain for the owner's own videos (their Claude plan).")
     models: Models = Field(default_factory=Models)

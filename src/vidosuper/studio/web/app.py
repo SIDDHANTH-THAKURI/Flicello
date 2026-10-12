@@ -12,14 +12,16 @@ Security in one place:
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import mimetypes
 import re
 import secrets
 import time
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -32,6 +34,7 @@ from ..storage import UploadError, finish_upload, safe_child, start_upload, work
 
 HERE = Path(__file__).parent
 COOKIE = "vs_session"
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 DEVICE = "vs_device"  # a browser the person has signed in from before (login throttling)
 MOMENT_ID = re.compile(r"\(?\b[cC]\d{2,3}#\d+\b\)?:?\s*")  # catalog ids like c04#1 mean nothing to people
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; "
@@ -67,6 +70,10 @@ def create_app(studio: Studio) -> FastAPI:
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"  # private: keep out of search engines
+        if s.https:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         if request.url.path.startswith(("/m/", "/api/")) or "text/html" in response.headers.get("content-type", ""):
             response.headers.setdefault("Cache-Control", "no-store")
         return response
@@ -93,7 +100,16 @@ def create_app(studio: Studio) -> FastAPI:
                                                                   "user": None}, status_code=500)
 
     def client_ip(request: Request) -> str:
-        return request.client.host if request.client else "?"
+        """The caller's address. Only our own proxy (tailscale serve/funnel) connects from loopback, so only then is
+        its X-Forwarded-For believed (its last entry: the one the proxy itself added)."""
+        peer = request.client.host if request.client else "?"
+        if peer in ("127.0.0.1", "::1"):
+            forwarded = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()
+            try:
+                return str(ipaddress.ip_address(forwarded))
+            except ValueError:
+                return peer
+        return peer
 
     def current(request: Request) -> tuple[dict, dict] | None:
         return accounts.session_user(studio.db, request.cookies.get(COOKIE))
@@ -137,6 +153,10 @@ def create_app(studio: Studio) -> FastAPI:
             return
         resp.set_cookie(DEVICE, accounts.new_device(studio.db, user_id), max_age=365 * 86400, httponly=True,
                         samesite="strict", secure=s.https, path="/")
+
+    @app.get("/robots.txt", response_class=PlainTextResponse)
+    def robots():
+        return "User-agent: *\nDisallow: /\n"
 
     # ------------------------------------------------------------------ health (no login, no details)
     @app.get("/healthz")

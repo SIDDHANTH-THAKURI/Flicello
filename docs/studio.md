@@ -1,4 +1,4 @@
-# VidoSuper Studio: running the friends trial
+# Flicello: running the friends trial
 
 The studio is a website on your own PC. Invited friends upload clips and a song, pick one of three story
 ideas, check an 8-second sample, and get the finished video in 9:16 and/or 16:9. They rate it, and the

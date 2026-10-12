@@ -142,3 +142,31 @@
     });
   }
 })();
+
+// the intro: skip, auto-finish after 5 s, replay from the footer (remembered per browser session)
+(function () {
+  "use strict";
+  var root = document.documentElement;
+  var intro = document.getElementById("intro");
+  if (!intro) return;
+  var timer = null;
+  function finish() {
+    clearTimeout(timer);
+    root.classList.remove("intro-on");
+    try { sessionStorage.setItem("flicello-intro", "1"); } catch (e) { /* ignore */ }
+  }
+  function play() {
+    root.classList.remove("intro-on");
+    void intro.offsetWidth; // restart every animation
+    root.classList.add("intro-on");
+    clearTimeout(timer);
+    timer = setTimeout(finish, 5100);
+  }
+  if (root.classList.contains("intro-on")) timer = setTimeout(finish, 5100);
+  var skip = document.getElementById("intro-skip");
+  if (skip) skip.addEventListener("click", finish);
+  intro.addEventListener("click", finish);
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") finish(); });
+  var replay = document.getElementById("intro-replay");
+  if (replay) replay.addEventListener("click", play);
+})();

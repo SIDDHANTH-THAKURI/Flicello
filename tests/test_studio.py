@@ -383,3 +383,39 @@ def test_wrong_sign_in_and_bad_sign_up_show_a_message_not_a_crash(studio):
     r = client.post(f"/join/{token}", data={"name": "Hal", "password": "a long password", "password2": "different one!!",
                                             "agree": "yes"})
     assert r.status_code == 200 and "different" in r.text and 'value="Hal"' in r.text
+
+
+def test_a_spray_of_guesses_from_one_address_is_stopped_and_known_browsers_still_get_in(studio):
+    _friend(studio, "Ivy")
+    user, _ = accounts.login(studio.db, studio.s, "Ivy", "a long password 2", "9.9.9.9")
+    device = accounts.new_device(studio.db, user["id"])
+    for k in range(studio.s.limits.login_attempts):  # one address tries many different accounts
+        with pytest.raises(accounts.AccountError, match="match"):
+            accounts.login(studio.db, studio.s, f"name{k}", "x", "5.6.7.8")
+    with pytest.raises(accounts.AccountError, match="Too many"):
+        accounts.login(studio.db, studio.s, "another", "x", "5.6.7.8")
+    found, _ = accounts.login(studio.db, studio.s, "Ivy", "a long password 2", "1.1.1.1", device)  # her phone is fine
+    assert found["id"] == user["id"]
+
+
+def test_public_pages_are_kept_out_of_search_and_carry_security_headers(studio):
+    client = TestClient(create_app(studio))
+    r = client.get("/robots.txt")
+    assert r.status_code == 200 and "Disallow: /" in r.text
+    r = client.get("/login")
+    assert "noindex" in r.headers["x-robots-tag"] and "noindex" in r.text and "Flicello" in r.text
+    assert r.headers["x-frame-options"] == "DENY" and "default-src 'self'" in r.headers["content-security-policy"]
+    assert client.get("/static/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
+    assert client.get("/static/icon-192.png").status_code == 200
+
+
+def test_the_proxys_forwarded_address_is_only_believed_from_loopback(studio):
+    from fastapi import Request
+
+    app = create_app(studio)
+    # the TestClient connects from "testclient", not loopback: a forged header must be ignored there
+    client = TestClient(app)
+    for _ in range(studio.s.limits.login_attempts):
+        client.post("/login", data={"name": "ghost", "password": "x"}, headers={"X-Forwarded-For": "8.8.4.4"})
+    r = client.post("/login", data={"name": "ghost2", "password": "x"}, headers={"X-Forwarded-For": "1.2.3.4"})
+    assert "Too many" in r.text  # limited by the real peer address, whatever the header says
