@@ -65,15 +65,22 @@ def measure(video: Path) -> Measured:
 
 
 def beat_findings(cuts: list[float], grid: np.ndarray, start: float, end: float, *, strict: bool,
-                  tolerance: float = 0.025, min_gap: float = 0.085) -> list[Finding]:
+                  tolerance: float = 0.025, min_gap: float = 0.085, planned: list[float] | None = None,
+                  match: float = 0.12) -> list[Finding]:
     """Cuts inside the film [start, end] against the beat grid (beats and half beats, film time).
     A 'cut' detected within min_gap (2.5 frames at 30 fps) of the one before is the same cut seen twice: a fast
     move or a zoom pulse in the new shot's first frames trips the detector again. No edit here cuts that fast
-    (the shortest stutter piece is ~4 frames), so only the first detection counts."""
+    (the shortest stutter piece is ~4 frames), so only the first detection counts.
+    planned: the film's own hard cuts (film time). The detector also fires on changes inside a shot (a pan, a light
+    change, a flash in the footage), which are not cuts the edit made; with the plan known, only a detection within
+    `match` seconds of a planned cut is judged, and it is judged at the time the render really has it."""
     inside = []
     for c in sorted(c for c in cuts if start + 0.3 < c < end - 0.3):
         if not inside or c - inside[-1] >= min_gap:
             inside.append(c)
+    if planned is not None:
+        inside = [min(near, key=lambda c: abs(c - p)) for p in planned
+                  if start + 0.3 < p < end - 0.3 and (near := [c for c in inside if abs(c - p) <= match])]
     if not inside or not len(grid):
         return [Finding("warn", "beat sync", "no hard cuts or no beat grid to check")]
     errs = np.array([np.min(np.abs(grid - c)) for c in inside])
@@ -213,7 +220,8 @@ def run_checks(video: Path, edl: EDL, project: Project, *, head: float = 0.0, ta
             if edl.music.jumps:  # extend the grid past the song's end by the beats the jumps add
                 extra = beats[-1] + period * np.arange(1, 64)
                 grid = np.sort(np.concatenate([grid, extra, extra + period / 2]))
-            findings += beat_findings(m.cuts, grid, head, head + film, strict=strict_beats)
+            hard = [head + item.start / timeline.fps for item in timeline.items if item.index and not item.trans_frames]
+            findings += beat_findings(m.cuts, grid, head, head + film, strict=strict_beats, planned=hard)
         else:
             findings.append(Finding("warn", "beat sync", "music jumps off the beat grid: not checked"))
     fades = [0.0, head, head + film, m.duration] if (head or tail) else [0.0, m.duration]

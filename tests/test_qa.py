@@ -18,6 +18,11 @@ def test_beat_sync_and_black_and_loudness():
     late = beat_findings([1.0, 2.6], grid, 0.0, 10.0, strict=True)  # 100 ms late
     assert late[0].level == "fail" and "1 beyond 25 ms" in late[0].detail
     assert beat_findings([2.6], grid, 0.0, 10.0, strict=False)[0].level == "warn"
+    # a scene change inside a shot (3.07 s) is not an edit cut: only detections at the planned cuts are judged
+    inner = beat_findings([1.0, 3.07, 5.51], grid, 0.0, 10.0, strict=True, planned=[1.0, 5.5])
+    assert inner[0].level == "ok" and inner[0].detail.startswith("2 hard cuts")
+    drift = beat_findings([1.0, 5.6], grid, 0.0, 10.0, strict=True, planned=[1.0, 5.5])  # the render put it 100 ms late
+    assert drift[0].level == "fail" and "1 beyond 25 ms" in drift[0].detail
     assert black_findings([(0.0, 0.13), (5.2, 5.37)], [0.0, 5.3, 60.0])[0].level == "ok"
     assert black_findings([(20.0, 20.3)], [0.0, 5.3, 60.0])[0].level == "fail"  # mid-film black
     assert loudness_findings(-14.2, -1.4)[0].level == "ok"
