@@ -14,7 +14,7 @@ from .brain.context import BRIGHT_WORDS, HITS_WORDS, REUSE_WORDS
 
 NO_MUSIC = re.compile(r"\b(no|without|don'?t (?:add|use|put)|do not (?:add|use|put)|remove)\b[^.]{0,20}\bmusic\b", re.I)
 FULL_LENGTH = re.compile(r"\b(full|whole|entire)\b[^.]{0,12}\b(length|video|song)\b", re.I)
-GRAPHICS = re.compile(r"\b(motion graphics?|animations?|animated|graphics)\b", re.I)
+GRAPHICS = re.compile(r"\b(motion\s*graphics?|animations?|animated|graphics)\b", re.I)
 CAPTIONS = re.compile(r"\b(captions?|subtitles?)\b", re.I)
 
 
@@ -70,3 +70,13 @@ def explainer(project: dict, *, scenes: int, callouts: int, cutaways: int, capti
 
 def unmet(rows: list[dict]) -> list[str]:
     return [r["detail"] for r in rows if r["level"] != "ok"]
+
+
+TALKING_NOTE = re.compile(r"\b(as i (?:speak|talk)|while i(?:'m| am)? (?:speak|talk)|i(?:'m| am) (?:explain|talk|speak|review)\w*|"
+                          r"me (?:explain|talk|speak)\w*|my (?:voice|talk)|voice[- ]?over|narrat\w+)\b", re.I)
+
+
+def is_talking_video_request(note: str, clips: int) -> bool:
+    """One video, and the note says the person speaks in it and wants graphics for it: that is the talking-video mode,
+    not a montage cut to music (a friend picked the montage form for exactly this)."""
+    return clips == 1 and bool(GRAPHICS.search(note or "")) and bool(TALKING_NOTE.search(note or ""))

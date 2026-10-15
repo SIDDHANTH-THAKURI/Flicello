@@ -237,6 +237,12 @@ class Studio:
 
     def start(self, project: dict) -> None:
         self._guard(project, "setup")
+        if project["kind"] == "montage":
+            n = self.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (project["id"],), 0)
+            if requirements.is_talking_video_request(project["intent"], n):
+                self.db.run("UPDATE projects SET kind='talk', music='none', updated=? WHERE id=?", (time.time(), project["id"]))
+                self.db.event(project["id"], "Switched to a talking video: the note asks for graphics for what is said.", "info")
+                project = self.db.project(project["id"])
         if project["kind"] != "montage":
             self._start_explainer(project)
             return

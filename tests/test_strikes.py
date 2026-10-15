@@ -189,3 +189,11 @@ def test_requirements_are_read_from_the_note_and_checked_against_what_was_made()
     voice = rq.explainer({"intent": "", "kind": "voice"}, scenes=1, callouts=0, cutaways=0, captions=True, seconds=20,
                          duration=63, music_playing=False, audio_kept=True)
     assert len(rq.unmet(voice)) == 2
+
+
+def test_a_talking_video_picked_in_the_montage_form_is_routed_to_talk_mode():
+    from vidosuper.studio.requirements import is_talking_video_request as route
+
+    note = "Its about me explaining undertone movie review Make it Instagram ready with motiongraphics in the back as i speak"
+    assert route(note, 1) and not route(note, 3) and not route("", 1)
+    assert route("Add motion graphics while I am talking", 1) and not route("fast cuts on the beat", 1)
