@@ -29,6 +29,41 @@ def recover(studio: Studio) -> int:
     return len(rows)
 
 
+def watch_stages(studio: Studio) -> None:
+    """Looks at every stage the way the owner would: a step that is taking far longer than such steps usually do, a
+    video that failed, a person who rejected a sample twice. Each problem is noted once, and starts the improvement
+    routine (which looks at it, fixes what it can in a branch, and deploys if the checks pass)."""
+    from .improve import maybe_start
+
+    db, s = studio.db, studio.s
+    now = time.time()
+    seen = {r["message"] for r in db.all("SELECT message FROM alerts WHERE kind='watch' AND at > ?", (now - 7 * 86400,))}
+    problems: list[tuple[str, str]] = []
+    for job in db.all("SELECT * FROM jobs WHERE status='running' AND started IS NOT NULL"):
+        typical = studio.typical_seconds(job["kind"])
+        took = now - job["started"]
+        if took > max(900.0, 4 * typical):
+            problems.append((f"slow job {job['id']}", f"A {job['kind']} step has run for {took / 60:.0f} minutes "
+                                                      f"(usually {typical / 60:.0f}); it may be stuck."))
+    for job in db.all("SELECT * FROM jobs WHERE status='failed' AND finished > ? AND kind != 'learn'", (now - 86400,)):
+        problems.append((f"failed job {job['id']}", f"A {job['kind']} step failed: {(job['error'] or '')[:160]}"))
+    for p in db.all("SELECT * FROM projects WHERE deleted=0 AND stage='review' AND sample_tries >= 2 AND updated > ?",
+                    (now - 86400,)):
+        problems.append((f"unhappy {p['id']}", f"Someone rejected the sample of video {p['id']} {p['sample_tries']} times: "
+                                               "what they asked for is not getting through."))
+    for r in db.all("SELECT id, project_id, findings FROM renders WHERE kind='final' AND created > ?", (now - 86400,)):
+        import json as _json
+
+        bad = [f["detail"] for f in _json.loads(r["findings"] or "[]") if f.get("check") == "requirement" and f.get("level") != "ok"]
+        if bad:
+            problems.append((f"requirement {r['id']}", f"Video {r['project_id']} did not do what was asked: " + "; ".join(bad)[:200]))
+    fresh = [(k, m) for k, m in problems if f"[{k}] {m}" not in seen]
+    for k, m in fresh:
+        alert(db, s, "watch", f"[{k}] {m}", "warning")
+    if fresh:
+        maybe_start(studio, reason="; ".join(m for _, m in fresh)[:200])
+
+
 def maintain(studio: Studio) -> None:
     db, s = studio.db, studio.s
     now = time.time()
@@ -68,6 +103,7 @@ class Worker:
             self._last_maintenance = time.time()
             try:
                 maintain(self.studio)
+                watch_stages(self.studio)
             except Exception as exc:  # noqa: BLE001 - housekeeping must never stop the queue
                 log.exception("maintenance failed")
                 alert(db, s, "maintenance", f"Housekeeping failed: {exc}", "warning")

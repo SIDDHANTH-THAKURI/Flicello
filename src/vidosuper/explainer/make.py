@@ -103,18 +103,21 @@ def _size(shape: str) -> tuple[int, int]:
 
 
 def render(script: VoiceScript, speech: dict, shape: str, out: Path, *, music: Path | None = None, sample: bool = False,
-          progress: Callable[[float], None] | None = None) -> dict:
-    """Draw the video (or its first stretch). Returns {"path", "seconds", "render_seconds"}."""
+          sample_start: float = 0.0, progress: Callable[[float], None] | None = None) -> dict:
+    """Draw the video, or a sample of it starting at `sample_start` (the part that changed). Returns
+    {"path", "seconds", "render_seconds"}."""
     t0 = time.monotonic()
     size = _size(shape)
-    end = min(float(speech["duration"]), SAMPLE_SECONDS) if sample else None
+    duration = float(speech["duration"])
+    start = max(0.0, min(sample_start, duration - SAMPLE_SECONDS)) if sample else 0.0
+    end = min(duration, start + SAMPLE_SECONDS) if sample else None
     quality = "draft" if sample else "final"
     if speech["kind"] == "voice":
         render_voice(script, Path(speech["audio"]), speech["utterances"], out, size, music=music, quality=quality,
-                     end=end, progress=progress)
+                     start=start, end=end, progress=progress)
     else:
         render_talk(script, Path(speech["video"]), speech["utterances"], out, size, Path(speech["wav"]) if speech.get("wav") else None,
-                    quality=quality, end=end, duration=float(speech["duration"]), progress=progress)
+                    quality=quality, start=start, end=end, duration=duration, progress=progress)
     info = ffprobe_json(out)
     seconds = float(info["format"]["duration"])
     return {"path": out.name, "seconds": round(seconds, 2), "render_seconds": round(time.monotonic() - t0, 1)}

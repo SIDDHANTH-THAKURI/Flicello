@@ -172,7 +172,13 @@
 </section>
 
 {% elif p.stage == 'review' and sample %}
-<p class="lead">A short sample, to check the feel before the whole video is made.</p>
+<p class="lead">A short sample, to check the feel before the whole video is made.{% if info and info.changes %} It starts at the part that changed.{% endif %}</p>
+{% if info and info.changes %}
+<section class="card notice">
+  <b>What I changed</b>
+  <ul class="small">{% for line in info.changes %}<li>{{ line }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
 <section class="card center">
   <video class="player {{ 'tall' if sample.shape == '9:16' else '' }}" src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video>
   <form method="post" action="/p/{{ p.id }}/sample" class="top-gap">

@@ -209,9 +209,22 @@ def draw_scene(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) 
             bw = int(u * 0.5 * clamp(bar, 0, 1))
             ImageDraw.Draw(frame).rounded_rectangle([w / 2 - bw / 2, h * (0.75 if vertical else 0.87), w / 2 + bw / 2,
                                                      h * (0.75 if vertical else 0.87) + u * 0.014], u * 0.007, fill=(*accent, 255))
+        cx0, cy0 = w / 2, h * (0.34 if vertical else 0.4)
+        base_r = u * (0.34 if big else 0.28) * 0.95
+        for k, it in enumerate(s.items[:4] if s.layout == "keyword" else []):
+            pk = pop(t, it.at)
+            em = emoji_sprite(it.emoji, int(u * 0.1)) if it.emoji else None
+            if pk <= 0 or em is None:
+                continue
+            ang = (k / max(1, len(s.items[:4]))) * 6.283 + (t - it.at) * 0.7 + 0.6
+            place(frame, em, cx0 + math.cos(ang) * base_r, cy0 + math.sin(ang) * base_r * 0.9, scale=clamp(pk, 0, 1.15),
+                  alpha=clamp(pk * 1.4))
         for k, it in enumerate(s.items[:3] if s.layout == "keyword" else []):
-            _chip(frame, it.emoji, it.text, w / 2 + (k - (len(s.items[:3]) - 1) / 2) * u * 0.42, h * (0.84 if vertical else 0.93),
-                  u, t, it.at, pal)
+            if it.text and not it.emoji:  # a picture orbits instead; the captions carry the words
+                if vertical:  # stacked, so long labels never run off the edge
+                    _chip(frame, "", it.text, w / 2, h * 0.8 + k * u * 0.125, u, t, it.at, pal)
+                else:
+                    _chip(frame, "", it.text, w / 2 + (k - (len(s.items[:3]) - 1) / 2) * u * 0.5, h * 0.93, u, t, it.at, pal)
     elif s.layout == "list":
         title_text(frame, s.headline, w / 2, h * 0.17, maxw, int(h * 0.14), int(u * 0.08), accent, t, a + 0.05, 0.03)
         rows = s.items[:4] or []
@@ -228,6 +241,12 @@ def draw_scene(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) 
     elif s.layout == "compare":
         title_text(frame, s.headline, w / 2, h * 0.12, maxw, int(h * 0.1), int(u * 0.065), accent, t, a + 0.05, 0.03)
         _compare(frame, s, t, pal, u, vertical)
+    elif s.layout == "flow":
+        title_text(frame, s.headline, w / 2, h * 0.12, maxw, int(h * 0.1), int(u * 0.065), accent, t, a + 0.05, 0.03)
+        _flow(frame, s, t, pal, u, vertical)
+    elif s.layout == "chat":
+        title_text(frame, s.headline, w / 2, h * 0.11, maxw, int(h * 0.1), int(u * 0.06), accent, t, a + 0.05, 0.03)
+        _chat(frame, s, t, pal, u, maxw)
     elif s.layout == "quote":
         k = pop(t, a + 0.05)
         q = text_sprite("\u201c", "Fraunces-SemiBold", int(u * 0.5), (*accent, 255))
@@ -237,6 +256,97 @@ def draw_scene(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) 
             sprite = emoji_sprite(s.emoji, int(u * 0.16))
             if sprite is not None:
                 place(frame, sprite, w / 2, h * 0.78, alpha=fade(t, a + 0.7), scale=0.6 + 0.4 * clamp(pop(t, a + 0.7), 0, 1.1))
+
+
+def _flow(frame: Image.Image, s: Scene, t: float, pal: dict, u: float, vertical: bool) -> None:
+    """A diagram that plays: boxes appear as each is spoken, arrows draw to the next, and dots keep travelling along them."""
+    w, h = frame.size
+    items = s.items[:4]
+    n = len(items)
+    if n == 0:
+        return
+    pts = []
+    for k in range(n):
+        f = (k + 0.5) / n
+        pts.append((w / 2, h * (0.2 + 0.64 * f)) if vertical else (w * (0.1 + 0.8 * f), h * 0.52))
+    d = ImageDraw.Draw(frame)
+    bw, bh = (w * 0.72, u * 0.2) if vertical else (w * 0.2, u * 0.4)
+    width = max(3, int(u * 0.012))
+    for k in range(n - 1):
+        (x0, y0), (x1, y1) = pts[k], pts[k + 1]
+        ux, uy = x1 - x0, y1 - y0
+        norm = math.hypot(ux, uy) or 1
+        gapx = (bh / 2 + u * 0.015) if vertical else (bw / 2 + u * 0.015)
+        sx, sy = x0 + ux / norm * gapx, y0 + uy / norm * gapx
+        ex, ey = x1 - ux / norm * gapx, y1 - uy / norm * gapx
+        prog = smooth((t - items[k + 1].at + 0.45) / 0.4)
+        if prog <= 0:
+            continue
+        cx, cy = sx + (ex - sx) * prog, sy + (ey - sy) * prog
+        d.line([(sx, sy), (cx, cy)], fill=(*pal["accent"], 235), width=width)
+        if prog > 0.97:
+            a = math.atan2(ey - sy, ex - sx)
+            for sgn in (-1, 1):
+                d.line([(ex, ey), (ex - math.cos(a + sgn * 0.5) * u * 0.04, ey - math.sin(a + sgn * 0.5) * u * 0.04)],
+                       fill=(*pal["accent"], 235), width=width)
+            for j in range(2):  # data packets keep running along the arrow
+                ph = ((t - items[k + 1].at) * 0.55 + j * 0.5) % 1.0
+                px_, py_ = sx + (ex - sx) * ph, sy + (ey - sy) * ph
+                r = u * 0.018
+                d.ellipse([px_ - r, py_ - r, px_ + r, py_ + r], fill=(*pal["ink"], 255))
+    for (x, y), it in zip(pts, items):
+        k = pop(t, it.at)
+        if k <= 0:
+            continue
+        glow = 1.0 + 0.04 * math.sin((t - it.at) * 5) if t > it.at + 0.4 else 1.0
+        place(frame, card((int(bw), int(bh)), int(bh * 0.28), pal["card"]), x, y, scale=clamp(k, 0, 1.1) * glow,
+              alpha=clamp(k * 1.4))
+        em = emoji_sprite(it.emoji or "✨", int(bh * 0.55))
+        label_w = int(bw * (0.62 if vertical else 0.86))
+        if vertical:
+            if em is not None:
+                place(frame, em, x - bw * 0.36, y, scale=clamp(k, 0, 1.15))
+            label = fitted(it.text, BLACK, (*pal["ink"], 255), label_w, int(bh * 0.74), int(u * 0.062), "left")
+            place(frame, label, x - bw * 0.2, y, alpha=clamp(k * 1.4), anchor=(0.0, 0.5))
+        else:
+            if em is not None:
+                place(frame, em, x, y - bh * 0.14, scale=clamp(k, 0, 1.15))
+            label = fitted(it.text, BLACK, (*pal["ink"], 255), label_w, int(bh * 0.3), int(u * 0.05))
+            place(frame, label, x, y + bh * 0.33, alpha=clamp(k * 1.4))
+
+
+def _chat(frame: Image.Image, s: Scene, t: float, pal: dict, u: float, maxw: int) -> None:
+    """A conversation: bubbles alternate sides as each line is spoken, with typing dots just before."""
+    w, h = frame.size
+    items = s.items[:5]
+    n = max(1, len(items))
+    gap = min(u * 0.26, (h * 0.74) / n)
+    y0 = h * 0.2 + gap / 2
+    for k, it in enumerate(items):
+        left = k % 2 == 0
+        p = pop(t, it.at)
+        y = y0 + k * gap
+        if 0 <= it.at - t < 0.5 and k > 0:  # typing dots
+            for j in range(3):
+                r = u * 0.014 * (1 + 0.5 * max(0.0, math.sin(t * 9 + j)))
+                x = (w * 0.2 if left else w * 0.8) + (j - 1) * u * 0.04
+                ImageDraw.Draw(frame).ellipse([x - r, y - r, x + r, y + r], fill=(*pal["soft"], 200))
+        if p <= 0:
+            continue
+        bw = int(maxw * 0.78)
+        label = fitted(it.text, EXTRA, (*(pal["ink"] if left else (20, 20, 36)), 255), int(bw * 0.78), int(gap * 0.62), int(u * 0.05),
+                       "left")
+        bh = int(max(u * 0.11, label.height + u * 0.05))
+        fill = pal["card"] if left else (*pal["accent"], 255)
+        cx = (bw / 2 + w * 0.06) if left else (w - bw / 2 - w * 0.06)
+        slide = (1 - clamp(p, 0, 1)) * u * 0.18 * (-1 if left else 1)
+        place(frame, card((bw, bh), int(bh * 0.4), fill), cx + slide, y, alpha=clamp(p * 1.5), scale=0.92 + 0.08 * clamp(p, 0, 1.1))
+        em = emoji_sprite(it.emoji, int(bh * 0.7)) if it.emoji else None
+        tx = cx - bw / 2 + u * 0.035 + slide
+        if em is not None:
+            place(frame, em, tx + em.width / 2, y, alpha=clamp(p * 1.5))
+            tx += em.width + u * 0.02
+        place(frame, label, tx, y, alpha=clamp(p * 1.5), anchor=(0.0, 0.5))
 
 
 def _chip(frame: Image.Image, emoji: str, text: str, cx: float, cy: float, u: float, t: float, t0: float, pal: dict) -> None:

@@ -271,6 +271,8 @@ class Pipeline:
     def design(self, ctx: StoryContext, pitch: StoryPitch, note: str = "") -> DesignPlan:
         self.progress(0.05, "Planning the cut on the song's beats")
         if ctx.pace == "every":
+            if note.strip():  # "not quite": another take of the same idea, shaped by what they said
+                return self.revise_strikes(ctx, pitch, note, 1 + (len(note) % 7))
             return self.strike_plan(ctx, pitch)
         return self.brain.design(ctx, pitch, note)
 
@@ -293,9 +295,16 @@ class Pipeline:
     def revise_strikes(self, ctx: StoryContext, pitch: StoryPitch, feedback: str, round_no: int = 1) -> DesignPlan:
         """A new cut of the same idea: other stretches of footage, and the cut density follows what they said."""
         text = feedback.lower()
-        density = "beats" if re.search(r"too (fast|busy|many|frantic)|slow(er)? down|calmer", text) else "strikes"
-        zoom = 1.12 if re.search(r"zoom|crop|too close|can'?t see", text) else 1.3
-        return self.strike_plan(ctx, pitch, seed=round_no, density=density, max_zoom=zoom)
+        slower = bool(re.search(r"too (fast|busy|many|frantic|quick)|slow(er)? down|calmer|fewer cuts", text))
+        density = "beats" if slower else "strikes"
+        tight = bool(re.search(r"zoom|crop|too close|can'?t see|wider|show more", text))
+        zoom = 1.08 if tight else 1.3
+        plan = self.strike_plan(ctx, pitch, seed=round_no, density=density, max_zoom=zoom)
+        did = ["Picked other stretches of your footage for the shots"]
+        did.append("Cuts on the beats only, not every strike (calmer)" if slower else "Still one shot for every hit of the music")
+        if tight:
+            did.append("Shots kept wide: zoom limited to 1.08x so the whole action shows")
+        return plan.model_copy(update={"notes": "; ".join(did) + ". " + plan.notes})
 
     def revise(self, ctx: StoryContext, pitch: StoryPitch, current: DesignPlan, feedback: str) -> DesignPlan:
         self.progress(0.05, "Working your changes into the plan")

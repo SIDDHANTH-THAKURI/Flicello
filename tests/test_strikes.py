@@ -4,6 +4,7 @@ pieces around it (note reading, time estimates, the made-up beat)."""
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from vidosuper.studio.brain.context import BeatMap, ClipFacts, look_from_note, pace_from_note, read_note
 from vidosuper.studio.brain.strikes import Hit, cut_points, place_heroes, plan_on_strikes
@@ -151,3 +152,40 @@ def test_the_plan_schema_has_nothing_claude_code_refuses():
     for model in (DesignPlan, Pitches, ProfileUpdate, ClipAnalysis, VoiceScript):
         text = json.dumps(model_schema(model))
         assert "prefixItems" not in text, model.__name__
+
+
+def test_deploy_gates_refuse_protected_files_and_off_switch(tmp_path):
+    from vidosuper.studio.deploy import DeployRefused, deploy, protected_hits
+
+    assert protected_hits(["src/vidosuper/studio/storage.py", "src/vidosuper/design.py", "scripts/improve.ps1"]) == [
+        "src/vidosuper/studio/storage.py", "scripts/improve.ps1"]
+    assert protected_hits(["src/vidosuper/explainer/draw.py", "tests/test_studio.py"]) == []
+
+    class S:
+        improve_deploy = False
+
+    class Studio:
+        s = S()
+
+    with pytest.raises(DeployRefused, match="off"):
+        deploy(Studio(), tmp_path, "improve/x", tmp_path, "python")
+
+
+def test_requirements_are_read_from_the_note_and_checked_against_what_was_made():
+    from vidosuper.studio import requirements as rq
+
+    project = {"intent": "No music please. Every time he hits the ball it lands on a beat. Fill the full length. Bright.",
+               "pace": "every", "length": 60.0, "kind": "montage"}
+    assert rq.wants_no_music(project["intent"]) and not rq.wants_no_music("music is great")
+    good = rq.montage(project, mean_shot=0.43, shots=139, hits_total=9, hits_used=9, seconds=59.8, music_playing=False,
+                      look="bright")
+    assert rq.unmet(good) == [] and len(good) == 5
+    bad = rq.montage(project, mean_shot=2.2, shots=20, hits_total=9, hits_used=3, seconds=40.0, music_playing=True,
+                     look="natural")
+    assert len(rq.unmet(bad)) == 5
+    talk = rq.explainer({"intent": "motion graphics, don't add music", "kind": "talk"}, scenes=3, callouts=10, cutaways=3,
+                        captions=True, seconds=120, duration=124, music_playing=False, audio_kept=True)
+    assert rq.unmet(talk) == []
+    voice = rq.explainer({"intent": "", "kind": "voice"}, scenes=1, callouts=0, cutaways=0, captions=True, seconds=20,
+                         duration=63, music_playing=False, audio_kept=True)
+    assert len(rq.unmet(voice)) == 2

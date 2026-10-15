@@ -24,6 +24,10 @@ try {
     $env:PYTHONPATH = Join-Path $work "src"   # this copy's code, not the live studio's
     $prompt = (Get-Content (Join-Path $work "docs\improve-prompt.md") -Raw) + "`n`nYou are in a git worktree at $work on branch $branch. The live studio runs from ${repo}; never edit files there."
     claude -p $prompt --permission-mode acceptEdits --max-budget-usd 5 --allowedTools "Read" "Edit" "Write" "Glob" "Grep" "Bash"
+    # put the branch live if every gate passes (see src/vidosuper/studio/deploy.py); otherwise it waits for the owner
+    Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+    Set-Location $repo
+    & $py -m vidosuper studio deploy $branch --worktree $work
     # keep only the last few worktrees
     Get-ChildItem (Join-Path $env:LOCALAPPDATA "VidoSuper\improve-work") -Directory | Sort-Object CreationTime -Descending |
         Select-Object -Skip 4 | ForEach-Object { git -C $repo worktree remove --force $_.FullName }

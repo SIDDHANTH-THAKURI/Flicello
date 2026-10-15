@@ -18,7 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Layout = Literal["title", "keyword", "list", "steps", "stat", "compare", "quote"]
+Layout = Literal["title", "keyword", "list", "steps", "stat", "compare", "quote", "flow", "chat"]
 PALETTES = ("midnight", "sunrise", "mint", "paper", "berry")
 CUTAWAY_SHARE = 0.34  # of a talking video's length, at most, may be animation instead of the person
 MIN_SCENE = 1.2
@@ -89,6 +89,45 @@ class VoiceScript(BaseModel):
     scenes: list[Scene] = Field(default_factory=list)
     callouts: list[Callout] = Field(default_factory=list)
     notes: str = ""
+
+
+def _desc(s: Scene) -> str:
+    items = ", ".join(i.text for i in s.items if i.text)
+    return f"{s.layout} '{s.headline}'" + (f" ({items})" if items else "") + (f" {s.value}" if s.value else "")
+
+
+def _clock(t: float) -> str:
+    return f"{int(t) // 60}:{int(t) % 60:02d}"
+
+
+def changes_between(old: VoiceScript, new: VoiceScript) -> tuple[float | None, list[str]]:
+    """What a revision changed, in words the person can check: (where the first change is, lines). Scenes are matched
+    by where they start."""
+    lines: list[str] = []
+    first: float | None = None
+    olds = {round(s.start): s for s in old.scenes}
+    for s in new.scenes:
+        before = olds.get(round(s.start))
+        if before is None or _desc(before) != _desc(s) or before.emoji != s.emoji:
+            lines.append(f"{_clock(s.start)}: " + (f"{_desc(before)} became {_desc(s)}" if before else f"new {_desc(s)}"))
+            first = s.start if first is None else min(first, s.start)
+    gone = [s for s in old.scenes if round(s.start) not in {round(x.start) for x in new.scenes}]
+    for s in gone:
+        lines.append(f"{_clock(s.start)}: removed {_desc(s)}")
+        first = s.start if first is None else min(first, s.start)
+    oc, nc = [(round(c.at), c.text) for c in old.callouts], [(round(c.at), c.text) for c in new.callouts]
+    added = [c for c in new.callouts if (round(c.at), c.text) not in oc]
+    removed = [c for c in old.callouts if (round(c.at), c.text) not in nc]
+    for c in added[:4]:
+        lines.append(f"{_clock(c.at)}: added the callout '{c.text or c.value}'")
+        first = c.at if first is None else min(first, c.at)
+    if removed:
+        lines.append(f"{len(removed)} callout{'s' if len(removed) != 1 else ''} removed")
+    if old.palette != new.palette:
+        lines.append(f"colours: {old.palette} became {new.palette}")
+    if old.captions != new.captions:
+        lines.append("captions " + ("on" if new.captions else "off"))
+    return first, lines[:8]
 
 
 def valid_emoji(text: str) -> bool:

@@ -24,6 +24,7 @@ from .brain.context import look_from_note, pace_from_note
 from .brain.schemas import DesignPlan, StoryPitch
 from .db import DB
 from .improve import maybe_start as maybe_start_improve
+from . import requirements
 from .pipeline import Pipeline, UserError, remove_project_files, studio_config
 from .profiles import Profile, owner_seed_rules
 from .settings import StudioSettings
@@ -120,7 +121,7 @@ class Studio:
         self.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated, pace, kind, "
                     "music) VALUES (?,?,?,?,?,?,'setup',?,?,?,?,?)",
                     (pid, user["id"], title, shapes, float(length), " ".join(intent.split())[:600], now, now, pace, kind,
-                     "made" if kind == "montage" else "none"))
+                     "none" if kind != "montage" or requirements.wants_no_music(intent) else "made"))
         workdir(self.s, user["id"], pid).ensure()
         return self.db.project(pid)
 
@@ -429,7 +430,7 @@ class Studio:
                                       self.profile(user).rules, previous, feedback)
         return fit(raw, speech)
 
-    def _explainer_render(self, job, project, user, script, plan_id: int, sample: bool) -> None:
+    def _explainer_render(self, job, project, user, script, plan_id: int, sample: bool, sample_start: float = 0.0) -> None:
         from ..explainer import make
 
         work = workdir(self.s, project["user_id"], project["id"])
@@ -451,12 +452,18 @@ class Studio:
         for shape in (shapes[:1] if sample else shapes):
             name = f"sample-{plan_id}" if sample else f"v{version}-{shape.replace(':', 'x')}"
             out = work.out / f"{name}.mp4"
-            info = make.render(script, speech, shape, out, music=bed, sample=sample,
+            info = make.render(script, speech, shape, out, music=bed, sample=sample, sample_start=sample_start,
                                progress=lambda f: self.db.job_progress(job["id"], 0.4 + 0.58 * f, "Drawing your video"))
+            rows = requirements.explainer(
+                project, scenes=len(script.scenes), callouts=len(script.callouts),
+                cutaways=len(script.scenes) if project["kind"] == "talk" else 0, captions=script.captions,
+                seconds=info["seconds"] if not sample else float(speech["duration"]), duration=float(speech["duration"]),
+                music_playing=bed is not None, audio_kept=True)
+            self._note_requirements(project, rows, f"{shape} {'sample' if sample else 'final'}")
             self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
                         "findings, created) VALUES (?,?,?,?,?,?,?,?,?,?)",
                         (project["id"], plan_id, version, "sample" if sample else "final", shape, info["path"],
-                         info["seconds"], info["render_seconds"], "[]", time.time()))
+                         info["seconds"], info["render_seconds"], json.dumps(rows), time.time()))
         if sample:
             self.db.set_stage(project["id"], "review")
         else:
@@ -489,11 +496,27 @@ class Studio:
         if job["params"].get("tags"):
             feedback += "\nThey also ticked: " + ", ".join(job["params"]["tags"])
         plan_id = row["id"]
+        sample_start, lines = 0.0, []
         if step in ("sample", "revise") and feedback.strip():
+            from ..explainer.script import changes_between
+
             self.db.job_progress(job["id"], 0.2, "Working your changes in")
-            script = self._script_for(pipe, project, user, speech, script, feedback)
+            old = script
+            script = self._script_for(pipe, project, user, speech, old, feedback)
+            first, lines = changes_between(old, script)
+            if not lines:  # the AI handed back the same thing: say so and ask once more, firmly
+                script = self._script_for(pipe, project, user, speech, old, feedback +
+                                          "\nYour last answer changed NOTHING visible. Change what they asked, in the scenes "
+                                          "it applies to, and use a different layout or picture there.")
+                first, lines = changes_between(old, script)
             plan_id = self._save_script(project, script, "revise")
-        self._explainer_render(job, project, user, script, plan_id, sample=(step == "sample"))
+            if first is not None:
+                sample_start = max(0.0, first - 0.7)
+            info = json.loads(project["info"] or "{}")
+            info["changes"] = lines or ["I couldn't find a way to change that: try saying it differently, "
+                                        "for example which part and what it should show."]
+            self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
+        self._explainer_render(job, project, user, script, plan_id, sample=(step == "sample"), sample_start=sample_start)
 
     def _job_prepare(self, job, project, user):
         if project["kind"] != "montage":
@@ -530,20 +553,43 @@ class Studio:
         pipe = self._pipeline(job, project, user)
         ctx = self._context(pipe, project, user)
         pid, pitch = self._chosen(project, job["params"].get("pitch"))
-        plan = pipe.design(ctx, pitch, job["params"].get("note", ""))
+        note = job["params"].get("note", "")
+        plan = pipe.design(ctx, pitch, note)
         plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
                               (project["id"], "design", pid, plan.model_dump_json(), time.time()))
+        if note:  # shown with the new sample, so a change they asked for can be checked at once
+            info = json.loads(project["info"] or "{}")
+            info["changes"] = [f"You said: {note}", *[x.strip() for x in plan.notes.split(";") if x.strip()][:4]]
+            self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
         shape = self.shapes(project)[0]
+        self._note_requirements(project, self._montage_requirements(project, user, ctx, plan, None), "sample")
         info = pipe.sample(ctx, plan, shape, f"sample-{plan_id}", look=look_from_note(project["intent"], self.profile(user).look))
         self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, created) "
                     "VALUES (?,?,?,?,?,?,?,?,?)", (project["id"], plan_id, project["version"], "sample", shape, info.path,
                                                    info.seconds, info.render_seconds, time.time()))
         self.db.set_stage(project["id"], "review")
 
+    def _montage_requirements(self, project: dict, user: dict, ctx, plan: DesignPlan, seconds: float | None) -> list[dict]:
+        shots = sum((s.count if s.kind == "stutter" else 1) for s in plan.plan) or 1
+        mean = sum(s.beats * (s.count if s.kind == "stutter" else 1) for s in plan.plan) * ctx.beats.period / shots
+        impacts = [(m_clip, t) for m_clip, f in ctx.facts.items() for t in f.impacts]
+        used = sum(1 for clip, t in impacts if any(m.clip == clip and m.start - 0.05 <= t <= m.end + 0.05 for m in plan.pool))
+        return requirements.montage(project, mean_shot=mean, shots=shots, hits_total=len(impacts), hits_used=used,
+                                    seconds=seconds, music_playing=not (project["music"] == "none" and not project["song"]),
+                                    look=look_from_note(project["intent"], self.profile(user).look))
+
+    def _note_requirements(self, project: dict, rows: list[dict], where: str) -> None:
+        bad = requirements.unmet(rows)
+        if bad:
+            self.db.event(project["id"], f"requirement not met ({where}): " + "; ".join(bad), "warn")
+
     def _render_plan(self, job, project, user, pipe: Pipeline, ctx, plan: DesignPlan, plan_id: int) -> None:
         version = project["version"] + 1
         infos = pipe.render(ctx, plan, self.shapes(project), version, look=look_from_note(project["intent"], self.profile(user).look))
         for info in infos:
+            rows = self._montage_requirements(project, user, ctx, plan, info.seconds)
+            info.findings.extend(rows)
+            self._note_requirements(project, rows, f"{info.shape} final")
             self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
                         "findings, created) VALUES (?,?,?,?,?,?,?,?,?,?)",
                         (project["id"], plan_id, version, "final", info.shape, info.path, info.seconds, info.render_seconds,

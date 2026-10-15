@@ -49,3 +49,14 @@ After every 5th new rating of a finished video the studio starts `scripts/improv
 and `improve_every: 5` in `studio.yaml`; the count restarts at each digest). A lock file keeps it to one run at a time.
 The script runs in its own git worktree on branch `improve/<date-time>`: the live studio's files are never touched.
 Run it by hand any time with `powershell -File scripts\improve.ps1`.
+
+## Watching every stage, and going live by itself
+
+- The worker looks at every stage every 5 minutes (`watch_stages`): a step far slower than usual, a job that failed, a
+  person who rejected a sample twice. Each is noted once (alert kind `watch`) and starts the routine (at most one run
+  per 30 minutes for problems; ratings start it every 5).
+- When the routine's branch is ready, `vido studio deploy <branch>` puts it live only if: `improve_deploy: true`, it is a
+  fast-forward of main with a clean live copy, it touches no protected file (`deploy.PROTECTED`), the whole test suite
+  passes in its worktree, and no video is being made (it waits). Then it restarts the studio and requires the site and
+  the worker to answer within 90 s; otherwise it puts main back to the previous commit (tag `last-good`) and restarts.
+- Everything it does is a note in `vido studio status` (alert kind `improve`).

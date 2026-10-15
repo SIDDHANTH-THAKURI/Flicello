@@ -7,7 +7,9 @@ entries of bench.jsonl in the same folder. Then:
 1. Choose at most two root causes. Say which and why, in one line each.
 2. Reproduce each on the stored project; fix as code with a test; run `python -m pytest -q`.
 3. Run `python -m vidosuper studio bench` and compare with the previous commit's numbers.
-4. Commit on branch improve/<today's date> and push that branch. Never push main.
+4. Commit on the branch you are on (improve/<date>) and push that branch. Never push or merge main: the studio's
+   own deploy step puts it live when the tests pass and nothing protected changed, and undoes it if the site breaks.
+   Do not edit accounts.py, storage.py, settings.py, alerts.py, deploy.py, improve.py or scripts/: those need the owner.
 5. Run `python -m vidosuper studio notify "<what you changed, what is checked, what is only a guess>"`.
 
 If the digest shows nothing worth fixing, run `vido studio notify "Nothing to fix today: <one line>"` and stop. If

@@ -144,6 +144,30 @@ def bench(project: str = typer.Option(None, help="Only this project id")) -> Non
     console.print(table)
 
 
+@studio_app.command("deploy")
+def deploy_cmd(branch: str = typer.Argument(..., help="The improvement branch to put live"),
+               worktree: Path = typer.Option(None, help="Its worktree (where the tests run)"),
+               wait: float = typer.Option(45.0, help="Minutes to wait for running videos to finish")) -> None:
+    """Put an improvement branch live if every gate passes (see studio/deploy.py); undone by itself if the site does
+    not come back."""
+    import sys
+
+    from ..config import REPO_ROOT
+    from .alerts import alert
+    from .deploy import DeployRefused, deploy
+    from .service import Studio
+    from .settings import settings as studio_settings
+
+    studio = Studio(studio_settings())
+    try:
+        report = deploy(studio, REPO_ROOT, branch, worktree or REPO_ROOT, sys.executable, wait)
+        alert(studio.db, studio.s, "improve", report, level="info")
+        console.print(escape(report))
+    except DeployRefused as exc:
+        alert(studio.db, studio.s, "improve", f"Not deployed: {exc}", level="warning")
+        console.print(f"[yellow]Not deployed:[/] {escape(str(exc))}")
+
+
 @studio_app.command("notify")
 def notify(message: str = typer.Argument(..., help="A line for the owner (shown by `studio status`; sent to the phone if an alert address is set)"),
            kind: str = typer.Option("improve", help="alert kind")) -> None:

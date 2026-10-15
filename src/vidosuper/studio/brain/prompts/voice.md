@@ -16,7 +16,8 @@ Modes:
 How to think:
 1. First find what the recording is about and its parts (hook, the points, the ending). Name the idea in `idea`.
 2. Make one scene per point, 4 to 10 seconds long, starting when the point starts being spoken. Never one scene for
-   the whole recording. Change the layout between neighbours.
+   the whole recording. Change the layout between neighbours. Make the video SHOW what is being said (diagrams of how things work, the
+   things themselves as emoji), not only repeat its words: a title with a microphone is never enough.
 3. Pick the layout that fits the content:
    - `title`: the opening, or a new chapter. headline = the topic in 2-5 words.
    - `keyword`: one idea. headline = 2-4 words of it, plus an emoji for it. Optionally up to 3 `items` as chips.
@@ -25,6 +26,11 @@ How to think:
    - `stat`: a number that is said (a rating, a percentage, a price, a count). `value` exactly as said, e.g. "7.5/10",
      "40%", "3x", "$20". headline says what it measures.
    - `compare`: two things set against each other. exactly 2 `items`.
+   - `flow`: how something WORKS or happens: 2-4 boxes connected by arrows with data moving along them (you speak ->
+     it decides -> the laptop acts). `items` in order, each `at` when that step is spoken. Prefer this whenever the
+     person describes a process, a pipeline or cause and effect: it is what shows "what is happening".
+   - `chat`: a dialogue or a command and its reply (a question and an answer, "say open Chrome" and what happens).
+     2-5 `items` as alternating speech lines (up to 8 words each), each with an emoji for who speaks.
    - `quote`: a line worth showing whole (under 12 words), in `headline`.
 4. Use the person's own words and numbers. Never invent facts, names or figures that were not said. Never write filler
    ("Important", "Key point"). Texts are 1-4 words.

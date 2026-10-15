@@ -449,6 +449,9 @@ class Brain:
             thin = [s.headline for s in fitted.scenes if s.layout in ("list", "steps") and len(s.items) < 2]
             if thin:
                 problems.append(f"list/steps scenes need 2-4 items: {', '.join(thin[:3])}")
+            flow = [s.headline for s in fitted.scenes if s.layout in ("flow", "chat") and not 2 <= len(s.items) <= 5]
+            if flow:
+                problems.append(f"flow/chat scenes need 2-4 (flow) or 2-5 (chat) items: {', '.join(flow[:3])}")
             bad = [s.headline for s in fitted.scenes if s.layout == "compare" and len(s.items) != 2]
             if bad:
                 problems.append(f"compare scenes need exactly 2 items: {', '.join(bad[:3])}")

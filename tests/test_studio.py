@@ -906,7 +906,8 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     assert "Looks right" in page and "Back to the story ideas" not in page, studio.db.all("SELECT * FROM events")
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "no", "note": "make it brighter, sunrise colours"})
     _drain(studio)
-    assert "Looks right" in client.get(f"/p/{pid}").text
+    page = client.get(f"/p/{pid}").text
+    assert "Looks right" in page and "What I changed" in page  # whatever happened, they are told
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
     _drain(studio)
     assert "How did it turn out?" in client.get(f"/p/{pid}").text
@@ -948,3 +949,35 @@ def test_a_talking_video_gets_callouts_and_keeps_its_own_sound(studio, media, mo
     script = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
     assert script["callouts"] or script["scenes"]
     assert (work / "out" / finals[0]["file"]).exists()
+
+
+def test_a_revision_is_described_and_the_sample_starts_where_it_changed():
+    from vidosuper.explainer.script import Item, Scene, VoiceScript, changes_between
+
+    old = VoiceScript(name="x", scenes=[Scene(start=0, end=10, layout="title", headline="Jeff"),
+                                       Scene(start=10, end=20, layout="keyword", headline="Fast"),
+                                       Scene(start=20, end=30, layout="list", headline="Why",
+                                             items=[Item(at=21, text="a"), Item(at=24, text="b")])])
+    new = old.model_copy(update={"scenes": [old.scenes[0], old.scenes[1].model_copy(update={
+        "layout": "flow", "headline": "How it works", "items": [Item(at=11, text="speak"), Item(at=14, text="act")]}),
+        old.scenes[2]], "palette": "sunrise"})
+    first, lines = changes_between(old, new)
+    assert first == 10 and any("0:10" in x and "flow" in x for x in lines) and any("sunrise" in x for x in lines)
+    assert changes_between(old, old) == (None, [])
+
+
+def test_the_stage_watcher_notes_a_stuck_step_and_a_twice_rejected_sample_once(studio, monkeypatch):
+    from vidosuper.studio import improve, worker
+
+    started = []
+    monkeypatch.setattr(improve, "maybe_start", lambda st, reason="": started.append(reason) or True)
+    friend = _friend(studio, "Kit")
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+    studio.db.run("UPDATE projects SET stage='review', sample_tries=2, updated=? WHERE id=?", (time.time(), p["id"]))
+    studio.db.run("INSERT INTO jobs(project_id, user_id, kind, status, created, started) VALUES (?,?,?,?,?,?)",
+                  (p["id"], friend["id"], "render", "running", time.time() - 7000, time.time() - 6000))
+    worker.watch_stages(studio)
+    assert len(started) == 1 and "rejected the sample" in started[0] and "render step has run" in started[0]
+    worker.watch_stages(studio)
+    assert len(started) == 1  # said once
+    assert studio.db.value("SELECT COUNT(*) FROM alerts WHERE kind='watch'", (), 0) == 2
