@@ -171,3 +171,19 @@ AI). The clips folder is only read.
 - **Time estimates**: `Studio.eta` / `total_estimate` use the median of the last finished jobs of that kind (first guesses
   until there are some), corrected by the running job's progress; shown on the setup page and the progress card.
 - `vido studio run ... --pace every` (and no `--song`) for a run from the command line.
+
+## Voice-only and talking videos (2026-10-15)
+
+`projects.kind`: `montage` (clips + music, the original), `voice` (a recording only, animation drawn to it) and `talk`
+(the person's own video kept as is, motion graphics over it). Code in `src/vidosuper/explainer/`:
+
+- `script.py`: `VoiceScript` (scenes with a layout, callouts), `fit_script` (repairs any script against the real audio so
+  it always renders), `local_script` (no-AI fallback; keywords to emoji).
+- `draw.py` / `compose.py`: frames drawn with Pillow (colour emoji font, Nunito), piped to FFmpeg. Voice loudness pulses
+  the hero picture; captions are word-by-word from Whisper's word times. Talk mode copies untouched frames and the
+  original audio stream (checked: correlation 0.9999 with the source).
+- `make.py`: transcribes once (cached in `<project>/speech.json`), renders the 9 s sample and the final.
+- `Brain.script_voice` + `brain/prompts/voice.md`: the AI reads the transcript with word times and returns the script
+  (about $0.05). Revisions pass the previous script and the person's words.
+- Stages are the same as for a montage (setup, preparing, review of a sample, rendering, done); the prepare job also makes
+  the sample. Uploads: the recording goes in as upload kind `song` (audio), the talking video as one `clip`.

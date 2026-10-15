@@ -862,3 +862,89 @@ def test_the_improvement_routine_starts_after_five_new_ratings_once(studio, monk
     assert improve.due(studio.db) == 9 or improve.due(studio.db) >= 4
     studio.s.improve_every = 99
     assert not improve.maybe_start(studio)
+
+
+def _fake_speech(cid, wav, model, root):
+    words = "Sleep is the secret to a strong memory. People who sleep eight hours remember forty percent more. First study then sleep".split()
+    utts, t = [], 0.4
+    for chunk in (words[:8], words[8:16], words[16:]):
+        ws = []
+        for w in chunk:
+            ws.append({"start": round(t, 2), "end": round(t + 0.3, 2), "text": w, "prob": 0.95})
+            t += 0.34
+        utts.append({"start": ws[0]["start"], "end": ws[-1]["end"], "text": " ".join(chunk), "confident": True, "words": ws})
+    from vidosuper.perceive.transcribe import Utterance, Word
+
+    return Transcript(clip_id=cid, model="fake", language="en",
+                      utterances=[Utterance(**{**u, "words": [Word(**w) for w in u["words"]]}) for u in utts])
+
+
+def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
+    from vidosuper.explainer import make as explainer_make
+
+    monkeypatch.setattr(explainer_make, "transcribe", _fake_speech)
+    friend = _friend(studio, "Ivy")
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Ivy", "password": "a long password 2"})
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
+    page = client.get("/new").text
+    assert "Just my voice" in page and "Me talking" in page
+    r = client.post("/new", data={"csrf": csrf, "title": "Sleep", "shapes": "9:16", "length": 30, "kind": "voice",
+                                  "intent": "explain why sleep helps memory"}, follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    p = studio.db.project(pid)
+    assert p["kind"] == "voice" and p["music"] == "none"
+    assert "Your recording" in client.get(f"/p/{pid}").text
+    assert studio.db.project(pid)["stage"] == "setup"
+    r = client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=True)
+    assert "Add your recording first" in r.text  # nothing to animate yet
+    _upload(client, csrf, pid, media / "music.wav", "song")
+    assert client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=False).status_code == 303
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "Looks right" in page and "Back to the story ideas" not in page, studio.db.all("SELECT * FROM events")
+    client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "no", "note": "make it brighter, sunrise colours"})
+    _drain(studio)
+    assert "Looks right" in client.get(f"/p/{pid}").text
+    client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
+    _drain(studio)
+    assert "How did it turn out?" in client.get(f"/p/{pid}").text
+    finals = studio.renders(studio.db.project(pid), "final")
+    assert finals and finals[0]["seconds"] > 5
+    work = studio.s.users_dir / friend["id"] / "projects" / pid
+    assert (work / "out" / f"v1-9x16.mp4").exists()
+    script = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
+    assert script["scenes"] and script["scenes"][0]["start"] == 0.0
+
+
+def test_a_talking_video_gets_callouts_and_keeps_its_own_sound(studio, media, monkeypatch):
+    from vidosuper.explainer import make as explainer_make
+    from vidosuper.perceive import prep as prep_mod
+    from vidosuper.perceive.transcribe import Utterance, Word
+
+    def speech(cid, wav, model, root):
+        return _fake_speech(cid, wav, model, root)
+
+    monkeypatch.setattr(prep_mod, "transcribe", speech)
+    friend = _friend(studio, "Joe")
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Joe", "password": "a long password 2"})
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
+    r = client.post("/new", data={"csrf": csrf, "title": "Talk", "shapes": "both", "length": 30, "kind": "talk",
+                                  "intent": "Add motion graphics on the topic I am talking about"}, follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    assert studio.db.project(pid)["shapes"] == "9:16"
+    _upload(client, csrf, pid, media / "clips" / "a_stable.mp4", "clip")
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    _drain(studio)
+    assert "Looks right" in client.get(f"/p/{pid}").text, studio.db.all("SELECT * FROM events")
+    client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
+    _drain(studio)
+    finals = studio.renders(studio.db.project(pid), "final")
+    assert finals
+    work = studio.s.users_dir / friend["id"] / "projects" / pid
+    script = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
+    assert script["callouts"] or script["scenes"]
+    assert (work / "out" / finals[0]["file"]).exists()

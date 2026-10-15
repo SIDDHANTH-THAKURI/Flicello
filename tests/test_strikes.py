@@ -144,9 +144,10 @@ def test_the_plan_schema_has_nothing_claude_code_refuses():
     import json
 
     from vidosuper.studio.brain.backends import model_schema
+    from vidosuper.explainer.script import VoiceScript
     from vidosuper.studio.brain.schemas import DesignPlan, Pitches, ProfileUpdate
     from vidosuper.studio.brain.core import ClipAnalysis
 
-    for model in (DesignPlan, Pitches, ProfileUpdate, ClipAnalysis):
+    for model in (DesignPlan, Pitches, ProfileUpdate, ClipAnalysis, VoiceScript):
         text = json.dumps(model_schema(model))
         assert "prefixItems" not in text, model.__name__

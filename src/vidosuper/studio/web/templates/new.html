@@ -7,10 +7,18 @@
   {% if left is not none and left <= 0 %}
     <p>You've made all your videos for this trial. Thank you!</p>
   {% else %}
-  <form method="post" action="/new" class="stack">
+  <form method="post" action="/new" class="stack" id="new-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>Name it <span class="muted">(optional)</span><input name="title" maxlength="60" placeholder="Beach day"></label>
     <fieldset>
+      <legend>What are you making?</legend>
+      <div class="chips">
+        <label class="chip"><input type="radio" name="kind" value="montage" checked><span>A video from my clips <i>cuts to music</i></span></label>
+        <label class="chip"><input type="radio" name="kind" value="talk"><span>Me talking, with motion graphics <i>your video stays</i></span></label>
+        <label class="chip"><input type="radio" name="kind" value="voice"><span>Just my voice, make the animation <i>no video needed</i></span></label>
+      </div>
+    </fieldset>
+    <label>Name it <span class="muted">(optional)</span><input name="title" maxlength="60" placeholder="Beach day"></label>
+    <fieldset data-kinds="montage voice">
       <legend>Where will you post it?</legend>
       <div class="chips">
         <label class="chip"><input type="radio" name="shapes" value="9:16" checked><span>Reels / Shorts / TikTok <i>9:16</i></span></label>
@@ -18,13 +26,13 @@
         <label class="chip"><input type="radio" name="shapes" value="both"><span>Both</span></label>
       </div>
     </fieldset>
-    <fieldset>
+    <fieldset data-kinds="montage">
       <legend>How long?</legend>
       <div class="chips">
         {% for n in LENGTHS %}<label class="chip"><input type="radio" name="length" value="{{ n }}" {% if n == 30 %}checked{% endif %}><span>{{ n }} s</span></label>{% endfor %}
       </div>
     </fieldset>
-    <fieldset>
+    <fieldset data-kinds="montage">
       <legend>How should it cut?</legend>
       <div class="chips">
         <label class="chip"><input type="radio" name="pace" value="calm" {% if default_pace == 'calm' %}checked{% endif %}><span>Calm and cinematic</span></label>

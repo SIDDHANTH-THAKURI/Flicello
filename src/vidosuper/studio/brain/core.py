@@ -25,6 +25,7 @@ from ...schemas import ClipAnalysis, ClipInfo, ClipSignals
 from ..settings import Models
 from .backends import BrainError, Request, SpendFn, Usage, structured
 from .context import REUSE_WORDS, BeatMap, ClipFacts, catalog_text, craft_rules, moment_by_id, prompt, rules_text
+from ...explainer.script import VoiceScript
 from .schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StoryBeat, StoryPitch, StyleRule
 
 SLOWMO_FPS = 47.0  # real slow motion only from 50/60 fps footage
@@ -415,6 +416,46 @@ class Brain:
                  "\n\nChange what they asked for and keep what works; don't rebuild a plan they mostly liked.")
         return self._design(ctx, pitch, extra, "revise")
 
+    # -- 6 the script of a voice (explainer videos)
+    def script_voice(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
+                     previous: VoiceScript | None = None, feedback: str = "") -> VoiceScript:
+        lines = [f"[{u['start']:6.1f}-{u['end']:6.1f}] {u['text']}" for u in utterances]
+        parts = [f"# Mode\n{mode}; the audio is {duration:.1f} seconds long.",
+                 "# What the person asked for\n" + (intent.strip() or "(nothing specific: do what suits the talk)"),
+                 "# This person's style rules\n" + rules_text(rules),
+                 "# The transcript (seconds into the audio)\n" + "\n".join(lines)]
+        if previous is not None:
+            parts.append("# The current script (the video they watched)\n" + json.dumps(previous.model_dump(), indent=1) +
+                         "\n\n# What they want changed\n" + feedback +
+                         "\n\nChange what they asked for and keep what works.")
+        parts.append("Return the script as JSON.")
+        req = Request("script", prompt("voice"), "\n\n".join(parts), VoiceScript, self.models.editor, effort="medium",
+                      max_tokens=8000)
+
+        def check(sc: VoiceScript) -> list[str]:
+            from ...explainer.script import fit_script
+
+            problems = []
+            fitted = fit_script(sc, duration, mode)
+            if mode == "voice" and len(fitted.scenes) < max(2, int(duration // 14)):
+                problems.append(f"only {len(fitted.scenes)} usable scenes for {duration:.0f} s: make one scene per point, "
+                                "4-10 seconds each, inside the audio, not overlapping")
+            if mode == "talk":
+                need = max(1, int(duration // 16))
+                have = len(fitted.callouts) + len(fitted.scenes)
+                if have < need:
+                    problems.append(f"only {have} callouts and cutaways for {duration:.0f} s: aim for one every 8-14 s "
+                                    f"(at least {need}), covering every number said and each new topic when it starts")
+            thin = [s.headline for s in fitted.scenes if s.layout in ("list", "steps") and len(s.items) < 2]
+            if thin:
+                problems.append(f"list/steps scenes need 2-4 items: {', '.join(thin[:3])}")
+            bad = [s.headline for s in fitted.scenes if s.layout == "compare" and len(s.items) != 2]
+            if bad:
+                problems.append(f"compare scenes need exactly 2 items: {', '.join(bad[:3])}")
+            return problems
+
+        return self._ask(req, check)
+
     # -- 5 learn
     def learn(self, rules: list[dict], events: list[str]) -> ProfileUpdate:
         text = ("# Current rules\n" + rules_text(rules) + "\n\n# What they did and said on this video\n" +
@@ -608,6 +649,13 @@ class LocalBrain:
                 plan[i] = s.model_copy(update={"key": new_key})
         return DesignPlan(name=pitch.title, idea=pitch.logline, pool=pool, plan=plan,
                           notes="Laid out by rule (no AI): holds to open, cuts in the build, a hit on the drop.")
+
+    def script_voice(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
+                     previous: VoiceScript | None = None, feedback: str = "") -> VoiceScript:
+        from ...explainer.script import local_script
+
+        self._free("script")
+        return local_script(utterances, duration, mode, (intent.strip()[:40] or "Your story"))
 
     def learn(self, rules: list[dict], events: list[str]) -> ProfileUpdate:
         self._free("learn")

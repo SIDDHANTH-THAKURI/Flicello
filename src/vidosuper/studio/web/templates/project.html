@@ -6,9 +6,55 @@
   <h1>{{ p.title }}</h1>
   <span class="pill {{ 'busy' if p.stage in BUSY else p.stage }}" id="stage-pill">{{ STAGES.get(p.stage, p.stage) }}</span>
 </div>
-<p class="muted small">{{ p.shapes|shapes }} · {{ p.length|int }} s{% if p.song %} · ♪ {{ p.song }}{% endif %}{% if p.intent %} · “{{ p.intent }}”{% endif %}</p>
+<p class="muted small">{% if p.kind == 'talk' %}Talking video{% elif p.kind == 'voice' %}Voice to animation · {{ p.shapes|shapes }}{% else %}{{ p.shapes|shapes }} · {{ p.length|int }} s{% endif %}{% if p.song and p.kind == 'montage' %} · ♪ {{ p.song }}{% endif %}{% if p.intent %} · “{{ p.intent }}”{% endif %}</p>
 
-{% if p.stage == 'setup' %}
+{% if p.stage == 'setup' and p.kind == 'voice' %}
+<section class="card">
+  <h2>1 · Your recording</h2>
+  <p class="muted small">Talk about your idea, a story, a review, a lesson: anything, up to 10 minutes. A voice memo from your phone is perfect. We write down what you said, work out what each part is about, and draw the animation to it.</p>
+  <label class="drop small-drop">
+    <input type="file" id="song-input" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg">
+    <span>{% if p.song %}🎙️ {{ p.song }} · tap to change{% else %}Tap to choose your recording{% endif %}</span>
+  </label>
+  <ul class="files" id="song-list"></ul>
+</section>
+<section class="card">
+  <h2>2 · Music under your voice <span class="muted small">(optional)</span></h2>
+  <form method="post" action="/p/{{ p.id }}/music" class="chips">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn {% if p.music == 'none' %}primary{% endif %}" type="submit" name="choice" value="none">{% if p.music == 'none' %}✓ {% endif %}No music</button>
+    <button class="btn {% if p.music != 'none' %}primary{% endif %}" type="submit" name="choice" value="made">{% if p.music != 'none' %}✓ {% endif %}A soft beat made for you (AI-made)</button>
+  </form>
+</section>
+<form method="post" action="/p/{{ p.id }}/start" class="center">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="btn primary big" type="submit" id="start-btn" {% if not p.song %}disabled{% endif %}>Start: make my animation</button>
+  <p class="muted small">Takes {{ total_eta|eta }} in all. You can close the page meanwhile.</p>
+</form>
+
+{% elif p.stage == 'setup' and p.kind == 'talk' %}
+<section class="card">
+  <h2>1 · Your video</h2>
+  <p class="muted small">One video of you talking, up to 10 minutes, vertical or horizontal. Your picture and your voice stay exactly as they are: we add the motion graphics for what you are talking about, at the moment you say it, and optional word-by-word captions. No music is added.</p>
+  <label class="drop" id="drop">
+    <input type="file" id="clip-input" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm">
+    <span>Tap to choose your video</span>
+  </label>
+  <ul class="files" id="clip-list">
+    {% for c in clips %}
+    <li data-clip="{{ c.id }}"><span class="name">{{ c.name }}</span><span class="muted">{{ c.seconds|mmss }}</span>
+      <button class="link danger-text" type="button" data-delete="{{ c.id }}">Remove</button></li>
+    {% endfor %}
+  </ul>
+  <ul class="files" id="upload-list"></ul>
+</section>
+<form method="post" action="/p/{{ p.id }}/start" class="center">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="btn primary big" type="submit" id="start-btn" {% if not clips %}disabled{% endif %}>Start: add my motion graphics</button>
+  <p class="muted small">Takes {{ total_eta|eta }} in all. You can close the page meanwhile.</p>
+</form>
+
+{% elif p.stage == 'setup' %}
 <section class="card">
   <h2>1 · Your clips</h2>
   <p class="muted small">Straight from your phone or camera, vertical or horizontal. Up to 20 clips; the more variety, the better the story.</p>
@@ -141,10 +187,12 @@
     <label>What should change?<textarea name="note" rows="2" maxlength="600" required placeholder="Slower start / more of the dog / different shot on the drop"></textarea></label>
     <button class="btn" type="submit">Try again with this</button>
   </form>
+  {% if p.kind == 'montage' %}
   <form method="post" action="/p/{{ p.id }}/sample" class="top-gap">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="ideas">
     <button class="link" type="submit">← Back to the story ideas</button>
   </form>
+  {% endif %}
 </section>
 
 {% elif p.stage == 'done' %}

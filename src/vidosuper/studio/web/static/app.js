@@ -139,6 +139,19 @@
   const out = document.getElementById("liked-out");
   if (liked && out) liked.addEventListener("input", () => { out.textContent = liked.value; });
 
+  // the new-video form shows only the questions that belong to the kind of video
+  const newForm = document.getElementById("new-form");
+  if (newForm) {
+    const apply = () => {
+      const kind = (newForm.querySelector('input[name="kind"]:checked') || {}).value || "montage";
+      newForm.querySelectorAll("[data-kinds]").forEach((el) => {
+        el.hidden = !el.dataset.kinds.split(" ").includes(kind);
+      });
+    };
+    newForm.querySelectorAll('input[name="kind"]').forEach((r) => r.addEventListener("change", apply));
+    apply();
+  }
+
   const link = document.getElementById("invite-link");
   if (link) {
     const full = location.origin + link.dataset.path;

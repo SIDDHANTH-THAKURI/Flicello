@@ -279,11 +279,12 @@ def create_app(studio: Studio) -> FastAPI:
 
     @app.post("/new")
     def new_post(request: Request, csrf: str = Form(""), title: str = Form(""), shapes: str = Form("9:16"),
-                 length: int = Form(30), intent: str = Form(""), pace: str = Form("balanced")):
+                 length: int = Form(30), intent: str = Form(""), pace: str = Form("balanced"),
+                 kind: str = Form("montage")):
         user, sess = need_user(request)
         check_csrf(sess, csrf)
         try:
-            project = studio.create_project(user, title, shapes, length, intent, pace)
+            project = studio.create_project(user, title, shapes, length, intent, pace, kind)
         except ActionError as exc:
             return page(request, "new.html", user, sess, left=studio.videos_left(user), error=str(exc),
                         default_pace=pace)
@@ -309,7 +310,7 @@ def create_app(studio: Studio) -> FastAPI:
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
         return page(request, "project.html", user, sess, p=p, job=job, clips=clips, pitches=pitches,
-                    eta=studio.eta(job), total_eta=studio.total_estimate(),
+                    eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
                     note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
                     info=json.loads(p["info"]) if p["info"] else None,

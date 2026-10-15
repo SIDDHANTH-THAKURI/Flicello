@@ -99,7 +99,8 @@ class Studio:
             raise ActionError("No such video.")
         return p
 
-    def create_project(self, user: dict, title: str, shapes: str, length: float, intent: str, pace: str = "balanced") -> dict:
+    def create_project(self, user: dict, title: str, shapes: str, length: float, intent: str, pace: str = "balanced",
+                       kind: str = "montage") -> dict:
         if (left := self.videos_left(user)) is not None and left <= 0:
             raise ActionError("You've used all your videos for this trial. Thank you!")
         if shapes not in ("9:16", "16:9", "both"):
@@ -109,12 +110,17 @@ class Studio:
         if pace not in ("calm", "balanced", "fast", "every"):
             raise ActionError("Pick how fast it should cut.")
         pace = pace_from_note(pace, intent)
+        if kind not in ("montage", "voice", "talk"):
+            raise ActionError("Pick what you are making.")
+        if kind == "talk" and shapes == "both":
+            shapes = "9:16"  # a talking video keeps its own shape
         pid = "p" + secrets.token_hex(6)
         now = time.time()
         title = " ".join(title.split())[:60] or time.strftime("My video, %d %b")
-        self.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated, pace) "
-                    "VALUES (?,?,?,?,?,?,'setup',?,?,?)", (pid, user["id"], title, shapes, float(length),
-                                                           " ".join(intent.split())[:600], now, now, pace))
+        self.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated, pace, kind, "
+                    "music) VALUES (?,?,?,?,?,?,'setup',?,?,?,?,?)",
+                    (pid, user["id"], title, shapes, float(length), " ".join(intent.split())[:600], now, now, pace, kind,
+                     "made" if kind == "montage" else "none"))
         workdir(self.s, user["id"], pid).ensure()
         return self.db.project(pid)
 
@@ -210,9 +216,10 @@ class Studio:
             return int(p * (elapsed * (1 - p) / p) + (1 - p) * by_history)
         return int(by_history)
 
-    def total_estimate(self) -> int:
+    def total_estimate(self, kind: str = "montage") -> int:
         """Start to a finished video, in seconds, for the page that asks to start."""
-        return int(sum(self.typical_seconds(k) for k in ("prepare", "pitch", "sample", "render")))
+        steps = ("prepare", "pitch", "sample", "render") if kind == "montage" else ("prepare", "render")
+        return int(sum(self.typical_seconds(k) for k in steps))
 
     def set_music(self, project: dict, choice: str) -> None:
         """With no song uploaded: a beat made for the video ('made'), or no music at all ('none')."""
@@ -229,6 +236,9 @@ class Studio:
 
     def start(self, project: dict) -> None:
         self._guard(project, "setup")
+        if project["kind"] != "montage":
+            self._start_explainer(project)
+            return
         if not self.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (project["id"],), 0):
             raise ActionError("Add at least one clip first.")
         footage = float(self.db.value("SELECT COALESCE(SUM(seconds), 0) FROM clips WHERE project_id=?", (project["id"],), 0.0))
@@ -263,7 +273,9 @@ class Studio:
             self._enqueue(project, "render")
             return
         if project["sample_tries"] >= MAX_SAMPLE_TRIES:
-            raise ActionError("Let's try a different story instead: go back and pick another idea.")
+            raise ActionError("Let's try a different story instead: go back and pick another idea."
+                              if project["kind"] == "montage" else
+                              "That's three tries: make this version, then ask for the changes you still want.")
         if not note:
             raise ActionError("Say what to change, so the next sample is better.")
         self.db.run("UPDATE projects SET sample_tries=sample_tries+1 WHERE id=?", (project["id"],))
@@ -271,6 +283,8 @@ class Studio:
 
     def back_to_ideas(self, project: dict) -> None:
         self._guard(project, "review")
+        if project["kind"] != "montage":
+            raise ActionError("There are no story ideas for this kind of video.")
         self.db.set_stage(project["id"], "choose")
 
     def rate(self, user: dict, project: dict, match: int, liked: int, tags: list[str], text: str, fix: str) -> None:
@@ -390,7 +404,100 @@ class Studio:
                         (project["id"], rnd, json.dumps(p["pitch"]), json.dumps(p["stills"]), time.time()))
         self.db.run("UPDATE projects SET pitch_round=? WHERE id=?", (rnd, project["id"]))
 
+    # ------------------------------------------------------------------ voice and talking videos (see ../explainer)
+    def _start_explainer(self, project: dict) -> None:
+        work = workdir(self.s, project["user_id"], project["id"])
+        if project["kind"] == "voice":
+            if work.song_path() is None:
+                raise ActionError("Add your recording first.")
+        else:
+            clips = self.db.all("SELECT seconds FROM clips WHERE project_id=?", (project["id"],))
+            if len(clips) != 1:
+                raise ActionError("Add the one video of you talking.")
+            if clips[0]["seconds"] and clips[0]["seconds"] > 600:
+                raise ActionError("A talking video can be up to 10 minutes.")
+        self._enqueue(project, "prepare")
+
+    def _save_script(self, project: dict, script, kind: str) -> int:
+        return self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
+                           (project["id"], kind, None, script.model_dump_json(), time.time()))
+
+    def _script_for(self, pipe, project: dict, user: dict, speech: dict, previous=None, feedback: str = ""):
+        from ..explainer.make import fit
+
+        raw = pipe.brain.script_voice(speech["utterances"], speech["duration"], project["kind"], project["intent"],
+                                      self.profile(user).rules, previous, feedback)
+        return fit(raw, speech)
+
+    def _explainer_render(self, job, project, user, script, plan_id: int, sample: bool) -> None:
+        from ..explainer import make
+
+        work = workdir(self.s, project["user_id"], project["id"])
+        speech = make.load_speech(work.root)
+        if speech is None:
+            raise ActionError("Start again: the recording is missing.")
+        if project["kind"] == "voice":
+            shapes = self.shapes(project)
+        else:
+            shapes = ["9:16" if (speech.get("height") or 0) > (speech.get("width") or 0) else "16:9"]
+        bed = None
+        if project["kind"] == "voice" and project["music"] == "made":
+            from ..music.house import make_beat
+
+            bed = work.root / "bed.wav"
+            if not bed.exists():
+                make_beat(bed, speech["duration"] + 4, "calm")
+        version = project["version"] + (0 if sample else 1)
+        for shape in (shapes[:1] if sample else shapes):
+            name = f"sample-{plan_id}" if sample else f"v{version}-{shape.replace(':', 'x')}"
+            out = work.out / f"{name}.mp4"
+            info = make.render(script, speech, shape, out, music=bed, sample=sample,
+                               progress=lambda f: self.db.job_progress(job["id"], 0.4 + 0.58 * f, "Drawing your video"))
+            self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
+                        "findings, created) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (project["id"], plan_id, version, "sample" if sample else "final", shape, info["path"],
+                         info["seconds"], info["render_seconds"], "[]", time.time()))
+        if sample:
+            self.db.set_stage(project["id"], "review")
+        else:
+            self.db.run("UPDATE projects SET version=? WHERE id=?", (version, project["id"]))
+            self.db.set_stage(project["id"], "done")
+
+    def _job_explainer(self, job, project, user, step: str) -> None:
+        from ..explainer import make
+        from ..explainer.script import VoiceScript
+
+        pipe = self._pipeline(job, project, user)
+        work = workdir(self.s, project["user_id"], project["id"])
+        if step == "prepare":
+            speech = make.prepare(project["kind"], work.root, work.clips, work.song_path(), self.cfg,
+                                  lambda f, m: self.db.job_progress(job["id"], 0.2 * f, m))
+            self.db.run("UPDATE projects SET info=? WHERE id=?",
+                        (json.dumps({"notes": [], "song_seconds": speech["duration"], "words": speech["words"],
+                                     "seconds": speech["duration"]}), project["id"]))
+            self.db.job_progress(job["id"], 0.25, "Working out what each part is about")
+            script = self._script_for(pipe, project, user, speech)
+            plan_id = self._save_script(project, script, "script")
+            self._explainer_render(job, project, user, script, plan_id, sample=True)
+            return
+        speech = make.load_speech(work.root)
+        row = self.latest_plan(project)
+        if speech is None or row is None:
+            raise ActionError("There is nothing to render yet.")
+        script = VoiceScript.model_validate_json(row["data"])
+        feedback = job["params"].get("note") or job["params"].get("feedback") or ""
+        if job["params"].get("tags"):
+            feedback += "\nThey also ticked: " + ", ".join(job["params"]["tags"])
+        plan_id = row["id"]
+        if step in ("sample", "revise") and feedback.strip():
+            self.db.job_progress(job["id"], 0.2, "Working your changes in")
+            script = self._script_for(pipe, project, user, speech, script, feedback)
+            plan_id = self._save_script(project, script, "revise")
+        self._explainer_render(job, project, user, script, plan_id, sample=(step == "sample"))
+
     def _job_prepare(self, job, project, user):
+        if project["kind"] != "montage":
+            return self._job_explainer(job, project, user, "prepare")
         pipe = self._pipeline(job, project, user, 0.0, 0.8)
         info = pipe.analyse(project["length"], project["pace"])
         self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
@@ -418,6 +525,8 @@ class Studio:
         return row["id"], StoryPitch.model_validate(json.loads(row["data"]))
 
     def _job_sample(self, job, project, user):
+        if project["kind"] != "montage":
+            return self._job_explainer(job, project, user, "sample")
         pipe = self._pipeline(job, project, user)
         ctx = self._context(pipe, project, user)
         pid, pitch = self._chosen(project, job["params"].get("pitch"))
@@ -446,6 +555,8 @@ class Studio:
         self.db.set_stage(project["id"], "done")
 
     def _job_render(self, job, project, user):
+        if project["kind"] != "montage":
+            return self._job_explainer(job, project, user, "render")
         pipe = self._pipeline(job, project, user)
         ctx = self._context(pipe, project, user)
         row = self.latest_plan(project)
@@ -454,6 +565,8 @@ class Studio:
         self._render_plan(job, project, user, pipe, ctx, DesignPlan.model_validate_json(row["data"]), row["id"])
 
     def _job_revise(self, job, project, user):
+        if project["kind"] != "montage":
+            return self._job_explainer(job, project, user, "revise")
         pipe = self._pipeline(job, project, user, 0.0, 0.25)
         ctx = self._context(pipe, project, user)
         row = self.latest_plan(project)
