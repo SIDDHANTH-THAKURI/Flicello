@@ -210,3 +210,5 @@ html.intro-on body { overflow: hidden; }
 
 .notice { border-color: rgba(245, 196, 81, .45); background: rgba(245, 196, 81, .06); }
 .notice p { margin: .3rem 0; }
+
+.chip.disabled { opacity: 0.45; pointer-events: none; }

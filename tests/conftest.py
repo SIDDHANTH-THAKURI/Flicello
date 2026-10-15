@@ -31,3 +31,18 @@ def ingested(media, cfg):
     signals = measure_project(project, cfg)
     by_name = {Path(c.rel_path).stem: c for c in clips}
     return project, by_name, signals
+
+
+@pytest.fixture(autouse=True)
+def offline_animations(tmp_path, monkeypatch):
+    """No test reaches LottieFiles or runs the (slow) portrait-matting model: the animation library lives in a temp
+    folder and is offline, and the cut-out is off unless a test turns it on with a fake matte."""
+    from vidosuper.explainer import cutout, lottie_lib
+
+    monkeypatch.setattr(lottie_lib, "ROOT", tmp_path / "lottie")
+
+    def offline(url, timeout=20.0):
+        raise OSError("offline in tests")
+
+    monkeypatch.setattr(lottie_lib, "fetch_url", offline)
+    monkeypatch.setattr(cutout, "available", lambda model=None: False)

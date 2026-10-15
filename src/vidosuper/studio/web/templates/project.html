@@ -6,7 +6,7 @@
   <h1>{{ p.title }}</h1>
   <span class="pill {{ 'busy' if p.stage in BUSY else p.stage }}" id="stage-pill">{{ STAGES.get(p.stage, p.stage) }}</span>
 </div>
-<p class="muted small">{% if p.kind == 'talk' %}Talking video{% elif p.kind == 'voice' %}Voice to animation · {{ p.shapes|shapes }}{% else %}{{ p.shapes|shapes }} · {{ p.length|int }} s{% endif %}{% if p.song and p.kind == 'montage' %} · ♪ {{ p.song }}{% endif %}{% if p.intent %} · “{{ p.intent }}”{% endif %}</p>
+<p class="muted small">{% if p.kind == 'talk' %}Talking video · {{ 'designer animations' if p.style == 'designed' else 'clean labels' }}{% elif p.kind == 'voice' %}Voice to animation · {{ p.shapes|shapes }}{% else %}{{ p.shapes|shapes }} · {{ p.length|int }} s{% endif %}{% if p.song and p.kind == 'montage' %} · ♪ {{ p.song }}{% endif %}{% if p.intent %} · “{{ p.intent }}”{% endif %}</p>
 
 {% if p.stage == 'setup' and p.kind == 'voice' %}
 <section class="card">

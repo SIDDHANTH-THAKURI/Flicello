@@ -187,3 +187,30 @@ AI). The clips folder is only read.
   (about $0.05). Revisions pass the previous script and the person's words.
 - Stages are the same as for a montage (setup, preparing, review of a sample, rendering, done); the prepare job also makes
   the sample. Uploads: the recording goes in as upload kind `song` (audio), the talking video as one `clip`.
+
+## Designed talking videos (2026-10-16)
+
+A talking video (or a voice) can now have **designer animations**: `projects.style` is `designed` (default) or `labels`
+(the clean labels from before); the form also lists AI-made scenes, explainer drawings and 3D as "coming soon".
+
+- **The cut-out** (`explainer/cutout.py`): MODNet portrait matting (Apache-2.0, `%LOCALAPPDATA%/VidoSuper/models/
+  modnet.onnx`, from huggingface.co/Xenova/modnet `onnx/model.onnx`, sha256 07c308cf…). A guided filter snaps the edge to
+  the picture, pieces not attached to the person are dropped (ceilings, chairs), edge colours are cleaned of the wall
+  behind, and the matte is smoothed over time. No fixed head area: the zones for graphics come from the person's outline.
+  Without the model file the same graphics are drawn over the video on a dark band.
+- **The animation library** (`explainer/lottie_lib.py`, `%LOCALAPPDATA%/VidoSuper/lottie`): free LottieFiles animations
+  (Lottie Simple License: commercial use and changes allowed, no credit needed), pulled per topic on demand, each tested
+  in a child process first (one real file crashes the native renderer), measured (size, length, own background, faint,
+  empty lead-in). Picks are remembered per need; needs that nothing fitted are remembered too (no paying to ask again).
+- **Picking** (`explainer/visuals.py`): the script names a `visual` and search `topics` for every moment; the brain sees
+  numbered preview sheets and picks (`Brain.pick_visuals`, Sonnet, ~6 needs per request); needs nothing fitted get one
+  more try with simpler ideas (`Brain.rethink_visuals`, Haiku). What still has nothing shows the words, animated.
+- **The script** (`prompts/voice.md` + `DESIGNED_TEXT`): `scene` callouts every 3-6 s on the word, `title`, `stack`
+  (10 audio clips fly out of the email), `stat`, an `ambient` loop behind the head, `punch` once. `check_voice_script`
+  sends it back when a stretch over 10 s of speech has no graphics or a number that is said is not shown.
+- **The renderer** (`explainer/designed.py`): stage (palette gradient, fog, particles), ambient loop, the main animation in
+  the free zone above/beside the person (may sink behind the head), labels in front above the head, stacks, counting
+  stats, kinetic titles, full-screen cutaways, captions (split numbers rejoined), a slow push-in and one punch. Their audio
+  is copied untouched. Final videos are drawn by `render_processes` (3) processes in parallel and joined.
+- Speed on this laptop: ~12 s of work per second of video with 3 processes (a 2-minute talk: ~25 minutes).
+- The transcript for talk/voice keeps every sentence (Whisper's "unsure" flag dropped real lines, like the rating).

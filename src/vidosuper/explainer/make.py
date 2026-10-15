@@ -20,7 +20,10 @@ from ..ffmpeg import ffprobe_json, find_tool
 from ..ingest import ingest_folder
 from ..perceive.prep import ensure_transcript
 from ..perceive.transcribe import transcribe
+from . import cutout
 from .compose import render_talk, render_voice
+from .designed import render_designed
+from .lottie_lib import Library
 from .script import VoiceScript, fit_script
 
 Progress = Callable[[float, str], None]
@@ -67,7 +70,7 @@ def prepare(kind: str, root: Path, clips_dir: Path, audio_file: Path | None, cfg
         progress(0.3, "Writing down what you said")
         tr = transcribe("voice", wav16, cfg.analysis.whisper_model, cfg.models_root / "whisper")
         data = {"kind": "voice", "audio": str(wav), "video": None, "wav": str(wav), "duration": round(duration, 3),
-                "utterances": [u.model_dump() for u in tr.utterances if u.confident], "language": tr.language}
+                "utterances": [u.model_dump() for u in tr.utterances], "language": tr.language}  # all of it: a recording is speech
     else:
         progress(0.1, "Looking at your video")
         project, clips = ingest_folder(clips_dir, cfg)
@@ -81,7 +84,7 @@ def prepare(kind: str, root: Path, clips_dir: Path, audio_file: Path | None, cfg
         tr = ensure_transcript(project, clip, cfg)
         data = {"kind": "talk", "audio": str(clip.path), "video": str(clip.path), "wav": clip.audio_wav16k,
                 "duration": round(clip.duration, 3), "width": clip.width, "height": clip.height,
-                "utterances": [u.model_dump() for u in (tr.utterances if tr else []) if u.confident],
+                "utterances": [u.model_dump() for u in (tr.utterances if tr else [])],  # a talking video: all of it is speech
                 "language": tr.language if tr else None}
     if not data["utterances"]:
         raise ExplainerError("I couldn't hear any speech in it. Try a recording where the voice is clearer.")
@@ -98,12 +101,31 @@ def fit(script: VoiceScript, speech: dict) -> VoiceScript:
     return fit_script(script, float(speech["duration"]), speech["kind"])
 
 
+def busiest(script: VoiceScript, duration: float, seconds: float = SAMPLE_SECONDS) -> float:
+    """Where the sample should start: the stretch with the most graphics starting in it (a title counts double), so
+    the person judges the style, not an intro."""
+    marks = [(c.at, 2.0 if c.kind == "title" else 1.0) for c in script.callouts] + [(s.start, 1.0) for s in script.scenes]
+    if not marks or duration <= seconds:
+        return 0.0
+    best, score = 0.0, -1.0
+    for a, _ in marks:
+        start = max(0.0, min(a - 0.6, duration - seconds))
+        sc = sum(wt for t, wt in marks if start <= t <= start + seconds - 1.0)
+        if sc > score + 1e-9:
+            best, score = start, sc
+    return round(best, 2)
+
+
 def _size(shape: str) -> tuple[int, int]:
     return SIZES.get(shape, SIZES["9:16"])
 
 
+def cutout_available() -> bool:
+    return cutout.available()
+
+
 def render(script: VoiceScript, speech: dict, shape: str, out: Path, *, music: Path | None = None, sample: bool = False,
-          sample_start: float = 0.0, progress: Callable[[float], None] | None = None) -> dict:
+          sample_start: float = 0.0, progress: Callable[[float], None] | None = None, workers: int = 1) -> dict:
     """Draw the video, or a sample of it starting at `sample_start` (the part that changed). Returns
     {"path", "seconds", "render_seconds"}."""
     t0 = time.monotonic()
@@ -112,9 +134,14 @@ def render(script: VoiceScript, speech: dict, shape: str, out: Path, *, music: P
     start = max(0.0, min(sample_start, duration - SAMPLE_SECONDS)) if sample else 0.0
     end = min(duration, start + SAMPLE_SECONDS) if sample else None
     quality = "draft" if sample else "final"
+    lib = Library() if script.style == "designed" else None
     if speech["kind"] == "voice":
         render_voice(script, Path(speech["audio"]), speech["utterances"], out, size, music=music, quality=quality,
-                     start=start, end=end, progress=progress)
+                     start=start, end=end, progress=progress, lib=lib)
+    elif script.style == "designed":
+        render_designed(script, Path(speech["video"]), speech["utterances"], out, size,
+                        Path(speech["wav"]) if speech.get("wav") else None, start=start, end=end,
+                        duration=float(speech["duration"]), quality=quality, lib=lib, progress=progress, workers=workers)
     else:
         render_talk(script, Path(speech["video"]), speech["utterances"], out, size, Path(speech["wav"]) if speech.get("wav") else None,
                     quality=quality, start=start, end=end, duration=duration, progress=progress)

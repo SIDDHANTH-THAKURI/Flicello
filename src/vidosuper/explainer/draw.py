@@ -169,9 +169,18 @@ def _card(size: tuple[int, int], radius: int, fill: tuple[int, ...]) -> Image.Im
     return img
 
 
-def hero(frame: Image.Image, emoji: str, cx: float, cy: float, px: int, t: float, t0: float, pal: dict, level: float) -> None:
-    """The scene's big picture: a ring pulsing with the voice, and the emoji springing in."""
+LOTTIE = None  # set by the renderer: (animation id, seconds into it, width) -> RGBA image, for designer animations
+
+
+def hero(frame: Image.Image, emoji: str, cx: float, cy: float, px: int, t: float, t0: float, pal: dict, level: float,
+         lottie: str = "") -> None:
+    """The scene's big picture: a designer animation when there is one, else a ring pulsing with the voice and the
+    emoji springing in."""
     k = pop(t, t0)
+    art = LOTTIE(lottie, t - t0, int(px * 1.9)) if (lottie and LOTTIE is not None) else None
+    if art is not None:
+        place(frame, art, cx, cy + math.sin(t * 2.2) * px * 0.02, scale=0.6 + 0.4 * clamp(k, 0, 1.1), alpha=clamp(k * 1.5))
+        return
     ring = Image.new("RGBA", frame.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(ring)
     for j, (grow, a) in enumerate(((1.0, 90), (1.28, 55), (1.6, 28))):
@@ -201,7 +210,8 @@ def draw_scene(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) 
     maxw = int(w * (0.84 if vertical else 0.7))
     if s.layout in ("title", "keyword"):
         big = s.layout == "title"
-        hero(frame, s.emoji, w / 2, h * (0.34 if vertical else 0.4), int(u * (0.34 if big else 0.28)), t, a + 0.05, pal, level)
+        hero(frame, s.emoji, w / 2, h * (0.34 if vertical else 0.4), int(u * (0.34 if big else 0.28)), t, a + 0.05, pal, level,
+             s.lottie)
         title_text(frame, s.headline.upper() if big else s.headline, w / 2, h * (0.62 if vertical else 0.74), maxw,
                    int(h * 0.26), int(u * (0.11 if big else 0.13)), ink, t, a + 0.25)
         bar = pop(t, a + 0.5, 0.6)

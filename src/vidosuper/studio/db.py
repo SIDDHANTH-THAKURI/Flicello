@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS projects(
   sample_tries INTEGER NOT NULL DEFAULT 0, pitch_round INTEGER NOT NULL DEFAULT 0, chosen INTEGER,
   song TEXT, info TEXT, error TEXT, deleted INTEGER NOT NULL DEFAULT 0, song_seconds REAL,
   pace TEXT NOT NULL DEFAULT 'balanced', music TEXT NOT NULL DEFAULT 'made',
-  kind TEXT NOT NULL DEFAULT 'montage');
+  kind TEXT NOT NULL DEFAULT 'montage', style TEXT NOT NULL DEFAULT 'designed');
 CREATE TABLE IF NOT EXISTS clips(
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL, file TEXT NOT NULL, bytes INTEGER NOT NULL,
   seconds REAL, width INTEGER, height INTEGER, created REAL NOT NULL);
@@ -94,6 +94,8 @@ class DB:
         have = {r[1] for r in con.execute("PRAGMA table_info(projects)")}
         if "song_seconds" not in have:
             con.execute("ALTER TABLE projects ADD COLUMN song_seconds REAL")
+        if "style" not in have:
+            con.execute("ALTER TABLE projects ADD COLUMN style TEXT NOT NULL DEFAULT 'designed'")
         if "kind" not in have:
             con.execute("ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'montage'")
         if "music" not in have:

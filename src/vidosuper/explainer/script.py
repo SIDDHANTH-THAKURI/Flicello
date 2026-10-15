@@ -70,15 +70,29 @@ class Scene(BaseModel):
     items: list[Item] = Field(default_factory=list, description="list/steps: 2-4 items; compare: exactly 2; others: empty.")
     value: str = Field("", description="stat: the number as spoken, e.g. '7.5/10', '40%', '3x'.")
     palette: str = Field("", description="midnight, sunrise, mint, paper or berry; empty = the script's.")
+    visual: str = Field("", description="The designer animation that would show this scene best, in a few words "
+                                        "('two people podcasting at a table'). Empty = the emoji is enough.")
+    topics: list[str] = Field(default_factory=list, description="1-3 simple words to search an animation library for "
+                                                                "it: 'podcast', 'microphone'.")
+    lottie: str = Field("", description="Leave empty: filled in by the tool.")
 
 
 class Callout(BaseModel):
     at: float = Field(..., description="Seconds into the video when it pops up (as the topic is spoken).")
-    until: float = Field(..., description="Seconds when it goes (2-4 s after `at`).")
-    kind: Literal["pill", "stat", "title"] = Field("pill", description="pill: emoji + 1-4 words; stat: a number; title: a name.")
+    until: float = Field(..., description="Seconds when it goes (2-4 s after `at`; a `scene` may stay up to 6 s).")
+    kind: Literal["pill", "stat", "title", "scene", "stack"] = Field("pill", description=(
+        "scene: a designer animation of what is being said, big, behind the person (one at a time); "
+        "stack: `count` small copies of an animation flying out of the current scene (10 audio clips, 3 reasons); "
+        "pill: emoji + 1-4 words; stat: a number; title: a name, typed on."))
     text: str = ""
     emoji: str = ""
     value: str = ""
+    visual: str = Field("", description="scene/stack: the animation that shows it, in a few words.")
+    topics: list[str] = Field(default_factory=list, description="scene/stack: 1-3 simple words to search an animation "
+                                                                "library for it.")
+    count: int = Field(0, description="stack: how many.")
+    punch: bool = Field(False, description="A quick zoom on the person as it appears (for the strongest moment only).")
+    lottie: str = Field("", description="Leave empty: filled in by the tool.")
 
 
 class VoiceScript(BaseModel):
@@ -86,6 +100,11 @@ class VoiceScript(BaseModel):
     idea: str = Field("", description="The animation's idea in one line.")
     palette: str = "midnight"
     captions: bool = Field(True, description="Word-by-word captions along the bottom.")
+    style: Literal["designed", "labels"] = Field("designed", description="Leave as given.")
+    ambient: str = Field("", description="talk: a looping animation behind the person's head the whole time, in a few "
+                                         "words ('a circular sound visualizer'); empty for none.")
+    ambient_topics: list[str] = Field(default_factory=list, description="1-2 words to search the library for it.")
+    ambient_lottie: str = Field("", description="Leave empty: filled in by the tool.")
     scenes: list[Scene] = Field(default_factory=list)
     callouts: list[Callout] = Field(default_factory=list)
     notes: str = ""
@@ -166,7 +185,8 @@ def _at(words: list[dict], key: str, after: float, before: float) -> float:
     return after
 
 
-def local_script(utterances: list[dict], duration: float, mode: str = "voice", name: str = "Your story") -> VoiceScript:
+def local_script(utterances: list[dict], duration: float, mode: str = "voice", name: str = "Your story",
+                 designed: bool = False) -> VoiceScript:
     """A usable script without AI: sentences grouped into scenes, keywords and emoji from what is said."""
     words = _words(utterances)
     scenes: list[Scene] = []
@@ -198,11 +218,20 @@ def local_script(utterances: list[dict], duration: float, mode: str = "voice", n
             value = f"{number.group(1)}/{number.group(2)}" if number.group(1) else f"{number.group(3)}{number.group(4)}"
         scenes.append(Scene(start=a, end=b, layout=layout, headline=(keys[0].title() if keys else "…"),
                             emoji=pick_emoji(text, i), items=items if layout in ("list", "steps") else [], value=value))
-        if mode == "talk" and keys:
+        if designed and keys:
+            scenes[-1] = scenes[-1].model_copy(update={"visual": keys[0].lower(), "topics": [keys[0].lower()]})
+        if mode == "talk" and keys and designed:
+            t0 = _at(words, keys[0], a, b)
+            callouts.append(Callout(at=t0, until=min(duration, t0 + 4.0), kind="scene", text=keys[0].title(),
+                                    emoji=pick_emoji(text, i), visual=keys[0].lower(), topics=[keys[0].lower()]))
+        elif mode == "talk" and keys:
             callouts.append(Callout(at=_at(words, keys[0], a, b), until=min(duration, _at(words, keys[0], a, b) + 3.2),
                                     kind="stat" if number else "pill", text=keys[0].title(), emoji=pick_emoji(text, i),
                                     value=scenes[-1].value))
-    return fit_script(VoiceScript(name=name, idea="", scenes=scenes, callouts=callouts), duration, mode)
+    if mode == "talk" and designed:
+        scenes = []  # the person stays on screen; the animations go behind them
+    return fit_script(VoiceScript(name=name, idea="", scenes=scenes, callouts=callouts,
+                                  style="designed" if designed else "labels"), duration, mode)
 
 
 def fit_script(script: VoiceScript, duration: float, mode: str) -> VoiceScript:
@@ -240,13 +269,29 @@ def fit_script(script: VoiceScript, duration: float, mode: str) -> VoiceScript:
             if sum(x.end - x.start for x in kept) + span <= budget:
                 kept.append(s)
         scenes = kept
-    callouts = []
-    for c in sorted(script.callouts, key=lambda c: c.at):
+    callouts: list[Callout] = []
+    ordered = sorted(script.callouts, key=lambda c: c.at)
+    visual = [c for c in ordered if c.kind == "scene"]
+    for c in ordered:
         a = max(0.0, min(c.at, duration - 1.0))
-        b = max(a + 1.2, min(c.until, a + 4.5, duration))
         if mode == "talk" and any(s.start - 0.2 <= a <= s.end for s in scenes):
             continue
-        if callouts and a < callouts[-1].until + 0.4:
-            continue
-        callouts.append(c.model_copy(update={"at": a, "until": b, "emoji": c.emoji if valid_emoji(c.emoji) else ""}))
+        if c.kind == "scene":  # an animation holds until the next one starts (6 s at most, 1.5 s at least)
+            nxt = next((x.at for x in visual if x.at > c.at + 0.05), duration)
+            b = max(a + 1.5, min(c.until if c.until > a + 1.5 else a + 6.0, nxt - 0.05, a + 6.0, duration))
+            if any(x.kind == "scene" and a < x.until - 0.05 for x in callouts):
+                continue
+        else:
+            b = max(a + 1.2, min(c.until, a + 4.5, duration))
+            if any(x.kind not in ("scene",) and a < x.until + 0.3 and x.kind != "stack" for x in callouts) and c.kind != "stack":
+                continue
+        count = max(0, min(c.count, 12)) if c.kind == "stack" else 0
+        callouts.append(c.model_copy(update={"at": a, "until": b, "count": count,
+                                             "emoji": c.emoji if valid_emoji(c.emoji) else ""}))
+    for k, c in enumerate(callouts):  # a scene stays up while a stack flies out of it
+        if c.kind == "scene":
+            kids = [x for x in callouts if x.kind == "stack" and c.at <= x.at <= c.until + 0.6]
+            nxt = next((x.at for x in callouts if x.kind == "scene" and x.at > c.at + 0.05), duration)
+            if kids:
+                callouts[k] = c.model_copy(update={"until": min(max(c.until, *(x.until for x in kids)), nxt - 0.05)})
     return script.model_copy(update={"palette": pal, "scenes": scenes, "callouts": callouts if mode == "talk" else []})

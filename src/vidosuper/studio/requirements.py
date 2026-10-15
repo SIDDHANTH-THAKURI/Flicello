@@ -49,8 +49,12 @@ def montage(project: dict, *, mean_shot: float, shots: int, hits_total: int, hit
     return rows
 
 
+BEHIND = re.compile(r"\b(behind me|in the back(?:ground)?|background|behind)\b", re.I)
+
+
 def explainer(project: dict, *, scenes: int, callouts: int, cutaways: int, captions: bool, seconds: float,
-              duration: float, music_playing: bool, audio_kept: bool) -> list[dict]:
+              duration: float, music_playing: bool, audio_kept: bool, style: str = "labels", animated: int = 0,
+              cut_out: bool = False) -> list[dict]:
     note, kind = project["intent"] or "", project["kind"]
     rows = []
     if kind == "voice":
@@ -61,6 +65,12 @@ def explainer(project: dict, *, scenes: int, callouts: int, cutaways: int, capti
         rows.append(_row(callouts + cutaways >= max(1, int(duration // 16)), "motion graphics on the topics",
                          f"{callouts} callouts and {cutaways} cutaways for {duration:.0f} s"))
         rows.append(_row(audio_kept, "your own sound kept", "unchanged" if audio_kept else "changed"))
+    if style == "designed":
+        rows.append(_row(animated >= max(1, (scenes + callouts) // 3), "designer animations",
+                         f"{animated} animated moments"))
+    if kind == "talk" and BEHIND.search(note):
+        rows.append(_row(cut_out, "graphics behind you", "you are cut out in front of them" if cut_out else
+                         "drawn over your video (the cut-out was not available)"))
     if wants_no_music(note) or kind == "talk":
         rows.append(_row(not music_playing, "no music added", "none" if not music_playing else "music is playing"))
     if CAPTIONS.search(note) and not re.search(r"\bno (captions?|subtitles?)\b", note, re.I):

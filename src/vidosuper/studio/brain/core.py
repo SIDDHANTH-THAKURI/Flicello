@@ -26,6 +26,9 @@ from ..settings import Models
 from .backends import BrainError, Request, SpendFn, Usage, structured
 from .context import REUSE_WORDS, BeatMap, ClipFacts, catalog_text, craft_rules, moment_by_id, prompt, rules_text
 from ...explainer.script import VoiceScript
+
+DESIGNED_TEXT = '# Style: DESIGNED (designer animations)\nThe person picked designer animations. talk: they are cut out of their room and stand in front of a stage; your callouts are drawn BEHIND them, above and around their head.\n- The backbone is `scene` callouts: one designer animation for what is being said right now, about every 3-6 seconds, each starting on the word that brings it. `visual` says in a few concrete words what the animation should show ("two people podcasting at a table", "an email arriving with a notification", "a ghost floating"), `topics` gives 1-3 simple search words for an animation library ("podcast", "email", "ghost"). Think like a motion designer illustrating the story, not a subtitle writer. `text` on a scene is an optional 1-3 word label.\n- `title` for the name of the thing being talked about, once, early (typed on letter by letter).\n- `stack` when a number of things is said ("10 audio clips", "3 reasons"): `count`, a `visual` for one of them ("an audio waveform") and `text` ("10 audio clips"); it flies out of the scene that is up.\n- `stat` for a rating or a figure (value as said). `pill` rarely.\n- `ambient`: one looping animation behind their head for the whole video that suits the subject ("a circular sound visualizer" for audio/music/podcasts, "soft floating particles", "film reel") with `ambient_topics`.\n- Set `punch` on the single strongest moment.\n- voice mode: give every scene a `visual` and `topics` too, so it gets a real animation instead of an emoji.\n'
+from .schemas import VisualIdeas, VisualPicks
 from .schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StoryBeat, StoryPitch, StyleRule
 
 SLOWMO_FPS = 47.0  # real slow motion only from 50/60 fps footage
@@ -335,6 +338,57 @@ def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: boo
 
 # ---------------------------------------------------------------- the Claude brain
 
+def check_voice_script(sc: VoiceScript, utterances: list[dict], duration: float, mode: str, style: str) -> list[str]:
+    """What is wrong with a voice/talk script, in words the model can act on (empty: fine)."""
+    from ...explainer.script import fit_script
+
+    problems = []
+    fitted = fit_script(sc, duration, mode)
+    if mode == "voice" and len(fitted.scenes) < max(2, int(duration // 14)):
+        problems.append(f"only {len(fitted.scenes)} usable scenes for {duration:.0f} s: make one scene per point, "
+                        "4-10 seconds each, inside the audio, not overlapping")
+    if mode == "talk" and style == "designed":
+        drawn = [c for c in fitted.callouts if c.kind == "scene" and c.visual]
+        if len(drawn) < max(1, int(duration // 9)):
+            problems.append(f"only {len(drawn)} `scene` callouts with a `visual` for {duration:.0f} s: illustrate "
+                            "what is said about every 3-6 s with a scene (visual + topics)")
+        marks = sorted([c.at for c in fitted.callouts] + [s.start for s in fitted.scenes])
+        speech = [(u["start"], u["end"]) for u in utterances]
+        edges = [0.0, *marks, duration]
+        gaps = [(a, b) for a, b in zip(edges, edges[1:]) if b - a > 10.0
+                and sum(max(0.0, min(b, e) - max(a, st)) for st, e in speech) > 6.0]
+        if gaps:
+            problems.append("no graphics for long stretches while they speak: " + ", ".join(
+                f"{a:.0f}-{b:.0f} s" for a, b in gaps[:4]) + ": add scenes there (every 3-6 s)")
+    if mode == "talk":
+        from ...explainer.script import NUMBER
+
+        shown = [c.at for c in fitted.callouts if c.kind in ("stat", "stack")]
+        shown += [s.start for s in fitted.scenes if s.layout == "stat"]
+        for u in utterances:
+            for m in NUMBER.finditer(u["text"]):
+                if not any(abs(x - u["start"]) < 6 or u["start"] - 1 <= x <= u["end"] + 1 for x in shown):
+                    problems.append(f"'{m.group(0)}' is said at {u['start']:.0f} s but not shown: give it a `stat` "
+                                    "(value as said) or a `stack`")
+                    break
+    if mode == "talk":
+        need = max(1, int(duration // 16))
+        have = len(fitted.callouts) + len(fitted.scenes)
+        if have < need:
+            problems.append(f"only {have} callouts and cutaways for {duration:.0f} s: aim for one every 8-14 s "
+                            f"(at least {need}), covering every number said and each new topic when it starts")
+    thin = [s.headline for s in fitted.scenes if s.layout in ("list", "steps") and len(s.items) < 2]
+    if thin:
+        problems.append(f"list/steps scenes need 2-4 items: {', '.join(thin[:3])}")
+    flow = [s.headline for s in fitted.scenes if s.layout in ("flow", "chat") and not 2 <= len(s.items) <= 5]
+    if flow:
+        problems.append(f"flow/chat scenes need 2-4 (flow) or 2-5 (chat) items: {', '.join(flow[:3])}")
+    bad = [s.headline for s in fitted.scenes if s.layout == "compare" and len(s.items) != 2]
+    if bad:
+        problems.append(f"compare scenes need exactly 2 items: {', '.join(bad[:3])}")
+    return problems
+
+
 class Brain:
     kind = "claude"
 
@@ -419,7 +473,7 @@ class Brain:
 
     # -- 6 the script of a voice (explainer videos)
     def script_voice(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
-                     previous: VoiceScript | None = None, feedback: str = "") -> VoiceScript:
+                     previous: VoiceScript | None = None, feedback: str = "", style: str = "labels") -> VoiceScript:
         lines = [f"[{u['start']:6.1f}-{u['end']:6.1f}] {u['text']}" for u in utterances]
         parts = [f"# Mode\n{mode}; the audio is {duration:.1f} seconds long.",
                  "# What the person asked for\n" + (intent.strip() or "(nothing specific: do what suits the talk)"),
@@ -429,36 +483,50 @@ class Brain:
             parts.append("# The current script (the video they watched)\n" + json.dumps(previous.model_dump(), indent=1) +
                          "\n\n# What they want changed\n" + feedback +
                          "\n\nChange what they asked for and keep what works.")
+        if style == "designed":
+            parts.insert(1, DESIGNED_TEXT)
         parts.append("Return the script as JSON.")
         req = Request("script", prompt("voice"), "\n\n".join(parts), VoiceScript, self.models.editor, effort="medium",
                       max_tokens=8000)
 
         def check(sc: VoiceScript) -> list[str]:
-            from ...explainer.script import fit_script
-
-            problems = []
-            fitted = fit_script(sc, duration, mode)
-            if mode == "voice" and len(fitted.scenes) < max(2, int(duration // 14)):
-                problems.append(f"only {len(fitted.scenes)} usable scenes for {duration:.0f} s: make one scene per point, "
-                                "4-10 seconds each, inside the audio, not overlapping")
-            if mode == "talk":
-                need = max(1, int(duration // 16))
-                have = len(fitted.callouts) + len(fitted.scenes)
-                if have < need:
-                    problems.append(f"only {have} callouts and cutaways for {duration:.0f} s: aim for one every 8-14 s "
-                                    f"(at least {need}), covering every number said and each new topic when it starts")
-            thin = [s.headline for s in fitted.scenes if s.layout in ("list", "steps") and len(s.items) < 2]
-            if thin:
-                problems.append(f"list/steps scenes need 2-4 items: {', '.join(thin[:3])}")
-            flow = [s.headline for s in fitted.scenes if s.layout in ("flow", "chat") and not 2 <= len(s.items) <= 5]
-            if flow:
-                problems.append(f"flow/chat scenes need 2-4 (flow) or 2-5 (chat) items: {', '.join(flow[:3])}")
-            bad = [s.headline for s in fitted.scenes if s.layout == "compare" and len(s.items) != 2]
-            if bad:
-                problems.append(f"compare scenes need exactly 2 items: {', '.join(bad[:3])}")
-            return problems
+            return check_voice_script(sc, utterances, duration, mode, style)
 
         return self._ask(req, check)
+
+    # -- 7 animations for the moments of a script
+    def rethink_visuals(self, needs: list[dict]) -> list[dict]:
+        nl = chr(10)
+        text = ("These moments found no good designer animation in a free animation library that is searched by simple "
+                "topic words. For each, in the same order, give a simpler concrete picture that still shows the idea, and "
+                "2-3 common one-word search terms that a big free animation library surely has (movie, film, calendar, "
+                "notification, search, question, ghost, phone, star, money, heart, clock, idea, chat, music...)." + nl +
+                nl.join(f"{k}. {n['visual']} (searched: {', '.join(n['topics']) or '-'})" for k, n in enumerate(needs)))
+        req = Request("rethink", "You help a motion designer find stock animations.", text, VisualIdeas, self.models.coach,
+                      effort="low", max_tokens=1500)
+
+        def check(r: VisualIdeas) -> list[str]:
+            return [] if len(r.ideas) == len(needs) else [f"give exactly {len(needs)} ideas, in order"]
+
+        return [i.model_dump() for i in self._ask(req, check).ideas]
+
+    def pick_visuals(self, needs: list[dict]) -> list[int]:
+        nl = chr(10)
+        lines = [f"Need {k}: {n['visual']} (sheet {k + 1} of the attached images; candidates 0-{n['n'] - 1})"
+                 for k, n in enumerate(needs)]
+        text = "# The needs" + nl + nl.join(lines) + nl + nl + "Return one pick per need as JSON."
+        req = Request("visuals", prompt("visuals"), text, VisualPicks, self.models.analyst, [Path(n["sheet"]) for n in needs],
+                      effort="low", max_tokens=1500)
+
+        def check(p: VisualPicks) -> list[str]:
+            bad = [x.need for x in p.picks if not 0 <= x.need < len(needs) or not -1 <= x.choice < needs[x.need]["n"]]
+            return [f"picks out of range for needs {bad}"] if bad else []
+
+        picks = self._ask(req, check)
+        out = [-1] * len(needs)
+        for x in picks.picks:
+            out[x.need] = x.choice
+        return out
 
     # -- 5 learn
     def learn(self, rules: list[dict], events: list[str]) -> ProfileUpdate:
@@ -655,11 +723,19 @@ class LocalBrain:
                           notes="Laid out by rule (no AI): holds to open, cuts in the build, a hit on the drop.")
 
     def script_voice(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
-                     previous: VoiceScript | None = None, feedback: str = "") -> VoiceScript:
+                     previous: VoiceScript | None = None, feedback: str = "", style: str = "labels") -> VoiceScript:
         from ...explainer.script import local_script
 
         self._free("script")
-        return local_script(utterances, duration, mode, (intent.strip()[:40] or "Your story"))
+        return local_script(utterances, duration, mode, (intent.strip()[:40] or "Your story"), designed=style == "designed")
+
+    def rethink_visuals(self, needs: list[dict]) -> list[dict]:
+        self._free("rethink")
+        return [{"visual": n["visual"], "topics": [w for w in n["visual"].lower().split() if len(w) > 3][-2:]} for n in needs]
+
+    def pick_visuals(self, needs: list[dict]) -> list[int]:
+        self._free("visuals")
+        return [0 if n["n"] else -1 for n in needs]
 
     def learn(self, rules: list[dict], events: list[str]) -> ProfileUpdate:
         self._free("learn")

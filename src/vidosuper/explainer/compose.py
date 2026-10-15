@@ -71,8 +71,12 @@ def _run(cmd: list[str], frames, total: int, progress: Progress | None) -> None:
 
 def render_voice(script: VoiceScript, audio: Path, utterances: list[dict], out: Path, size: tuple[int, int],
                  music: Path | None = None, quality: str = "final", start: float = 0.0, end: float | None = None,
-                 progress: Progress | None = None) -> Path:
+                 progress: Progress | None = None, lib=None) -> Path:
     """An animated video for a recording alone. `start`/`end` cut a sample (seconds of the recording)."""
+    from . import draw as _draw
+
+    _draw.LOTTIE = (lambda aid, t, width: (lot.frame(t + float(lib.item(aid).get("lead", 0.0)), width)
+                                           if (lot := lib.lot(aid)) is not None else None)) if lib is not None else None
     samples, sr = sf.read(str(audio), dtype="float32", always_2d=True)
     total_s = len(samples) / sr
     end = min(total_s, end if end is not None else total_s)

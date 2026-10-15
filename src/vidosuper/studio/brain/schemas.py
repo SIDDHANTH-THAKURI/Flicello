@@ -81,3 +81,22 @@ class ProfileUpdate(BaseModel):
     add: list[StyleRule] = Field(default_factory=list, description="New preferences this feedback shows.")
     drop: list[str] = Field(default_factory=list, description="Ids of existing rules the feedback contradicts.")
     summary: str = Field("", description="One line on what was learned (shown to the person).")
+
+
+class VisualPick(BaseModel):
+    need: int = Field(..., description="The need's number.")
+    choice: int = Field(..., description="The animation's number on its sheet, or -1 for none.")
+    why: str = Field("", description="A few words.")
+
+
+class VisualPicks(BaseModel):
+    picks: list[VisualPick]
+
+
+class VisualIdea(BaseModel):
+    visual: str = Field(..., description="A simpler, concrete picture that still shows the idea.")
+    topics: list[str] = Field(..., description="2-3 common one-word search terms.")
+
+
+class VisualIdeas(BaseModel):
+    ideas: list[VisualIdea]

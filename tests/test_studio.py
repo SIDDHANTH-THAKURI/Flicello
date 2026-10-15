@@ -32,7 +32,8 @@ from vidosuper.studio.worker import Worker
 @pytest.fixture()
 def studio(tmp_path, monkeypatch):
     monkeypatch.delenv("VIDO_STUDIO_BRAIN", raising=False)
-    s = load_settings(tmp_path / "home", {"brain": "local", "owner_brain": "local", "render_preset": "ultrafast"})
+    s = load_settings(tmp_path / "home", {"brain": "local", "owner_brain": "local", "render_preset": "ultrafast",
+                                         "render_processes": 1})
     s.limits.min_free_gb = 0.0
     return Studio(s)
 

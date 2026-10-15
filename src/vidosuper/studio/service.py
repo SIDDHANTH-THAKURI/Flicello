@@ -51,6 +51,7 @@ FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad sho
                  "too long", "didn't follow my idea", "colour", "sound"]
 LENGTHS = (15, 30, 45, 60)
 MAX_SAMPLE_TRIES = 3
+STYLES = ("designed", "labels")  # designer animations behind the person; clean labels over the video
 TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180}  # first guesses, until real jobs have run
 
 
@@ -101,7 +102,7 @@ class Studio:
         return p
 
     def create_project(self, user: dict, title: str, shapes: str, length: float, intent: str, pace: str = "balanced",
-                       kind: str = "montage") -> dict:
+                       kind: str = "montage", style: str = "designed") -> dict:
         if (left := self.videos_left(user)) is not None and left <= 0:
             raise ActionError("You've used all your videos for this trial. Thank you!")
         if shapes not in ("9:16", "16:9", "both"):
@@ -113,15 +114,17 @@ class Studio:
         pace = pace_from_note(pace, intent)
         if kind not in ("montage", "voice", "talk"):
             raise ActionError("Pick what you are making.")
+        if style not in STYLES:
+            raise ActionError("Pick a style for the graphics.")
         if kind == "talk" and shapes == "both":
             shapes = "9:16"  # a talking video keeps its own shape
         pid = "p" + secrets.token_hex(6)
         now = time.time()
         title = " ".join(title.split())[:60] or time.strftime("My video, %d %b")
         self.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated, pace, kind, "
-                    "music) VALUES (?,?,?,?,?,?,'setup',?,?,?,?,?)",
+                    "music, style) VALUES (?,?,?,?,?,?,'setup',?,?,?,?,?,?)",
                     (pid, user["id"], title, shapes, float(length), " ".join(intent.split())[:600], now, now, pace, kind,
-                     "none" if kind != "montage" or requirements.wants_no_music(intent) else "made"))
+                     "none" if kind != "montage" or requirements.wants_no_music(intent) else "made", style))
         workdir(self.s, user["id"], pid).ensure()
         return self.db.project(pid)
 
@@ -433,8 +436,26 @@ class Studio:
         from ..explainer.make import fit
 
         raw = pipe.brain.script_voice(speech["utterances"], speech["duration"], project["kind"], project["intent"],
-                                      self.profile(user).rules, previous, feedback)
-        return fit(raw, speech)
+                                      self.profile(user).rules, previous, feedback, style=project["style"])
+        script = fit(raw.model_copy(update={"style": project["style"]}), speech)
+        if project["style"] == "designed":
+            script = self._animations(pipe, project, script)
+        return script
+
+    def _animations(self, pipe, project: dict, script):
+        """Real designer animations for the moments the script asks for (see explainer/visuals.py)."""
+        from ..explainer.lottie_lib import Library
+        from ..explainer.visuals import assign
+
+        work = workdir(self.s, project["user_id"], project["id"])
+        try:
+            script, log = assign(script, Library(), pipe.brain.pick_visuals, work.root / "visuals", pipe.brain.rethink_visuals)
+        except Exception as exc:  # noqa: BLE001 - animations are a bonus: the video goes on with emoji and text
+            self.db.event(project["id"], f"animations skipped: {type(exc).__name__}: {exc}"[:300], "warn")
+            return script
+        if log:
+            self.db.event(project["id"], "animations: " + "; ".join(log)[:900], "info")
+        return script
 
     def _explainer_render(self, job, project, user, script, plan_id: int, sample: bool, sample_start: float = 0.0) -> None:
         from ..explainer import make
@@ -459,12 +480,15 @@ class Studio:
             name = f"sample-{plan_id}" if sample else f"v{version}-{shape.replace(':', 'x')}"
             out = work.out / f"{name}.mp4"
             info = make.render(script, speech, shape, out, music=bed, sample=sample, sample_start=sample_start,
-                               progress=lambda f: self.db.job_progress(job["id"], 0.4 + 0.58 * f, "Drawing your video"))
+                               progress=lambda f: self.db.job_progress(job["id"], 0.4 + 0.58 * f, "Drawing your video"),
+                               workers=1 if sample else self.s.render_processes)
             rows = requirements.explainer(
                 project, scenes=len(script.scenes), callouts=len(script.callouts),
                 cutaways=len(script.scenes) if project["kind"] == "talk" else 0, captions=script.captions,
                 seconds=info["seconds"] if not sample else float(speech["duration"]), duration=float(speech["duration"]),
-                music_playing=bed is not None, audio_kept=True)
+                music_playing=bed is not None, audio_kept=True, style=project["style"],
+                animated=sum(1 for c in script.callouts if c.lottie) + sum(1 for s in script.scenes if s.lottie),
+                cut_out=project["kind"] == "talk" and project["style"] == "designed" and make.cutout_available())
             self._note_requirements(project, rows, f"{shape} {'sample' if sample else 'final'}")
             self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
                         "findings, created) VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -491,7 +515,8 @@ class Studio:
             self.db.job_progress(job["id"], 0.25, "Working out what each part is about")
             script = self._script_for(pipe, project, user, speech)
             plan_id = self._save_script(project, script, "script")
-            self._explainer_render(job, project, user, script, plan_id, sample=True)
+            self._explainer_render(job, project, user, script, plan_id, sample=True,
+                                   sample_start=make.busiest(script, float(speech["duration"])))
             return
         speech = make.load_speech(work.root)
         row = self.latest_plan(project)

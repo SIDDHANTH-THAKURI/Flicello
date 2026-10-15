@@ -84,6 +84,8 @@ class StudioSettings(_Strict):
     session_days: int = 14
     invite_days: int = 7
     improve_every: int = Field(5, description="Start the improvement routine after this many new ratings.")
+    render_processes: int = Field(3, description="Processes that draw a designed talking video at once (a laptop "
+                                                 "with 12+ threads: 3).")
     improve_deploy: bool = Field(False, description="Let a finished improvement branch go live by itself when the tests "
                                                     "pass, nothing is running and it touches no protected file (deploy.py); "
                                                     "undone by itself if the site does not come back.")
