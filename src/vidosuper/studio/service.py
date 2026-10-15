@@ -53,6 +53,7 @@ LENGTHS = (15, 30, 45, 60)
 MAX_SAMPLE_TRIES = 3
 STYLES = ("designed", "labels")  # designer animations behind the person; clean labels over the video
 TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180}  # first guesses, until real jobs have run
+DRAW_RATE = {"designed": 20.0, "labels": 3.0}  # first guesses: seconds of drawing per second of a voice or talking video
 
 
 class ActionError(ValueError):
@@ -206,11 +207,40 @@ class Studio:
         spent = sorted(r["d"] for r in rows if r["d"] and r["d"] > 5)
         return float(spent[len(spent) // 2]) if spent else float(TYPICAL_SECONDS.get(kind, 120))
 
+    def draw_rate(self, kind: str, style: str, render: str = "final") -> float | None:
+        """Seconds of drawing per second of video for voice or talking videos of this style: from the last ones drawn
+        here, else a first guess."""
+        rows = self.db.all("SELECT r.render_seconds AS took, r.seconds AS secs FROM renders r JOIN projects p ON "
+                           "p.id = r.project_id WHERE p.kind=? AND r.style=? AND r.kind=? AND r.render_seconds > 0 "
+                           "AND r.seconds > 1 ORDER BY r.id DESC LIMIT 15", (kind, style, render))
+        rates = sorted(r["took"] / r["secs"] for r in rows)
+        return rates[len(rates) // 2] if rates else DRAW_RATE.get(style)
+
+    def expected_seconds(self, job: dict) -> float:
+        """How long this job should take. Drawing a voice or talking video takes its length times how fast such
+        videos draw here (a 2-minute designed talk takes far longer than a 30-second montage); everything else, what
+        such jobs usually take."""
+        from ..explainer.make import SAMPLE_SECONDS
+
+        typical = self.typical_seconds(job["kind"])
+        project = self.db.project(job["project_id"]) if job.get("project_id") else None
+        if project is None or project["kind"] == "montage" or job["kind"] not in ("prepare", "render", "revise"):
+            return typical
+        seconds = float(json.loads(project["info"] or "{}").get("seconds") or 0)
+        if job["kind"] == "prepare":  # listening, the script, then a sample
+            rate = self.draw_rate(project["kind"], project["style"], "sample")
+            return typical + (SAMPLE_SECONDS * rate if rate else 0.0)
+        rate = self.draw_rate(project["kind"], project["style"])
+        if not seconds or rate is None:
+            return typical
+        shapes = len(self.shapes(project)) if project["kind"] == "voice" else 1
+        return seconds * rate * shapes + (90.0 if job["kind"] == "revise" else 0.0)
+
     def eta(self, job: dict | None) -> int | None:
-        """Seconds left for the running job: what such jobs usually take, corrected by how far this one has got."""
+        """Seconds left for the running job: what it should take, corrected by how far it has got."""
         if not job:
             return None
-        typical = self.typical_seconds(job["kind"])
+        typical = self.expected_seconds(job)
         if job["status"] != "running" or not job["started"]:
             return int(typical)
         elapsed = time.time() - job["started"]
@@ -457,7 +487,9 @@ class Studio:
             self.db.event(project["id"], "animations: " + "; ".join(log)[:900], "info")
         return script
 
-    def _explainer_render(self, job, project, user, script, plan_id: int, sample: bool, sample_start: float = 0.0) -> None:
+    def _explainer_render(self, job, project, user, script, plan_id: int, sample: bool, sample_start: float = 0.0,
+                          lo: float = 0.4) -> None:
+        """Draw the sample or the final video; the job's progress goes from `lo` (what came before in this job) to 98%."""
         from ..explainer import make
 
         work = workdir(self.s, project["user_id"], project["id"])
@@ -480,7 +512,7 @@ class Studio:
             name = f"sample-{plan_id}" if sample else f"v{version}-{shape.replace(':', 'x')}"
             out = work.out / f"{name}.mp4"
             info = make.render(script, speech, shape, out, music=bed, sample=sample, sample_start=sample_start,
-                               progress=lambda f: self.db.job_progress(job["id"], 0.4 + 0.58 * f, "Drawing your video"),
+                               progress=lambda f: self.db.job_progress(job["id"], lo + (0.98 - lo) * f, "Drawing your video"),
                                workers=1 if sample else self.s.render_processes)
             rows = requirements.explainer(
                 project, scenes=len(script.scenes), callouts=len(script.callouts),
@@ -491,9 +523,9 @@ class Studio:
                 cut_out=project["kind"] == "talk" and project["style"] == "designed" and make.cutout_available())
             self._note_requirements(project, rows, f"{shape} {'sample' if sample else 'final'}")
             self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
-                        "findings, created) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        "findings, created, style) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                         (project["id"], plan_id, version, "sample" if sample else "final", shape, info["path"],
-                         info["seconds"], info["render_seconds"], json.dumps(rows), time.time()))
+                         info["seconds"], info["render_seconds"], json.dumps(rows), time.time(), script.style))
         if sample:
             self.db.set_stage(project["id"], "review")
         else:
@@ -547,7 +579,8 @@ class Studio:
             info["changes"] = lines or ["I couldn't find a way to change that: try saying it differently, "
                                         "for example which part and what it should show."]
             self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
-        self._explainer_render(job, project, user, script, plan_id, sample=(step == "sample"), sample_start=sample_start)
+        self._explainer_render(job, project, user, script, plan_id, sample=(step == "sample"), sample_start=sample_start,
+                               lo=0.02 if step == "render" else 0.4)  # a plain render is all drawing
 
     def _job_prepare(self, job, project, user):
         if project["kind"] != "montage":

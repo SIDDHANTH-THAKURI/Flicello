@@ -975,10 +975,60 @@ def test_the_stage_watcher_notes_a_stuck_step_and_a_twice_rejected_sample_once(s
     friend = _friend(studio, "Kit")
     p = studio.create_project(friend, "x", "9:16", 15, "")
     studio.db.run("UPDATE projects SET stage='review', sample_tries=2, updated=? WHERE id=?", (time.time(), p["id"]))
-    studio.db.run("INSERT INTO jobs(project_id, user_id, kind, status, created, started) VALUES (?,?,?,?,?,?)",
-                  (p["id"], friend["id"], "render", "running", time.time() - 7000, time.time() - 6000))
+    stuck = studio.db.run("INSERT INTO jobs(project_id, user_id, kind, status, created, started) VALUES (?,?,?,?,?,?)",
+                          (p["id"], friend["id"], "render", "running", time.time() - 7000, time.time() - 6000))
     worker.watch_stages(studio)
-    assert len(started) == 1 and "rejected the sample" in started[0] and "render step has run" in started[0]
+    assert len(started) == 1 and "rejected the sample" in started[0] and "render step has not moved" in started[0]
+    studio.db.run("UPDATE jobs SET started=started-600 WHERE id=?", (stuck,))  # ten minutes on: the wording changes
     worker.watch_stages(studio)
     assert len(started) == 1  # said once
     assert studio.db.value("SELECT COUNT(*) FROM alerts WHERE kind='watch'", (), 0) == 2
+
+
+def test_a_long_step_that_keeps_moving_is_left_alone_and_one_that_stopped_is_stopped(studio, monkeypatch):
+    from vidosuper.studio import improve, worker
+
+    started = []
+    monkeypatch.setattr(improve, "maybe_start", lambda st, reason="": started.append(reason) or True)
+    friend = _friend(studio, "Lou")
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+    q = studio.create_project(friend, "y", "9:16", 15, "")
+    now = time.time()
+    moving = studio.db.run("INSERT INTO jobs(project_id, user_id, kind, status, created, started, moved) "
+                           "VALUES (?,?,?,?,?,?,?)", (p["id"], friend["id"], "render", "running", now - 9000, now - 8000, now))
+    studio.db.job_progress(moving, 0.5, "Drawing your video")  # a 2-hour drawing, still going
+    assert studio.db.one("SELECT moved FROM jobs WHERE id=?", (moving,))["moved"] >= now
+    stopped = studio.db.run("INSERT INTO jobs(project_id, user_id, kind, status, created, started, moved) "
+                            "VALUES (?,?,?,?,?,?,?)", (q["id"], friend["id"], "render", "running", now - 5000, now - 4000,
+                                                       now - 3700))
+    before = studio.db.one("SELECT moved FROM jobs WHERE id=?", (stopped,))["moved"]
+    studio.db.job_progress(stopped, 0.0, "")  # the same again is not a move
+    assert studio.db.one("SELECT moved FROM jobs WHERE id=?", (stopped,))["moved"] == before
+    worker.watch_stages(studio)
+    said = [r["message"] for r in studio.db.all("SELECT message FROM alerts WHERE kind='watch'")]
+    assert len(started) == 1 and "not moved for 62 minutes" in started[0]
+    assert said == [f"[stalled job {stopped}] {started[0]}"]  # the one still going is not a problem
+    worker.maintain(studio)
+    jobs = {r["id"]: r for r in studio.db.all("SELECT id, status, error FROM jobs")}
+    assert jobs[moving]["status"] == "running"
+    assert jobs[stopped]["status"] == "failed" and "no progress" in jobs[stopped]["error"]
+    assert studio.db.project(q["id"])["stage"] == "failed" and studio.db.project(p["id"])["stage"] != "failed"
+
+
+def test_the_time_left_for_drawing_a_talk_comes_from_its_length_and_how_fast_talks_draw(studio):
+    friend = _friend(studio, "Mo")
+    p = studio.create_project(friend, "x", "9:16", 15, "", kind="talk", style="designed")
+    studio.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps({"seconds": 120.0}), p["id"]))
+    job = {"kind": "render", "status": "queued", "started": None, "progress": 0, "project_id": p["id"]}
+    assert studio.eta(job) == 2400  # a first guess: 20 s of drawing per second of video
+    other = studio.create_project(friend, "y", "9:16", 15, "", kind="talk", style="designed")
+    for style, took in (("designed", 1800.0), ("designed", 1500.0), ("labels", 30.0), (None, 1.0)):
+        studio.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
+                      "created, style) VALUES (?,?,?,?,?,?,?,?,?,?)", (other["id"], 1, 1, "final", "9:16", "v1.mp4", 60.0,
+                                                                       took, time.time(), style))
+    assert studio.draw_rate("talk", "designed") == 30.0 and studio.draw_rate("talk", "labels") == 0.5
+    assert studio.eta(job) == 3600  # 2 minutes at 30 s a second; labels and older renders don't count
+    running = {**job, "status": "running", "started": time.time() - 600, "progress": 0.02 + 0.96 * 600 / 3600}
+    assert 2600 <= studio.eta(running) <= 3200  # ten minutes in, about fifty to go
+    montage = studio.create_project(friend, "z", "9:16", 15, "")
+    assert studio.eta({**job, "project_id": montage["id"]}) == 300  # montages: what such jobs usually take

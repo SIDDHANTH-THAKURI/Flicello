@@ -558,6 +558,22 @@ def _encoder(size: tuple[int, int], out: Path, quality: str, audio: list[str] | 
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
+def _tally(job: dict) -> Path:
+    """Where a part of a parallel render keeps how far it has got (a fraction), for the parent's progress."""
+    return Path(job["out"] + ".drawn")
+
+
+def _drawn(jobs: list[dict]) -> float:
+    """Frames drawn so far by all parts (a part that can't be read just now counts as not started)."""
+    total = 0.0
+    for job in jobs:
+        try:
+            total += float(_tally(job).read_text(encoding="utf-8")) * job["frames"]
+        except (OSError, ValueError):
+            pass
+    return total
+
+
 def _chunk(job: dict) -> str:
     """One process's part of a parallel render: video only, exactly `frames` frames."""
     import os
@@ -567,11 +583,19 @@ def _chunk(job: dict) -> str:
     lib = Library(Path(job["lib"])) if job["lib"] else None
     out = Path(job["out"])
     enc = _encoder(tuple(job["size"]), out, job["quality"])
+
+    def tell(f: float) -> None:
+        try:
+            _tally(job).write_text(f"{f:.4f}", encoding="utf-8")
+        except OSError:  # the parent reading it just now: the next one will do
+            pass
+
     _draw_frames(script, Path(job["video"]), job["words"], tuple(job["size"]), np.array(job["levels"], np.float32),
-                 job["start"], job["frames"], job["first"], enc.stdin.write, lib, None)
+                 job["start"], job["frames"], job["first"], enc.stdin.write, lib, tell)
     enc.stdin.close()
     if enc.wait() != 0:
         raise RuntimeError("the video encoder stopped: " + enc.stderr.read().decode("utf-8", "replace")[-300:])
+    tell(1.0)
     return str(out)
 
 
@@ -612,10 +636,14 @@ def render_designed(script: VoiceScript, video: Path, utterances: list[dict], ou
              "out": str(tmp / f"part{k}.mp4"), "threads": threads} for k in range(workers)]
     with ProcessPoolExecutor(workers) as ex:
         futs = [ex.submit(_chunk, j) for j in jobs]
-        while progress and not all(f.done() for f in futs):  # a rough progress: parts done so far
-            progress(min(0.95, 0.05 + 0.9 * sum(f.done() for f in futs) / len(futs)))
+        best = 0.0
+        while progress and not all(f.done() for f in futs):  # frames drawn by all the parts together
+            best = max(best, _drawn(jobs) / total)
+            progress(min(0.97, best))
             time.sleep(2)
         parts = [f.result() for f in futs]
+    if progress:
+        progress(0.98)  # joining the parts and laying in the sound
     listing = tmp / "parts.txt"
     listing.write_text("".join(f"file '{Path(p).as_posix()}'\n" for p in parts), encoding="utf-8")
     subprocess.run([find_tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing),

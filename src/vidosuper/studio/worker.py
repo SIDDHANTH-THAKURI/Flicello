@@ -18,7 +18,9 @@ from .service import Studio
 from .storage import free_gb, sweep_uploads, workdir
 
 log = logging.getLogger("vidosuper.studio")
-STUCK_SECONDS = 3 * 3600
+STALL_SECONDS = 15 * 60  # a running step whose progress has not moved for this long may be stuck: the owner is told
+STUCK_SECONDS = 3600  # ... and after this long it is stopped
+LONGEST_SECONDS = 12 * 3600  # however well it moves, nothing runs longer than this
 
 
 def recover(studio: Studio) -> int:
@@ -30,21 +32,23 @@ def recover(studio: Studio) -> int:
 
 
 def watch_stages(studio: Studio) -> None:
-    """Looks at every stage the way the owner would: a step that is taking far longer than such steps usually do, a
-    video that failed, a person who rejected a sample twice. Each problem is noted once, and starts the improvement
-    routine (which looks at it, fixes what it can in a branch, and deploys if the checks pass)."""
+    """Looks at every stage the way the owner would: a step whose progress has stopped moving, a video that failed, a
+    person who rejected a sample twice. Each problem is noted once (by what it is about, not by its wording, which
+    can change from look to look), and starts the improvement routine (which looks at it, fixes what it can in a
+    branch, and deploys if the checks pass). A long step that keeps moving is not a problem: a long video takes long."""
     from .improve import maybe_start
 
     db, s = studio.db, studio.s
     now = time.time()
-    seen = {r["message"] for r in db.all("SELECT message FROM alerts WHERE kind='watch' AND at > ?", (now - 7 * 86400,))}
+    seen = {r["message"].split("]", 1)[0] + "]"
+            for r in db.all("SELECT message FROM alerts WHERE kind='watch' AND at > ?", (now - 7 * 86400,))}
     problems: list[tuple[str, str]] = []
     for job in db.all("SELECT * FROM jobs WHERE status='running' AND started IS NOT NULL"):
-        typical = studio.typical_seconds(job["kind"])
-        took = now - job["started"]
-        if took > max(900.0, 4 * typical):
-            problems.append((f"slow job {job['id']}", f"A {job['kind']} step has run for {took / 60:.0f} minutes "
-                                                      f"(usually {typical / 60:.0f}); it may be stuck."))
+        still = now - (job["moved"] or job["started"])
+        if still > STALL_SECONDS:
+            problems.append((f"stalled job {job['id']}", f"A {job['kind']} step has not moved for {still / 60:.0f} minutes "
+                                                         f"(at {job['progress']:.0%}: {job['message'] or 'starting'}); "
+                                                         "it may be stuck."))
     for job in db.all("SELECT * FROM jobs WHERE status='failed' AND finished > ? AND kind != 'learn'", (now - 86400,)):
         problems.append((f"failed job {job['id']}", f"A {job['kind']} step failed: {(job['error'] or '')[:160]}"))
     for p in db.all("SELECT * FROM projects WHERE deleted=0 AND stage='review' AND sample_tries >= 2 AND updated > ?",
@@ -57,7 +61,7 @@ def watch_stages(studio: Studio) -> None:
         bad = [f["detail"] for f in _json.loads(r["findings"] or "[]") if f.get("check") == "requirement" and f.get("level") != "ok"]
         if bad:
             problems.append((f"requirement {r['id']}", f"Video {r['project_id']} did not do what was asked: " + "; ".join(bad)[:200]))
-    fresh = [(k, m) for k, m in problems if f"[{k}] {m}" not in seen]
+    fresh = [(k, m) for k, m in problems if f"[{k}]" not in seen]
     for k, m in fresh:
         alert(db, s, "watch", f"[{k}] {m}", "warning")
     if fresh:
@@ -67,11 +71,13 @@ def watch_stages(studio: Studio) -> None:
 def maintain(studio: Studio) -> None:
     db, s = studio.db, studio.s
     now = time.time()
-    for job in db.all("SELECT id, project_id FROM jobs WHERE status='running' AND started < ?", (now - STUCK_SECONDS,)):
-        db.job_done(job["id"], "failed", "ran for more than 3 hours")
+    for job in db.all("SELECT id, project_id, started FROM jobs WHERE status='running' AND (COALESCE(moved, started) < ? "
+                      "OR started < ?)", (now - STUCK_SECONDS, now - LONGEST_SECONDS)):
+        why = "ran for more than 12 hours" if job["started"] < now - LONGEST_SECONDS else "made no progress for an hour"
+        db.job_done(job["id"], "failed", why)
         if job["project_id"]:
             db.set_stage(job["project_id"], "failed", error="This step took far too long. The owner has been told.")
-        alert(db, s, "stuck", "A job ran for more than 3 hours and was stopped.")
+        alert(db, s, "stuck", f"A job {why} and was stopped.")
     sweep_uploads(db, s)
     cutoff = now - s.limits.retention_days * 86400
     old = db.all("SELECT p.* FROM projects p JOIN users u ON u.id = p.user_id WHERE p.deleted=0 AND p.updated < ? "

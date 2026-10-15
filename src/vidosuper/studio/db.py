@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS uploads(
 CREATE TABLE IF NOT EXISTS jobs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, user_id TEXT, kind TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
-  error TEXT, priority INTEGER NOT NULL DEFAULT 5, created REAL NOT NULL, started REAL, finished REAL, after REAL);
+  error TEXT, priority INTEGER NOT NULL DEFAULT 5, created REAL NOT NULL, started REAL, finished REAL, after REAL,
+  moved REAL);
 CREATE TABLE IF NOT EXISTS pitches(
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, round INTEGER NOT NULL, data TEXT NOT NULL,
   stills TEXT NOT NULL, created REAL NOT NULL, rejected INTEGER NOT NULL DEFAULT 0);
@@ -52,7 +53,7 @@ CREATE TABLE IF NOT EXISTS plans(
 CREATE TABLE IF NOT EXISTS renders(
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, plan_id INTEGER, version INTEGER NOT NULL,
   kind TEXT NOT NULL, shape TEXT NOT NULL, file TEXT NOT NULL, seconds REAL, render_seconds REAL,
-  findings TEXT NOT NULL DEFAULT '[]', created REAL NOT NULL);
+  findings TEXT NOT NULL DEFAULT '[]', created REAL NOT NULL, style TEXT);
 CREATE TABLE IF NOT EXISTS feedback(
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, user_id TEXT NOT NULL, stage TEXT NOT NULL,
   version INTEGER, match INTEGER, liked INTEGER, tags TEXT NOT NULL DEFAULT '[]', text TEXT NOT NULL DEFAULT '',
@@ -102,6 +103,10 @@ class DB:
             con.execute("ALTER TABLE projects ADD COLUMN music TEXT NOT NULL DEFAULT 'made'")
         if "pace" not in have:
             con.execute("ALTER TABLE projects ADD COLUMN pace TEXT NOT NULL DEFAULT 'balanced'")
+        if "moved" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:
+            con.execute("ALTER TABLE jobs ADD COLUMN moved REAL")
+        if "style" not in {r[1] for r in con.execute("PRAGMA table_info(renders)")}:  # how a voice/talk video was drawn
+            con.execute("ALTER TABLE renders ADD COLUMN style TEXT")
 
     def connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path, timeout=15, isolation_level=None, check_same_thread=False)
@@ -152,8 +157,9 @@ class DB:
             if row is None:
                 con.execute("COMMIT")
                 return None
-            con.execute("UPDATE jobs SET status='running', started=?, attempts=attempts+1, progress=0, message='' "
-                        "WHERE id=?", (time.time(), row["id"]))
+            now = time.time()
+            con.execute("UPDATE jobs SET status='running', started=?, moved=?, attempts=attempts+1, progress=0, message='' "
+                        "WHERE id=?", (now, now, row["id"]))
             con.execute("COMMIT")
             job = dict(row)
             job["attempts"] += 1
@@ -169,7 +175,11 @@ class DB:
         self.run("UPDATE jobs SET status='queued', after=?, error=? WHERE id=?", (time.time() + delay, error, job_id))
 
     def job_progress(self, job_id: int, progress: float, message: str) -> None:
-        self.run("UPDATE jobs SET progress=?, message=? WHERE id=?", (max(0.0, min(1.0, progress)), message[:200], job_id))
+        """`moved` is when the progress or the message last changed: a step that stops moving may be stuck, however
+        long it is (a long video simply takes longer)."""
+        p, msg = max(0.0, min(1.0, progress)), message[:200]
+        self.run("UPDATE jobs SET moved=CASE WHEN ABS(progress - ?) > 1e-6 OR message != ? THEN ? ELSE moved END, "
+                 "progress=?, message=? WHERE id=?", (p, msg, time.time(), p, msg, job_id))
 
     def job_done(self, job_id: int, status: str = "done", error: str | None = None) -> None:
         self.run("UPDATE jobs SET status=?, error=?, finished=?, progress=CASE WHEN ?='done' THEN 1 ELSE progress END "

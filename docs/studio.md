@@ -170,6 +170,10 @@ AI). The clips folder is only read.
   ("bright" gives the `bright` look).
 - **Time estimates**: `Studio.eta` / `total_estimate` use the median of the last finished jobs of that kind (first guesses
   until there are some), corrected by the running job's progress; shown on the setup page and the progress card.
+  Drawing a voice or talking video is expected to take its length times the drawing rate of that kind and style here
+  (`Studio.draw_rate`: seconds of drawing per second of video, from `renders.render_seconds / seconds` with
+  `renders.style`; first guesses 20 for designed, 3 for labels), since a 2-minute designed talk takes far longer than
+  a 30-second montage. A parallel designed render reports the frames its parts have drawn (`<part>.drawn` files).
 - `vido studio run ... --pace every` (and no `--song`) for a run from the command line.
 
 ## Voice-only and talking videos (2026-10-15)

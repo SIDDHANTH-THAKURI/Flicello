@@ -52,9 +52,11 @@ Run it by hand any time with `powershell -File scripts\improve.ps1`.
 
 ## Watching every stage, and going live by itself
 
-- The worker looks at every stage every 5 minutes (`watch_stages`): a step far slower than usual, a job that failed, a
-  person who rejected a sample twice. Each is noted once (alert kind `watch`) and starts the routine (at most one run
-  per 30 minutes for problems; ratings start it every 5).
+- The worker looks at every stage every 5 minutes (`watch_stages`): a step whose progress has not moved for 15 minutes
+  (`jobs.moved`, set whenever the progress or its message changes; a long video that keeps drawing is not a problem),
+  a job that failed, a person who rejected a sample twice. Each is noted once, by what it is about (alert kind `watch`,
+  key in brackets), and starts the routine (at most one run per 30 minutes for problems; ratings start it every 5).
+  A step that has not moved for an hour, or has run 12 hours, is stopped (`maintain`).
 - When the routine's branch is ready, `vido studio deploy <branch>` puts it live only if: `improve_deploy: true`, it is a
   fast-forward of main with a clean live copy, it touches no protected file (`deploy.PROTECTED`), the whole test suite
   passes in its worktree, and no video is being made (it waits). Then it restarts the studio and requires the site and

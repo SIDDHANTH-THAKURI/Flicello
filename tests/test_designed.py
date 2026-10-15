@@ -149,6 +149,21 @@ def test_a_designed_video_puts_the_animation_behind_the_person_and_keeps_their_s
     assert ((top[:, 0] > 150) & (top[:, 1] < 90)).mean() > 0.05  # the red animation is up there
 
 
+def test_the_parts_of_a_parallel_render_say_how_far_they_have_got(media, tmp_path):
+    from vidosuper.explainer import designed
+
+    script = VoiceScript(name="x", style="designed", palette="midnight",
+                         callouts=[Callout(at=0.1, until=0.9, kind="title", text="Undertone")])
+    jobs = [{"script": script.model_dump_json(), "lib": "", "video": str(media / "clips" / "a_stable.mp4"), "words": [],
+             "size": [270, 480], "levels": [0.0], "start": 0.0, "frames": 20, "first": 0, "quality": "draft",
+             "out": str(tmp_path / f"part{k}.mp4"), "threads": 2} for k in range(2)]
+    assert designed._drawn(jobs) == 0.0  # nothing yet
+    designed._chunk(jobs[0])  # drawn here, as one of the processes would
+    assert Path(jobs[0]["out"]).exists() and designed._drawn(jobs) == 20.0
+    designed._tally(jobs[1]).write_text("0.5", encoding="utf-8")  # the other one halfway
+    assert designed._drawn(jobs) == 30.0
+
+
 def _talk(seconds: float) -> list[dict]:
     """A talk that speaks the whole time, with a rating said at 40 s."""
     utts = []
