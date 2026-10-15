@@ -197,3 +197,17 @@ def test_a_talking_video_picked_in_the_montage_form_is_routed_to_talk_mode():
     note = "Its about me explaining undertone movie review Make it Instagram ready with motiongraphics in the back as i speak"
     assert route(note, 1) and not route(note, 3) and not route("", 1)
     assert route("Add motion graphics while I am talking", 1) and not route("fast cuts on the beat", 1)
+
+
+def test_far_more_hits_than_shots_is_noise_not_a_demand():
+    """A talking video's claps and consonants found as 34 'hits' made every plan for it invalid."""
+    from vidosuper.studio.brain.context import ClipFacts
+    from vidosuper.studio.brain.core import StoryContext, check_plan
+    from vidosuper.studio.brain.schemas import DesignPlan, PlanShot, PoolMoment
+
+    moments = [{"start": 0.0, "end": 100.0, "strength": 6, "description": "talking", "notes": ""}]
+    facts = {"c01": ClipFacts("c01", "c01-id", 100.0, 30.0, True, [], moments, [float(t) for t in range(5, 95, 3)])}
+    ctx = StoryContext(catalog={}, facts=facts, song=None, beats=_beats(32), shapes=["9:16"], intent="", rules=[])
+    pool = [PoolMoment(key=f"k{i}", clip="c01", start=i * 10.0, end=i * 10.0 + 4, peak=None) for i in range(8)]
+    plan = DesignPlan(name="n", idea="i", pool=pool, plan=[PlanShot(kind="cut", beats=4, key=f"k{i}") for i in range(8)])
+    assert not [p for p in check_plan(plan, ctx) if "real hits" in p]

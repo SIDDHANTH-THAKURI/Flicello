@@ -241,7 +241,8 @@ def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
                 problems.append(f"shot {i + 1} lasts {secs:.1f}s; keep shots under {limit:g}s "
                                 f"({int(limit / beats.period)} beats) - split it or move on")
     hits = [(short, t) for short, f in facts.items() for t in f.impacts]
-    if hits and plan.plan:  # real hits are the heroes: don't leave them out for repeats
+    if hits and plan.plan and len(hits) <= 2 * len(plan.plan):  # real hits are the heroes: don't leave them out for
+        # repeats (but a talking video's claps and consonants are not heroes: more hits than shots is noise, not a cue)
         used = [(short, t) for short, t in hits if any(m.clip == short and m.start - 0.05 <= t <= m.end + 0.05 for m in plan.pool)]
         need = math.ceil(0.8 * min(len(hits), len(plan.plan)))
         if len(used) < need:
