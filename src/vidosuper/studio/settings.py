@@ -80,6 +80,9 @@ class StudioSettings(_Strict):
     proxy_net: str | None = Field(None, description="Network our own reverse proxy connects from (e.g. the Docker "
                                   "network of Caddy on the cloud server): its X-Forwarded-For is believed too.")
     workers: int = Field(1, description="Jobs run at once. Renders are heavy: keep 1 on a laptop.")
+    jobs: Literal["local", "remote"] = Field("local", description="Who runs the video jobs: this machine's worker, or "
+                                                                  "remote workers (the owner's PC, later Modal) that "
+                                                                  "claim them over /api/worker (see remote.py).")
     render_preset: str = "medium"  # x264 preset for finished videos (slow is ~2x slower for a little quality)
     alert_url: str | None = Field(None, description="Alerts are POSTed here as plain text (e.g. an ntfy.sh topic). "
                                                     "Only short messages, never footage or names of files.")
@@ -171,6 +174,7 @@ _ENV = {  # environment variable -> setting (strings are parsed by pydantic)
     "VIDO_STUDIO_SITE_URL": "site_url",
     "VIDO_STUDIO_MAIL_OUTBOX": "mail_outbox",
     "VIDO_STUDIO_WORKERS": "workers",
+    "VIDO_STUDIO_JOBS": "jobs",
     "VIDO_STUDIO_ALERT_URL": "alert_url",
 }
 

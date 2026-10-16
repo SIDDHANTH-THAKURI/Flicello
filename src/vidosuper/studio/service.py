@@ -770,12 +770,29 @@ class Studio:
         self.db.event(project["id"], f"Style profile: {update.summary or 'no change'} "
                                      f"(+{len(entry['added'])}, -{len(entry['dropped'])})")
 
+    # ------------------------------------------------------------------ remote renderer (see remote.py)
+    def renderer_seen(self) -> float | None:
+        """Seconds since a remote worker last checked in, or None if none ever has."""
+        beat = self.db.one("SELECT at FROM heartbeat WHERE name='renderer'")
+        return round(time.time() - beat["at"], 1) if beat else None
+
+    def queued_note(self, job: dict | None) -> str:
+        """What a waiting video says while remote rendering is on and no renderer is online."""
+        if not job or job["status"] != "queued" or self.s.jobs != "remote":
+            return ""
+        seen = self.renderer_seen()
+        if seen is not None and seen < 90:
+            return ""
+        return "Waiting for the video renderer to come online. Your video will start by itself; you can leave this page."
+
     # ------------------------------------------------------------------ admin
     def health(self) -> dict:
         from .storage import free_gb
 
         beat = self.db.one("SELECT * FROM heartbeat WHERE name='worker'")
         return {
+            "jobs": self.s.jobs,
+            "renderer_seen": self.renderer_seen(),
             "worker_seen": round(time.time() - beat["at"], 1) if beat else None,
             "queued": self.db.value("SELECT COUNT(*) FROM jobs WHERE status='queued'", (), 0),
             "running": self.db.value("SELECT COUNT(*) FROM jobs WHERE status='running'", (), 0),

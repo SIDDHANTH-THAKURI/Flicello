@@ -33,6 +33,7 @@ FACTS = {
     "site": "flicello.com",
     "hosting": "DigitalOcean data centre in Sydney, Australia",
     "hosting_country": "Australia",
+    "render_location": "While a video is being made, its files are also copied to a computer we operate in New South Wales, Australia, which does the heavy video work; that copy is deleted when the project is.",
     "min_age": 18,
     "retention_days": 14,
     "version": LEGAL_VERSION,

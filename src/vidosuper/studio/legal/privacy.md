@@ -36,7 +36,7 @@ country, worked out from your IP address and not stored with it. Technical logs 
 IP addresses.
 
 **What we don't collect.** We don't recognise or identify the people in your footage. When we separate a person from
-the background (for talking videos), that happens on our own servers and isn't used to identify anyone. We don't
+the background (for talking videos), that happens on our own computers and isn't used to identify anyone. We don't
 collect payment details: Flicello is free during early access. We don't knowingly collect information about anyone
 under {{ min_age }}.
 
@@ -78,7 +78,7 @@ affect what happened before.
 To edit your video, we send still frames from your clips, short transcripts of what's said, and your written requests
 to our AI provider, Anthropic (the maker of Claude). Anthropic analyses them and plans the edit for us. It processes
 this data on our behalf under its commercial terms, does not use it to train its models, and keeps it only for a
-limited time. Speech-to-text, beat detection, person cut-outs and rendering run on our own servers.
+limited time. Speech-to-text, beat detection, person cut-outs and rendering run on our own computers.
 
 The AI makes creative choices: which shots, in what order, which story. No decision with legal or similarly
 significant effects on you is made by automated means. You always choose the story, can ask for changes in plain
@@ -98,7 +98,7 @@ provide their service to us. The current list, with what each one receives and w
 
 ## Where your data is stored
 
-Your account and your files are stored on servers in a {{ hosting }}. Our AI provider and some other service providers
+Your account and your files are stored on servers in a {{ hosting }}. {{ render_location }} Our AI provider and some other service providers
 process data in the United States. Privacy laws in these countries may differ from those where you live.
 
 - For people in the EU, EEA and UK, we protect these transfers with the European Commission's Standard Contractual

@@ -147,7 +147,7 @@ function progress(pid) {
       misses = 0;
       if (st.stage !== stage || !st.busy) { window.location.reload(); return; }
       if (bar && st.progress !== null) bar.style.width = `${Math.max(3, Math.round(st.progress * 100))}%`;
-      if (msg) msg.textContent = st.queued ? 'Waiting for its turn…' : (st.message || 'Working…');
+      if (msg) msg.textContent = st.queued ? (st.queued_note || 'Waiting for its turn…') : (st.message || 'Working…');
       if (eta) {
         const s = st.eta;
         eta.textContent = s === null || s === undefined ? '' :

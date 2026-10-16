@@ -256,6 +256,9 @@ def create_app(studio: Studio) -> FastAPI:
                               templates=templates)
     authweb.mount(app, studio, helpers)
     legalweb.mount(app, studio, helpers)
+    from . import workerapi
+
+    workerapi.mount(app, studio)
 
     @app.get("/robots.txt", response_class=PlainTextResponse)
     def robots():
@@ -407,7 +410,8 @@ def create_app(studio: Studio) -> FastAPI:
         older = [r for r in finals if r["version"] != p["version"]]
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
-        return page(request, "project.html", user, sess, p=p, job=job, clips=clips, pitches=pitches,
+        return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
+                    pitches=pitches,
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
                     note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
@@ -577,6 +581,7 @@ def create_app(studio: Studio) -> FastAPI:
         return {"stage": p["stage"], "label": STAGES.get(p["stage"], p["stage"]), "busy": p["stage"] in BUSY,
                 "progress": round(job["progress"], 3) if job else None, "message": job["message"] if job else "",
                 "queued": bool(job and job["status"] == "queued"), "version": p["version"], "updated": p["updated"],
+                "queued_note": studio.queued_note(job),
                 "eta": studio.eta(job)}
 
     # ------------------------------------------------------------------ media

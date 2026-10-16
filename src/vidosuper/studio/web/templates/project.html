@@ -143,7 +143,7 @@
   <div class="reel" aria-hidden="true"><div>{% for _ in range(16) %}<span></span>{% endfor %}</div></div>
   <h2 id="job-label">{{ STAGES.get(p.stage) }}</h2>
   <div class="meter"><span id="bar" data-progress="{{ job.progress if job else 0 }}"></span></div>
-  <p id="job-msg" class="msg">{% if job and job.status == 'queued' %}Waiting for its turn…{% else %}{{ job.message if job else '' }}{% endif %}</p>
+  <p id="job-msg" class="msg">{% if job and job.status == 'queued' %}{{ queued_note or 'Waiting for its turn…' }}{% else %}{{ job.message if job else '' }}{% endif %}</p>
   <p id="job-eta" class="eta">{% if eta %}{{ eta|eta }} left{% endif %}</p>
   <p class="help">You can close this page; it keeps going.</p>
 </section>

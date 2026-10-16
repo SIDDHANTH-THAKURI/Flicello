@@ -1,5 +1,5 @@
 title: AI transparency
-summary: What the AI in Flicello does, what it doesn't, what runs on our own servers, and how you stay in control.
+summary: What the AI in Flicello does, what it doesn't, what runs on our own computers, and how you stay in control.
 updated: 17 October 2026
 
 ## What the AI does
@@ -17,10 +17,10 @@ Flicello uses AI the way an editor's assistant would:
 
 The planning is done by Anthropic's Claude models, through Anthropic's commercial API.
 
-## What runs on our own servers
+## What runs on our own computers
 
 Speech-to-text, beat and music analysis, separating a person from the background, colour grading, and rendering the
-final video all run on our servers, not at an AI provider.
+final video all run on our own computers, not at an AI provider. {{ render_location }}
 
 ## What the AI doesn't do
 

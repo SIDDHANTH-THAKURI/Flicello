@@ -121,6 +121,8 @@ class Worker:
             except Exception as exc:  # noqa: BLE001 - housekeeping must never stop the queue
                 log.exception("maintenance failed")
                 alert(db, s, "maintenance", f"Housekeeping failed: {exc}", "warning")
+        if s.jobs == "remote":
+            return False  # remote workers claim the jobs (see remote.py); this one only keeps house
         if free_gb(s) < s.limits.min_free_gb * 0.5:
             return False  # nearly out of disk: renders would fail half-way; wait (the alert is out)
         job = db.claim()
@@ -133,7 +135,8 @@ class Worker:
         return True
 
     def run(self) -> None:
-        recovered = recover(self.studio)
+        # a remote worker may still be running its job while this process restarts: it recovers its own on start
+        recovered = recover(self.studio) if self.studio.s.jobs == "local" else 0
         if recovered:
             log.warning("put %d interrupted job(s) back in the queue", recovered)
         while not self.stop.is_set():

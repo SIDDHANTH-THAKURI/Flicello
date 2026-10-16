@@ -244,6 +244,16 @@ never in git and never in chat.
      `header_up Host {host}` and `tls_server_name flicello.com`. Without the Host line, Caddy sends the IP and
      the new Caddy answers an empty 200.
   4. Change DNS, and delete the old droplet a day later.
+- **Remote rendering** (`remote.py`, `web/workerapi.py`; `VIDO_STUDIO_JOBS=remote` on the server):
+  - The server keeps the queue but runs no jobs. The 2 GB droplet can't render.
+  - `renderer.cmd`, i.e. `vido studio remote-worker`, on the owner's PC claims jobs over HTTPS. It mirrors the
+    project's files, runs `Studio.run_job` with every DB call going to `/api/worker/db`, and uploads what
+    changed. The stage change lands only after the upload.
+  - Both sides hold the same `VIDO_STUDIO_WORKER_TOKEN`. That token is as powerful as the database.
+  - The PC keeps the pipeline's working files between a project's jobs, and deletes its copies of projects the
+    site no longer has.
+  - With no renderer checking in for 90 s, queued videos say so.
+  - Modal later is just another remote worker on the same API.
 - **Packages:** the image installs only `.[ai,studio]`. `tests/test_packaging.py` fails when the code imports a
   package that isn't declared there. httpx once arrived only through dev and anthropic, and the server
   crashed on sign-in emails.

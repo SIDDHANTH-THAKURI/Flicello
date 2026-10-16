@@ -70,6 +70,21 @@ def worker_cmd() -> None:
     Worker(Studio(studio_settings())).run()
 
 
+@studio_app.command("remote-worker")
+def remote_worker_cmd(server: str = typer.Option("https://flicello.com", help="The studio this machine renders for"),
+                      token: str = typer.Option("", help="Defaults to VIDO_STUDIO_WORKER_TOKEN (the repo's .env)")) -> None:
+    """Render the site's videos on this machine: claims jobs over HTTPS, mirrors each project's files, runs the job
+    and sends the results back (see remote.py). The server never connects here. Stop with Ctrl+C."""
+    import logging
+
+    from .remote import RemoteWorker
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    worker = RemoteWorker(server, token)
+    console.print(f"[green]Rendering for {escape(server)}[/] (files in {escape(str(worker.studio.s.home))})")
+    worker.run()
+
+
 @studio_app.command("invite")
 def invite(label: str = typer.Argument("", help="Their first name (shown on the welcome page)"),
            owner: bool = typer.Option(False, "--owner", help="An invite for the owner's own account (the first one)"),
