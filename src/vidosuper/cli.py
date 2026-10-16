@@ -861,6 +861,21 @@ def check(video: Path = typer.Argument(..., help="The rendered video"),
         raise typer.Exit(1)
 
 
+@app.command("screen")
+def screen(out: Path | None = typer.Option(None, "--out", help="Where to save the PNG (default: a fresh temp file)")) -> None:
+    """Take one screenshot of the whole screen (all monitors, DPI-aware) and print the PNG path to look at."""
+    from .screen import ScreenCaptureError, capture_screen, screen_size
+
+    try:
+        png = capture_screen(out)
+    except ScreenCaptureError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1)
+    w, h = screen_size(png)
+    console.print(f"{w}x{h} physical pixels - coordinates read off the image are real screen coordinates")
+    typer.echo(str(png))
+
+
 @app.command("rate")
 def rate(score: float | None = typer.Argument(None, help="The user's rating (leave out to see the history)"),
          version: str = typer.Option("", help="What was rated, e.g. 'Wollongong C + intro'"),
