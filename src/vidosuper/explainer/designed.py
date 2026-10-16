@@ -493,9 +493,11 @@ def free_memory_gb() -> float | None:
         return None
 
 
-def safe_workers(wanted: int, per_process_gb: float = 1.0, spare_gb: float = 2.5) -> int:
-    """As many drawing processes as asked for, but never more than free memory allows (about 1 GB each, 2.5 GB kept
-    spare for everything else on the machine)."""
+def safe_workers(wanted: int, per_process_gb: float = 1.3, spare_gb: float = 2.5) -> int:
+    """As many drawing processes as asked for, but never more than free memory allows (2.5 GB kept spare for
+    everything else on the machine). Each part costs about 1.3 GB at its peak, measured on a 1080x1920 talk: the
+    drawing process ~0.7 GB, its encoder ~0.45 and decoder ~0.15 (with their threads capped; uncapped, the encoder
+    alone took ~0.9)."""
     free = free_memory_gb()
     if free is None:
         return max(1, min(wanted, 2))
@@ -522,7 +524,7 @@ def _draw_frames(script: VoiceScript, video: Path, words: list[dict], size: tupl
     use_cut = cutout.available()
     designer = Designer(script, words, size, lib, levels, use_cut)
     ff = find_tool("ffmpeg")
-    dec = subprocess.Popen([ff, "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-i", str(video),
+    dec = subprocess.Popen([ff, "-hide_banner", "-loglevel", "error", "-threads", "2", "-ss", f"{start:.3f}", "-i", str(video),
                             "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps={FPS}",
                             "-frames:v", str(frames), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -548,13 +550,19 @@ def _draw_frames(script: VoiceScript, video: Path, words: list[dict], size: tupl
     return i
 
 
-def _encoder(size: tuple[int, int], out: Path, quality: str, audio: list[str] | None = None) -> subprocess.Popen:
+def _encoder(size: tuple[int, int], out: Path, quality: str, audio: list[str] | None = None,
+             threads: int | None = None) -> subprocess.Popen:
+    """x264 fed raw frames. The drawing is the slow part (about a frame a second), so the encoder needs few threads:
+    left on its own it starts one per core plus a frame buffer for each, close to 1 GB at 1080x1920 (`threads` caps it
+    for the parts of a parallel render, which share the machine)."""
     w, h = size
     preset, crf = ("veryfast", "21") if quality == "draft" else ("medium", "19")
     cmd = [find_tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
            "-s", f"{w}x{h}", "-r", str(FPS), "-i", "pipe:0"]
     cmd += (audio or []) + ["-map", "0:v"] + (["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k", "-shortest"] if audio else [])
-    cmd += ["-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
+    cmd += ["-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p"]
+    cmd += ["-threads", str(threads)] if threads else []
+    cmd += ["-movflags", "+faststart", str(out)]
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
@@ -582,7 +590,7 @@ def _chunk(job: dict) -> str:
     script = VoiceScript.model_validate_json(job["script"])
     lib = Library(Path(job["lib"])) if job["lib"] else None
     out = Path(job["out"])
-    enc = _encoder(tuple(job["size"]), out, job["quality"])
+    enc = _encoder(tuple(job["size"]), out, job["quality"], threads=min(4, job["threads"]))
 
     def tell(f: float) -> None:
         try:
@@ -619,7 +627,7 @@ def render_designed(script: VoiceScript, video: Path, utterances: list[dict], ou
     out.parent.mkdir(parents=True, exist_ok=True)
     workers = safe_workers(workers)
     if workers <= 1 or seconds < 8:
-        enc = _encoder(size, out, quality, audio)
+        enc = _encoder(size, out, quality, audio, threads=4)
         err: list[bytes] = []
         threading.Thread(target=lambda: err.append(enc.stderr.read()), daemon=True).start()
         _draw_frames(script, video, words, size, levels, start, total, 0, enc.stdin.write, lib, progress)

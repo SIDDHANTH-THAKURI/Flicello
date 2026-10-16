@@ -234,8 +234,10 @@ def test_rendered_animation_frames_are_cached_within_a_budget(tmp_path, monkeypa
 def test_drawing_processes_never_outgrow_free_memory(monkeypatch):
     from vidosuper.explainer import designed
 
-    monkeypatch.setattr(designed, "free_memory_gb", lambda: 6.0)
+    monkeypatch.setattr(designed, "free_memory_gb", lambda: 7.0)
     assert designed.safe_workers(3) == 3
+    monkeypatch.setattr(designed, "free_memory_gb", lambda: 6.0)
+    assert designed.safe_workers(3) == 2  # 1.3 GB a part (drawing + encoder + decoder), 2.5 kept spare
     monkeypatch.setattr(designed, "free_memory_gb", lambda: 4.0)
     assert designed.safe_workers(3) == 1
     monkeypatch.setattr(designed, "free_memory_gb", lambda: 1.0)
