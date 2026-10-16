@@ -1,278 +1,303 @@
-{% extends "base.html" %}
+{% extends "shell.html" %}
+{% set active = 'films' %}
 {% block title %}{{ p.title }} · {{ app_name }}{% endblock %}
 {% block body_attrs %} data-project="{{ p.id }}" data-stage="{{ p.stage }}" data-busy="{{ 1 if p.stage in BUSY else 0 }}" data-chunk="{{ chunk }}"{% endblock %}
 {% block content %}
-<div class="row between wrap">
-  <h1>{{ p.title }}</h1>
-  <span class="pill {{ 'busy' if p.stage in BUSY else p.stage }}" id="stage-pill">{{ STAGES.get(p.stage, p.stage) }}</span>
+{% set busy = p.stage in BUSY %}
+{% if p.kind == 'montage' %}
+  {% set steps = [('setup', 'Clips'), ('preparing', 'Watching'), ('choose', 'Story'), ('review', 'Sample'), ('done', 'Film')] %}
+  {% set at = {'setup': 0, 'preparing': 1, 'pitching': 2, 'choose': 2, 'sampling': 3, 'review': 3, 'rendering': 4, 'revising': 4, 'done': 4} %}
+{% else %}
+  {% set steps = [('setup', 'Your ' ~ ('recording' if p.kind == 'voice' else 'video')), ('preparing', 'Reading'), ('review', 'Sample'), ('done', 'Film')] %}
+  {% set at = {'setup': 0, 'preparing': 1, 'sampling': 2, 'review': 2, 'rendering': 3, 'revising': 3, 'done': 3} %}
+{% endif %}
+{% set here = at.get(p.stage, -1) %}
+
+<a class="crumbs" href="/">← Your films</a>
+<header class="page-head">
+  <div>
+    <p class="eyebrow-s rise">{{ STAGES.get(p.stage, p.stage) }}</p>
+    <h1 class="page-title rise d1">{{ p.title }}</h1>
+    <div class="meta rise d2">
+      {% if p.kind == 'talk' %}<span>Talking video</span><span>{{ 'Designer animations' if p.style == 'designed' else 'Clean labels' }}</span>
+      {% elif p.kind == 'voice' %}<span>Voice to animation</span><span>{{ p.shapes|shapes }}</span>
+      {% else %}<span>{{ p.shapes|shapes }}</span><span>{{ p.length|int }} s</span>{% endif %}
+      {% if p.song and p.kind == 'montage' %}<span>♪ {{ p.song }}</span>{% endif %}
+      {% if p.intent %}<span><q>{{ p.intent }}</q></span>{% endif %}
+    </div>
+  </div>
+</header>
+
+{% if here >= 0 %}
+<ol class="track rise d2" aria-label="Progress">
+  {% for key, label in steps %}
+  <li class="{{ 'past' if loop.index0 < here else ('now' ~ (' busy' if busy else '') if loop.index0 == here else '') }}">{{ label }}</li>
+  {% endfor %}
+</ol>
+{% endif %}
+
+{# ------------------------------------------------------------------ setup #}
+{% if p.stage == 'setup' %}
+<div class="split">
+  <div>
+    {% if p.kind == 'voice' %}
+    <section class="panel rise d2">
+      <h2>Your recording</h2>
+      <p class="lead-s">Talk about your idea, a story, a review or a lesson: anything, up to 10 minutes. A voice memo from your phone is perfect.</p>
+      <label class="drop small">
+        <input type="file" id="song-input" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="18" y="6" width="12" height="22" rx="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 22c0 7 6 12 13 12s13-5 13-12M24 34v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <b>{% if p.song %}{{ p.song }}{% else %}Choose your recording{% endif %}</b>
+        <small>{% if p.song %}Tap to change it{% else %}mp3, m4a, wav and more{% endif %}</small>
+      </label>
+      <ul class="files" id="song-list"></ul>
+    </section>
+    {% else %}
+    <section class="panel rise d2">
+      <h2>{% if p.kind == 'talk' %}Your video{% else %}Your clips{% endif %}</h2>
+      <p class="lead-s">{% if p.kind == 'talk' %}One video of you talking, up to 10 minutes. Your picture and voice stay exactly as they are; the graphics land on your words.{% else %}Straight from your phone or camera, vertical or horizontal. Up to 20 clips; the more variety, the better the story.{% endif %}</p>
+      <label class="drop" id="drop">
+        <input type="file" id="clip-input" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm" {% if p.kind != 'talk' %}multiple{% endif %}>
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 30V8M15 17l9-9 9 9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 28v8a4 4 0 0 0 4 4h24a4 4 0 0 0 4-4v-8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+        <b>{% if p.kind == 'talk' %}Choose your video{% else %}Drop your clips here{% endif %}</b>
+        <small>or tap to choose · resumes if your connection drops</small>
+      </label>
+      <ul class="files" id="clip-list">
+        {% for c in clips %}
+        <li data-clip="{{ c.id }}" class="ok"><span class="thumb" aria-hidden="true"></span><span class="name">{{ c.name }}</span><span class="sub">{{ c.seconds|mmss }}</span>
+          <button class="link" type="button" data-delete="{{ c.id }}">Remove</button></li>
+        {% endfor %}
+      </ul>
+      <ul class="files" id="upload-list"></ul>
+    </section>
+    {% endif %}
+
+    {% if note_lines %}
+    <section class="panel rise d3">
+      <h2>How I read your note</h2>
+      <div class="rows">{% for line in note_lines %}<div><span class="v">{{ line }}</span></div>{% endfor %}</div>
+      <p class="help">Not right? Start a new film with a different note or cutting style.</p>
+    </section>
+    {% endif %}
+
+    {% if p.song_seconds and p.song_seconds < p.length - 1 and p.kind == 'montage' %}
+    <section class="panel notice rise d3">
+      <h2>Heads-up about the length</h2>
+      <p class="lead-s">Your song is {{ p.song_seconds|int }} s long, so the film would be about {{ [p.song_seconds - 1.5, 8]|max|int }} s, not {{ p.length|int }} s.</p>
+      <form method="post" action="/p/{{ p.id }}/extend" data-busy-text="Extending your song…">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn-sun" type="submit"><span>Extend the song to fit {{ p.length|int }} s</span></button>
+        <p class="help">It repeats the song's strongest bars on the beat and keeps its real ending. Your upload is kept.</p>
+      </form>
+      <form method="post" action="/p/{{ p.id }}/length" class="choices gap-top">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        {% for n in LENGTHS if n <= p.song_seconds %}<button class="btn" type="submit" name="seconds" value="{{ n }}">Make it {{ n }} s instead</button>{% endfor %}
+      </form>
+    </section>
+    {% endif %}
+  </div>
+
+  <aside class="stick">
+    {% if p.kind == 'montage' %}
+    <section class="panel rise d3">
+      <h2>Music <small class="muted">(optional)</small></h2>
+      <p class="lead-s">The cut follows its beat and its drop. Use a song you're allowed to post.</p>
+      <label class="drop small">
+        <input type="file" id="song-input" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M18 36V10l22-4v26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><circle cx="13" cy="36" r="5" fill="none" stroke="currentColor" stroke-width="2.4"/><circle cx="35" cy="32" r="5" fill="none" stroke="currentColor" stroke-width="2.4"/></svg>
+        <b>{% if p.song %}{{ p.song }}{% else %}Choose a song{% endif %}</b>
+        <small>{% if p.song %}Tap to change it{% else %}or pick below{% endif %}</small>
+      </label>
+      <ul class="files" id="song-list"></ul>
+      {% if not p.song %}
+      <form method="post" action="/p/{{ p.id }}/music" class="choices gap-top">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn {% if p.music != 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="made"><span>{% if p.music != 'none' %}✓ {% endif %}A beat made for you</span></button>
+        <button class="btn {% if p.music == 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="none"><span>{% if p.music == 'none' %}✓ {% endif %}No music</span></button>
+      </form>
+      <p class="help">{% if p.music == 'none' %}Your video plays with its own sound only. The cuts still follow a steady rhythm.{% else %}We compose a short original beat to cut on (AI-made). It's yours to post anywhere.{% endif %}</p>
+      {% endif %}
+    </section>
+    {% elif p.kind == 'voice' %}
+    <section class="panel rise d3">
+      <h2>Music under your voice</h2>
+      <form method="post" action="/p/{{ p.id }}/music" class="choices">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn {% if p.music == 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="none"><span>{% if p.music == 'none' %}✓ {% endif %}No music</span></button>
+        <button class="btn {% if p.music != 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="made"><span>{% if p.music != 'none' %}✓ {% endif %}A soft beat (AI-made)</span></button>
+      </form>
+    </section>
+    {% endif %}
+    <form method="post" action="/p/{{ p.id }}/start" class="panel start rise d4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="btn-sun wide" type="submit" id="start-btn" {% if (p.kind == 'voice' and not p.song) or (p.kind != 'voice' and not clips) %}disabled{% endif %}>
+        <span>{% if p.kind == 'voice' %}Make my animation{% elif p.kind == 'talk' %}Add my motion graphics{% else %}Start: watch my clips{% endif %}</span></button>
+      <p class="eta">Takes {{ total_eta|eta }} in all. You can close the page meanwhile.</p>
+    </form>
+  </aside>
 </div>
-<p class="muted small">{% if p.kind == 'talk' %}Talking video · {{ 'designer animations' if p.style == 'designed' else 'clean labels' }}{% elif p.kind == 'voice' %}Voice to animation · {{ p.shapes|shapes }}{% else %}{{ p.shapes|shapes }} · {{ p.length|int }} s{% endif %}{% if p.song and p.kind == 'montage' %} · ♪ {{ p.song }}{% endif %}{% if p.intent %} · “{{ p.intent }}”{% endif %}</p>
 
-{% if p.stage == 'setup' and p.kind == 'voice' %}
-<section class="card">
-  <h2>1 · Your recording</h2>
-  <p class="muted small">Talk about your idea, a story, a review, a lesson: anything, up to 10 minutes. A voice memo from your phone is perfect. We write down what you said, work out what each part is about, and draw the animation to it.</p>
-  <label class="drop small-drop">
-    <input type="file" id="song-input" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg">
-    <span>{% if p.song %}🎙️ {{ p.song }} · tap to change{% else %}Tap to choose your recording{% endif %}</span>
-  </label>
-  <ul class="files" id="song-list"></ul>
-</section>
-<section class="card">
-  <h2>2 · Music under your voice <span class="muted small">(optional)</span></h2>
-  <form method="post" action="/p/{{ p.id }}/music" class="chips">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="btn {% if p.music == 'none' %}primary{% endif %}" type="submit" name="choice" value="none">{% if p.music == 'none' %}✓ {% endif %}No music</button>
-    <button class="btn {% if p.music != 'none' %}primary{% endif %}" type="submit" name="choice" value="made">{% if p.music != 'none' %}✓ {% endif %}A soft beat made for you (AI-made)</button>
-  </form>
-</section>
-<form method="post" action="/p/{{ p.id }}/start" class="center">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <button class="btn primary big" type="submit" id="start-btn" {% if not p.song %}disabled{% endif %}>Start: make my animation</button>
-  <p class="muted small">Takes {{ total_eta|eta }} in all. You can close the page meanwhile.</p>
-</form>
-
-{% elif p.stage == 'setup' and p.kind == 'talk' %}
-<section class="card">
-  <h2>1 · Your video</h2>
-  <p class="muted small">One video of you talking, up to 10 minutes, vertical or horizontal. Your picture and your voice stay exactly as they are: we add the motion graphics for what you are talking about, at the moment you say it, and optional word-by-word captions. No music is added.</p>
-  <label class="drop" id="drop">
-    <input type="file" id="clip-input" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm">
-    <span>Tap to choose your video</span>
-  </label>
-  <ul class="files" id="clip-list">
-    {% for c in clips %}
-    <li data-clip="{{ c.id }}"><span class="name">{{ c.name }}</span><span class="muted">{{ c.seconds|mmss }}</span>
-      <button class="link danger-text" type="button" data-delete="{{ c.id }}">Remove</button></li>
-    {% endfor %}
-  </ul>
-  <ul class="files" id="upload-list"></ul>
-</section>
-<form method="post" action="/p/{{ p.id }}/start" class="center">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <button class="btn primary big" type="submit" id="start-btn" {% if not clips %}disabled{% endif %}>Start: add my motion graphics</button>
-  <p class="muted small">Takes {{ total_eta|eta }} in all. You can close the page meanwhile.</p>
-</form>
-
-{% elif p.stage == 'setup' %}
-<section class="card">
-  <h2>1 · Your clips</h2>
-  <p class="muted small">Straight from your phone or camera, vertical or horizontal. Up to 20 clips; the more variety, the better the story.</p>
-  <label class="drop" id="drop">
-    <input type="file" id="clip-input" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm" multiple>
-    <span>Tap to choose clips, or drop them here</span>
-  </label>
-  <ul class="files" id="clip-list">
-    {% for c in clips %}
-    <li data-clip="{{ c.id }}"><span class="name">{{ c.name }}</span><span class="muted">{{ c.seconds|mmss }}</span>
-      <button class="link danger-text" type="button" data-delete="{{ c.id }}">Remove</button></li>
-    {% endfor %}
-  </ul>
-  <ul class="files" id="upload-list"></ul>
-</section>
-{% if note_lines %}
-<section class="card">
-  <h2>How I read your note</h2>
-  <ul class="small">{% for line in note_lines %}<li>{{ line }}</li>{% endfor %}</ul>
-  <p class="muted small">Not right? Start over with a new video and change the note or the cutting style.</p>
-</section>
-{% endif %}
-<section class="card">
-  <h2>2 · Music <span class="muted small">(optional)</span></h2>
-  <p class="muted small">The cut follows its beat and its drop. Use a song you're allowed to post, or choose below.</p>
-  <label class="drop small-drop">
-    <input type="file" id="song-input" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg">
-    <span>{% if p.song %}♪ {{ p.song }} · tap to change{% else %}Tap to choose a song, or skip it{% endif %}</span>
-  </label>
-  <ul class="files" id="song-list"></ul>
-  {% if not p.song %}
-  <p class="muted small top-gap">No song? Pick one:</p>
-  <form method="post" action="/p/{{ p.id }}/music" class="chips">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="btn {% if p.music != 'none' %}primary{% endif %}" type="submit" name="choice" value="made">{% if p.music != 'none' %}✓ {% endif %}A beat made for you (AI-made)</button>
-    <button class="btn {% if p.music == 'none' %}primary{% endif %}" type="submit" name="choice" value="none">{% if p.music == 'none' %}✓ {% endif %}No music</button>
-  </form>
-  <p class="muted small">{% if p.music == 'none' %}Your video plays with its own sound only. The cuts still follow a steady rhythm.{% else %}We compose a short original beat to cut on, made for your video. It is ours, so you can post it anywhere.{% endif %}</p>
-  {% endif %}
-</section>
-{% if p.song_seconds and p.song_seconds < p.length - 1 %}
-<section class="card notice">
-  <b>Heads-up about the length.</b> Your song is {{ p.song_seconds|int }} s long, so your video will be about {{ [p.song_seconds - 1.5, 8]|max|int }} s, not the {{ p.length|int }} s you picked. Extend the song, choose a longer one, or shorten the video:
-  <form method="post" action="/p/{{ p.id }}/extend" class="top-gap" data-busy-text="Extending your song…">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="btn primary" type="submit">Extend the song to fit {{ p.length|int }} s</button>
-    <p class="muted small">It repeats the strongest bars of your song on the beat and keeps its real ending. Your upload is kept.</p>
-  </form>
-  <form method="post" action="/p/{{ p.id }}/length" class="chips top-gap">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    {% for n in LENGTHS if n <= p.song_seconds %}<button class="btn" type="submit" name="seconds" value="{{ n }}">Or make the video {{ n }} s</button>{% endfor %}
-  </form>
-</section>
-{% endif %}
-<form method="post" action="/p/{{ p.id }}/start" class="center">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <button class="btn primary big" type="submit" id="start-btn" {% if not clips %}disabled{% endif %}>Start: watch my clips</button>
-  <p class="muted small">Takes {{ total_eta|eta }} in all. You can close the page meanwhile.</p>
-</form>
-
-{% elif p.stage in BUSY %}
-<section class="card center busy-card">
-  <div class="pulse"></div>
+{# ------------------------------------------------------------------ working #}
+{% elif busy %}
+<section class="working rise d2" aria-live="polite">
+  <div class="reel" aria-hidden="true"><div>{% for _ in range(16) %}<span></span>{% endfor %}</div></div>
   <h2 id="job-label">{{ STAGES.get(p.stage) }}</h2>
-  <div class="bar"><span id="bar" data-progress="{{ job.progress if job else 0 }}"></span></div>
-  <p id="job-msg" class="muted">{% if job and job.status == 'queued' %}Waiting for its turn…{% else %}{{ job.message if job else '' }}{% endif %}</p>
-  <p id="job-eta" class="muted small">{% if eta %}{{ eta|eta }} left{% endif %}</p>
-  <p class="muted small">You can close this page; it keeps going.</p>
+  <div class="meter"><span id="bar" data-progress="{{ job.progress if job else 0 }}"></span></div>
+  <p id="job-msg" class="msg">{% if job and job.status == 'queued' %}Waiting for its turn…{% else %}{{ job.message if job else '' }}{% endif %}</p>
+  <p id="job-eta" class="eta">{% if eta %}{{ eta|eta }} left{% endif %}</p>
+  <p class="help">You can close this page; it keeps going.</p>
 </section>
 
+{# ------------------------------------------------------------------ choose a story #}
 {% elif p.stage == 'choose' %}
-{% if info and info.notes %}
-<section class="card notice">
-  {% for n in info.notes %}<p>{{ n }}</p>{% endfor %}
-</section>
-{% endif %}
-<p class="lead">Three ways to tell it. Pick the one you'd post.</p>
-<div class="pitches">
+{% if info and info.notes %}<section class="panel notice rise">{% for n in info.notes %}<p class="lead-s">{{ n }}</p>{% endfor %}</section>{% endif %}
+<p class="page-sub rise d2">Three ways to tell it. Pick the one you'd post.</p>
+<div class="posters gap-top">
   {% for item in pitches if not item.rejected %}
   {% set d = item.pitch %}
-  <article class="card pitch">
-    {% if item.stills %}
-    <div class="stills">{% for s in item.stills %}<img src="/m/{{ p.id }}/stills/{{ s }}" alt="" loading="lazy">{% endfor %}</div>
-    {% endif %}
-    <h3>{{ d.title }}</h3>
-    <p class="logline">{{ d.logline|noids }}</p>
-    <dl class="facts">
-      <dt>Feeling</dt><dd>{{ d.feeling }}</dd>
-      <dt>Opens on</dt><dd>{{ d.hook|noids }}</dd>
-      <dt>The turn</dt><dd>{{ d.turn|noids }}</dd>
-      <dt>Ends on</dt><dd>{{ d.ending|noids }}</dd>
-    </dl>
-    <details><summary>Part by part</summary>
-      <ol class="beats">{% for b in d.beats %}<li>{{ b.what|noids }}{% if b.music %} <span class="muted">· {{ b.music }}</span>{% endif %}</li>{% endfor %}</ol>
-    </details>
-    <form method="post" action="/p/{{ p.id }}/pick">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pitch" value="{{ item.id }}">
-      <button class="btn primary" type="submit">Make this one</button>
-    </form>
+  <article class="poster rise d{{ loop.index0 % 4 + 1 }}">
+    {% if item.stills %}<div class="poster-strip">{% for s in item.stills %}<img src="/m/{{ p.id }}/stills/{{ s }}" alt="" loading="lazy">{% endfor %}</div>{% endif %}
+    <div class="poster-body">
+      <h3>{{ d.title }}</h3>
+      <p class="logline">{{ d.logline|noids }}</p>
+      <dl class="facts">
+        <dt>Feeling</dt><dd>{{ d.feeling }}</dd>
+        <dt>Opens on</dt><dd>{{ d.hook|noids }}</dd>
+        <dt>The turn</dt><dd>{{ d.turn|noids }}</dd>
+        <dt>Ends on</dt><dd>{{ d.ending|noids }}</dd>
+      </dl>
+      <details class="more"><summary>Part by part</summary>
+        <ol class="beats">{% for b in d.beats %}<li>{{ b.what|noids }}{% if b.music %} <span class="muted">· {{ b.music }}</span>{% endif %}</li>{% endfor %}</ol>
+      </details>
+      <form method="post" action="/p/{{ p.id }}/pick">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pitch" value="{{ item.id }}">
+        <button class="btn-sun wide" type="submit"><span>Make this one</span></button>
+      </form>
+    </div>
   </article>
   {% endfor %}
 </div>
-<section class="card">
+<section class="panel gap-top rise">
   <h2>None of these?</h2>
-  <form method="post" action="/p/{{ p.id }}/another" class="stack">
+  <form method="post" action="/p/{{ p.id }}/another" class="row-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>What's missing? <span class="muted">(optional)</span><input name="reason" maxlength="300" placeholder="Something funnier / more about the food / calmer"></label>
-    <button class="btn" type="submit">Show me another idea</button>
+    <label class="field"><span>What's missing? <small class="muted">(optional)</small></span><input name="reason" maxlength="300" placeholder="Something funnier / more about the food / calmer"></label>
+    <button class="btn" type="submit">Another idea</button>
   </form>
-  <form method="post" action="/p/{{ p.id }}/another" class="stack top-gap">
+  <form method="post" action="/p/{{ p.id }}/another">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>Or describe your own idea<textarea name="own" rows="2" maxlength="600" placeholder="Start with the sunset, then rewind the day…"></textarea></label>
+    <label class="field"><span>Or describe your own idea</span><textarea name="own" rows="2" maxlength="600" placeholder="Start with the sunset, then rewind the day…"></textarea></label>
     <button class="btn" type="submit">Use my idea</button>
   </form>
 </section>
 
+{# ------------------------------------------------------------------ check the sample #}
 {% elif p.stage == 'review' and sample %}
-<p class="lead">A short sample, to check the feel before the whole video is made.{% if info and info.changes %} It starts at the part that changed.{% endif %}</p>
+<p class="page-sub rise d2">A short sample, to check the feel before the whole film is made.{% if info and info.changes %} It starts at the part that changed.{% endif %}</p>
 {% if info and info.changes %}
-<section class="card notice">
-  <b>What I changed</b>
-  <ul class="small">{% for line in info.changes %}<li>{{ line }}</li>{% endfor %}</ul>
-</section>
+<section class="panel notice rise"><h2>What I changed</h2><div class="rows">{% for line in info.changes %}<div><span class="v">{{ line }}</span></div>{% endfor %}</div></section>
 {% endif %}
-<section class="card center">
-  <video class="player {{ 'tall' if sample.shape == '9:16' else '' }}" src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video>
-  <form method="post" action="/p/{{ p.id }}/sample" class="top-gap">
+<div class="screens gap-top rise d2">
+  <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}"><div class="frame">
+    <video src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video></div></figure>
+</div>
+<div class="split gap-top">
+  <form method="post" action="/p/{{ p.id }}/sample" class="panel start">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="ok">
-    <button class="btn primary big" type="submit">Looks right: make the whole video</button>
+    <h2>Looks right?</h2>
+    <button class="btn-sun wide" type="submit"><span>Make the whole film</span></button>
   </form>
-</section>
-<section class="card">
-  <h2>Not quite?</h2>
-  <form method="post" action="/p/{{ p.id }}/sample" class="stack">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="no">
-    <label>What should change?<textarea name="note" rows="2" maxlength="600" required placeholder="Slower start / more of the dog / different shot on the drop"></textarea></label>
-    <button class="btn" type="submit">Try again with this</button>
-  </form>
-  {% if p.kind == 'montage' %}
-  <form method="post" action="/p/{{ p.id }}/sample" class="top-gap">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="ideas">
-    <button class="link" type="submit">← Back to the story ideas</button>
-  </form>
-  {% endif %}
-</section>
+  <section class="panel">
+    <h2>Not quite?</h2>
+    <form method="post" action="/p/{{ p.id }}/sample">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="no">
+      <label class="field"><span>What should change?</span><textarea name="note" rows="2" maxlength="600" required placeholder="Slower start / more of the dog / a different shot on the drop"></textarea></label>
+      <button class="btn" type="submit">Try again with this</button>
+    </form>
+    {% if p.kind == 'montage' %}
+    <form method="post" action="/p/{{ p.id }}/sample" class="gap-top">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="ideas">
+      <button class="link" type="submit">← Back to the story ideas</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
 
+{# ------------------------------------------------------------------ done #}
 {% elif p.stage == 'done' %}
-<div class="videos">
+<div class="screens rise d2">
   {% for r in latest %}
-  <figure class="card center">
-    <video class="player {{ 'tall' if r.shape == '9:16' else '' }}" src="/m/{{ p.id }}/out/{{ r.file }}" controls playsinline preload="metadata"></video>
-    <figcaption>{{ r.shape }} · {{ r.seconds|mmss }} · <a href="/m/{{ p.id }}/out/{{ r.file }}?dl=1">Download</a></figcaption>
+  <figure class="device {{ 'tall' if r.shape == '9:16' else 'wide' }}">
+    <div class="frame"><video src="/m/{{ p.id }}/out/{{ r.file }}" controls playsinline preload="metadata"></video></div>
+    <figcaption>{{ r.shape }} · {{ r.seconds|mmss }} · <a class="btn" href="/m/{{ p.id }}/out/{{ r.file }}?dl=1">Download</a></figcaption>
     {% if is_owner %}
-    <details class="checks"><summary>Checks</summary><ul>
-      {% for f in r.findings|fromjson %}<li class="lvl-{{ f.level }}"><b>{{ f.level|upper }}</b> {{ f.check }}: {{ f.detail }}</li>{% endfor %}
+    <details class="more"><summary>Checks</summary><ul class="beats">
+      {% for f in r.findings|fromjson %}<li><b>{{ f.level|upper }}</b> {{ f.check }}: {{ f.detail }}</li>{% endfor %}
     </ul></details>
     {% endif %}
   </figure>
   {% endfor %}
 </div>
 {% if not rated %}
-<section class="card">
+<section class="panel gap-top rise d3">
   <h2>How did it turn out?</h2>
-  <form method="post" action="/p/{{ p.id }}/rate" class="stack">
+  <p class="lead-s">Your answer teaches Flicello your taste: your next film starts from it.</p>
+  <form method="post" action="/p/{{ p.id }}/rate">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <fieldset><legend>Did it do what you asked?</legend>
-      <div class="chips">{% for n in range(1, 6) %}<label class="chip"><input type="radio" name="match" value="{{ n }}" required><span>{{ n }}</span></label>{% endfor %}</div>
-      <p class="muted small">1 = not at all · 5 = exactly</p>
+    <fieldset class="group"><legend>Did it do what you asked?</legend>
+      <div class="scale">{% for n in range(1, 6) %}<label class="choice"><input type="radio" name="match" value="{{ n }}" required><span>{{ n }}</span></label>{% endfor %}</div>
+      <div class="scale-ends"><span>not at all</span><span>exactly</span></div>
     </fieldset>
-    <fieldset><legend>How much do you like it? <output id="liked-out">7</output>/10</legend>
-      <input type="range" name="liked" min="1" max="10" value="7" id="liked">
+    <fieldset class="group"><legend>How much do you like it?</legend>
+      <div class="liked"><input class="slide" type="range" name="liked" min="1" max="10" value="7" id="liked"><output id="liked-out" for="liked">7<small>/10</small></output></div>
     </fieldset>
-    <fieldset><legend>Anything off? <span class="muted">(tick any)</span></legend>
-      <div class="chips">{% for t in TAGS %}<label class="chip"><input type="checkbox" name="tags" value="{{ t }}"><span>{{ t }}</span></label>{% endfor %}</div>
+    <fieldset class="group"><legend>Anything off? <small>(tick any)</small></legend>
+      <div class="choices">{% for t in TAGS %}<label class="choice"><input type="checkbox" name="tags" value="{{ t }}"><span>{{ t }}</span></label>{% endfor %}</div>
     </fieldset>
-    <label>In your words <span class="muted">(optional)</span><textarea name="text" rows="2" maxlength="1000"></textarea></label>
-    <label>What should change? <span class="muted">(optional · we'll make a new version{% if revisions_left is not none %}; {{ revisions_left }} left{% endif %})</span>
-      <textarea name="fix" rows="2" maxlength="1000" placeholder="Leave empty if it's done"></textarea></label>
-    <button class="btn primary" type="submit">Send</button>
+    <label class="field"><span>In your words <small class="muted">(optional)</small></span><textarea name="text" rows="2" maxlength="1000"></textarea></label>
+    <label class="field"><span>What should change? <small class="muted">(optional: we'll make a new version{% if revisions_left is not none %}; {{ revisions_left }} left{% endif %})</small></span>
+      <textarea name="fix" rows="2" maxlength="1000" placeholder="Leave it empty if it's done"></textarea></label>
+    <button class="btn-sun wide" type="submit"><span>Send</span></button>
   </form>
 </section>
 {% else %}
-<section class="card">
-  <p>Thanks for rating it ({{ rated.liked }}/10). Your style profile learns from it.</p>
+<section class="panel gap-top rise d3">
+  <h2>Thanks for rating it {{ rated.liked }}/10</h2>
+  <p class="lead-s">Your style profile has learned from it.</p>
   {% if revisions_left is none or revisions_left > 0 %}
-  <form method="post" action="/p/{{ p.id }}/rate" class="stack">
+  <form method="post" action="/p/{{ p.id }}/rate">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="match" value="{{ rated.match }}"><input type="hidden" name="liked" value="{{ rated.liked }}">
-    <label>Want changes? <textarea name="fix" rows="2" maxlength="1000" required placeholder="What should change"></textarea></label>
+    <label class="field"><span>Want changes?</span><textarea name="fix" rows="2" maxlength="1000" required placeholder="What should change"></textarea></label>
     <button class="btn" type="submit">Make a new version</button>
   </form>
   {% endif %}
 </section>
 {% endif %}
 {% if older %}
-<section class="card"><h2>Earlier versions</h2><ul class="files">
-  {% for r in older %}<li><span>Version {{ r.version }} · {{ r.shape }}</span><a href="/m/{{ p.id }}/out/{{ r.file }}">Watch</a></li>{% endfor %}
-</ul></section>
+<section class="panel gap-top"><h2>Earlier versions</h2><div class="rows">
+  {% for r in older %}<div><span class="k">Version {{ r.version }} · {{ r.shape }}</span><a class="btn" href="/m/{{ p.id }}/out/{{ r.file }}">Watch</a></div>{% endfor %}
+</div></section>
 {% endif %}
 
 {% elif p.stage == 'paused' %}
-<section class="card center"><h2>Paused</h2><p>{{ p.note or "Waiting for the owner." }}</p></section>
+<section class="working rise d2"><h2>Paused</h2><p class="msg">{{ p.note or "Waiting for the owner." }}</p></section>
 
 {% elif p.stage == 'failed' %}
-<section class="card center">
+<section class="working rise d2">
   <h2>Something went wrong</h2>
-  <p>{{ p.error or "The owner has been told." }}</p>
+  <p class="msg">{{ p.error or "We've been told and are looking at it." }}</p>
   <form method="post" action="/p/{{ p.id }}/retry"><input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="btn primary" type="submit">Try again</button></form>
+    <button class="btn-sun" type="submit"><span>Try again</span></button></form>
 </section>
 {% endif %}
 
-<details class="danger card">
-  <summary>Delete this video</summary>
-  <form method="post" action="/p/{{ p.id }}/delete" class="stack">
+<details class="danger-zone">
+  <summary>Delete this film</summary>
+  <form method="post" action="/p/{{ p.id }}/delete">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="check"><input type="checkbox" name="sure" value="yes"> Yes, delete it with all its clips and versions</label>
-    <button class="btn danger" type="submit">Delete</button>
+    <label class="tick"><input type="checkbox" name="sure" value="yes" required><span><b>Yes, delete it with all its clips and versions</b><small>This can't be undone.</small></span></label>
+    <button class="btn danger gap-top" type="submit">Delete</button>
   </form>
 </details>
 {% endblock %}

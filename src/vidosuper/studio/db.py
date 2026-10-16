@@ -69,11 +69,32 @@ CREATE TABLE IF NOT EXISTS alerts(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, level TEXT NOT NULL, kind TEXT NOT NULL,
   message TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS heartbeat(name TEXT PRIMARY KEY, at REAL NOT NULL, info TEXT);
+CREATE TABLE IF NOT EXISTS login_codes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, code TEXT NOT NULL, created REAL NOT NULL,
+  expires REAL NOT NULL, tries INTEGER NOT NULL DEFAULT 0, used REAL);
+CREATE TABLE IF NOT EXISTS pending(
+  token TEXT PRIMARY KEY, email TEXT, google_sub TEXT, name TEXT, created REAL NOT NULL, expires REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth(
+  state TEXT PRIMARY KEY, nonce TEXT NOT NULL, verifier TEXT NOT NULL, created REAL NOT NULL, next TEXT);
+CREATE TABLE IF NOT EXISTS passkeys(
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, public_key BLOB NOT NULL, sign_count INTEGER NOT NULL DEFAULT 0,
+  transports TEXT, name TEXT, created REAL NOT NULL, last_used REAL);
+CREATE TABLE IF NOT EXISTS challenges(
+  token TEXT PRIMARY KEY, challenge BLOB NOT NULL, user_id TEXT, kind TEXT NOT NULL, created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS consents(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, kind TEXT NOT NULL, version TEXT NOT NULL,
+  granted INTEGER NOT NULL, at REAL NOT NULL, ip TEXT);
+CREATE TABLE IF NOT EXISTS audit(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, user_id TEXT, action TEXT NOT NULL, detail TEXT, ip TEXT);
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, priority, id);
 CREATE INDEX IF NOT EXISTS projects_user ON projects(user_id, deleted);
 CREATE INDEX IF NOT EXISTS spend_at ON spend(at);
 CREATE INDEX IF NOT EXISTS attempts_key ON attempts(key, at);
 CREATE INDEX IF NOT EXISTS events_project ON events(project_id, id);
+CREATE INDEX IF NOT EXISTS codes_email ON login_codes(email, created);
+CREATE INDEX IF NOT EXISTS passkeys_user ON passkeys(user_id);
+CREATE INDEX IF NOT EXISTS consents_user ON consents(user_id, kind, at);
+CREATE INDEX IF NOT EXISTS audit_at ON audit(at);
 """
 
 
@@ -107,6 +128,15 @@ class DB:
             con.execute("ALTER TABLE jobs ADD COLUMN moved REAL")
         if "style" not in {r[1] for r in con.execute("PRAGMA table_info(renders)")}:  # how a voice/talk video was drawn
             con.execute("ALTER TABLE renders ADD COLUMN style TEXT")
+        # public sign-up: people are found by email or Google account; `name` stays the unique handle
+        users = {r[1] for r in con.execute("PRAGMA table_info(users)")}
+        for col, kind in (("email", "TEXT"), ("google_sub", "TEXT"), ("display", "TEXT"), ("last_seen", "REAL"),
+                          ("marketing", "INTEGER NOT NULL DEFAULT 0"), ("adult", "REAL"), ("terms", "TEXT"),
+                          ("joined_by", "TEXT")):
+            if col not in users:
+                con.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email) WHERE email IS NOT NULL")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_google ON users(google_sub) WHERE google_sub IS NOT NULL")
 
     def connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path, timeout=15, isolation_level=None, check_same_thread=False)

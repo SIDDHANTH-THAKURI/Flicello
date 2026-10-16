@@ -1,12 +1,24 @@
-{% extends "base.html" %}
-{% block title %}Events · {{ app_name }}{% endblock %}
+{% extends "shell.html" %}
+{% set active = 'admin' %}
+{% block title %}Job log · {{ app_name }}{% endblock %}
+{% block bundle %}{{ vite("admin") }}{% endblock %}
+{% block main_class %}page narrow{% endblock %}
 {% block content %}
-<p><a href="/admin">← Admin</a></p>
-<h1>Events for {{ pid }}</h1>
-<section class="card">
-  {% if not events %}<p class="muted">None.</p>{% endif %}
-  {% for e in events %}
-  <div class="event lvl-{{ e.level }}"><span class="muted small">{{ e.at|ago }} · job {{ e.job_id or '-' }}</span><pre>{{ e.message }}</pre></div>
-  {% endfor %}
+<a class="crumbs" href="/admin">← Control room</a>
+<header class="page-head">
+  <div>
+    <p class="eyebrow-s">Technical log</p>
+    <h1 class="page-title">Project <em class="sun-text">{{ pid }}</em></h1>
+    <p class="page-sub">For fixing failures only. Lines can quote short fragments of what was made.</p>
+  </div>
+</header>
+<section class="panel">
+  <div class="mini-list">
+    {% for e in events %}
+    <div><span class="lvl {{ 'warning' if e.level in ('warn', 'error') else '' }}">{{ e.level }}</span>
+      <span class="what">{{ e.message }}<br><span class="muted">job {{ e.job_id or '–' }}</span></span><span class="when">{{ e.at|ago }}</span></div>
+    {% endfor %}
+    {% if not events %}<p class="viz-empty">Nothing logged.</p>{% endif %}
+  </div>
 </section>
 {% endblock %}

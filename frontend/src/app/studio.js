@@ -1,0 +1,206 @@
+// The studio's moving parts: resumable uploads (with a frame from each clip as its thumbnail before it has even
+// finished uploading), live progress while a step runs, the rating slider, and the new-film form.
+import { toast } from './ui.js';
+
+const $ = (s, root = document) => root.querySelector(s);
+const $$ = (s, root = document) => [...root.querySelectorAll(s)];
+const csrf = () => (document.querySelector('meta[name="csrf"]') || {}).content || '';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function api(method, url, data, isBlob) {
+  const opts = { method, headers: { 'X-CSRF': csrf() }, credentials: 'same-origin' };
+  if (data !== undefined) {
+    if (isBlob) { opts.body = data; opts.headers['Content-Type'] = 'application/octet-stream'; }
+    else { opts.body = JSON.stringify(data); opts.headers['Content-Type'] = 'application/json'; }
+  }
+  const res = await fetch(url, opts);
+  let json = {};
+  try { json = await res.json(); } catch { /* empty body */ }
+  if (!res.ok) { const err = new Error(json.error || `Error ${res.status}`); err.status = res.status; throw err; }
+  return json;
+}
+
+// a still from the clip itself, made in the browser (nothing is sent anywhere for it)
+function thumbFor(file, img) {
+  if (!file.type.startsWith('video/') && !/\.(mov|mp4|m4v|mkv|webm)$/i.test(file.name)) return;
+  const url = URL.createObjectURL(file);
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.src = url;
+  v.addEventListener('loadeddata', () => { v.currentTime = Math.min(1, (v.duration || 2) / 3); }, { once: true });
+  v.addEventListener('seeked', () => {
+    try {
+      const c = document.createElement('canvas');
+      const h = 100, w = Math.round(h * (v.videoWidth / Math.max(1, v.videoHeight)));
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(v, 0, 0, w, h);
+      img.src = c.toDataURL('image/jpeg', 0.7);
+    } catch { /* some codecs (HEVC on some browsers) can't be drawn: keep the blank */ }
+    URL.revokeObjectURL(url);
+  }, { once: true });
+}
+
+function row(list, file) {
+  const li = document.createElement('li');
+  const img = document.createElement('img');
+  img.className = 'thumb'; img.alt = '';
+  thumbFor(file, img);
+  const name = document.createElement('span');
+  name.className = 'name'; name.textContent = file.name;
+  const sub = document.createElement('span');
+  sub.className = 'sub'; sub.textContent = 'waiting';
+  const size = document.createElement('span');
+  size.className = 'sub'; size.textContent = `${(file.size / 1e6).toFixed(file.size > 1e8 ? 0 : 1)} MB`;
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const fill = document.createElement('span');
+  bar.appendChild(fill);
+  li.append(img, name, size, sub, bar);
+  list.appendChild(li);
+  return {
+    set(f, text) { fill.style.width = `${Math.round(f * 100)}%`; sub.textContent = text || `${Math.round(f * 100)}%`; },
+    ok() { li.classList.add('ok'); sub.textContent = '✓'; },
+    fail(msg) { li.classList.add('off'); sub.textContent = ''; name.textContent = `${file.name} · ${msg}`; },
+  };
+}
+
+let uploading = 0;
+async function uploadFile(pid, file, kind, ui) {
+  const start = await api('POST', `/api/p/${pid}/uploads`, { kind, name: file.name, size: file.size });
+  const chunk = start.chunk;
+  let received = start.received, failures = 0;
+  while (received < file.size) {
+    const piece = file.slice(received, Math.min(file.size, received + chunk));
+    try {
+      const r = await api('PUT', `/api/uploads/${start.id}?offset=${received}`, piece, true);
+      received = r.received; failures = 0;
+      ui.set(received / file.size);
+    } catch (err) {
+      if (err.status && err.status >= 400 && err.status < 500) throw err; // the server said no: stop
+      failures += 1;
+      if (failures > 8) throw new Error('connection lost; try again');
+      ui.set(received / file.size, 'reconnecting…');
+      await sleep(Math.min(30000, 1000 * 2 ** failures));
+      try { received = (await api('GET', `/api/uploads/${start.id}`)).received; } catch { /* retry */ }
+    }
+  }
+  ui.set(1, 'checking…');
+  return api('POST', `/api/uploads/${start.id}/done`);
+}
+
+async function uploadAll(pid, files, kind, list) {
+  uploading += 1;
+  let ok = 0;
+  for (const file of files) {
+    const ui = row(list, file);
+    try { await uploadFile(pid, file, kind, ui); ui.ok(); ok += 1; } catch (err) { ui.fail(err.message); }
+  }
+  uploading -= 1;
+  if (ok && !uploading) setTimeout(() => window.location.reload(), 700);
+}
+
+function uploads(pid) {
+  const clipInput = $('#clip-input');
+  const songInput = $('#song-input');
+  const list = $('#upload-list');
+  if (clipInput && list) {
+    clipInput.addEventListener('change', () => { uploadAll(pid, [...clipInput.files], 'clip', list); clipInput.value = ''; });
+    const drop = $('#drop');
+    if (drop) {
+      ['dragenter', 'dragover'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add('over'); }));
+      ['dragleave', 'drop'].forEach((e) => drop.addEventListener(e, () => drop.classList.remove('over')));
+      drop.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        const files = [...ev.dataTransfer.files].filter((f) => f.type.startsWith('video/') || /\.(mov|mp4|m4v|mkv|webm)$/i.test(f.name));
+        if (files.length) uploadAll(pid, files, 'clip', list);
+      });
+    }
+  }
+  if (songInput) {
+    songInput.addEventListener('change', () => {
+      if (songInput.files[0]) uploadAll(pid, [songInput.files[0]], 'song', $('#song-list'));
+      songInput.value = '';
+    });
+  }
+  window.addEventListener('beforeunload', (ev) => { if (uploading) { ev.preventDefault(); ev.returnValue = ''; } });
+  $$('[data-delete]').forEach((btn) => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      await api('POST', `/api/p/${pid}/clips/${btn.dataset.delete}/delete`);
+      btn.closest('li').remove();
+      window.location.reload();
+    } catch (err) { btn.disabled = false; toast(err.message); }
+  }));
+}
+
+function progress(pid) {
+  const body = document.body;
+  const bar = $('#bar');
+  if (bar && bar.dataset.progress) bar.style.width = `${Math.max(3, Math.round(parseFloat(bar.dataset.progress) * 100))}%`;
+  if (body.dataset.busy !== '1') return;
+  const stage = body.dataset.stage;
+  const msg = $('#job-msg');
+  const eta = $('#job-eta');
+  let misses = 0;
+  const poll = async () => {
+    try {
+      const st = await api('GET', `/api/p/${pid}/status`);
+      misses = 0;
+      if (st.stage !== stage || !st.busy) { window.location.reload(); return; }
+      if (bar && st.progress !== null) bar.style.width = `${Math.max(3, Math.round(st.progress * 100))}%`;
+      if (msg) msg.textContent = st.queued ? 'Waiting for its turn…' : (st.message || 'Working…');
+      if (eta) {
+        const s = st.eta;
+        eta.textContent = s === null || s === undefined ? '' :
+          `${s < 45 ? 'under a minute' : s < 90 ? 'about a minute' : `about ${Math.round(s / 60)} min`} left`;
+      }
+    } catch (err) {
+      misses += 1;
+      if (err.status === 401) { window.location.href = '/signin'; return; }
+    }
+    setTimeout(poll, misses ? Math.min(20000, 2500 * misses) : 2500);
+  };
+  setTimeout(poll, 1500);
+}
+
+function rating() {
+  const liked = $('#liked');
+  const out = $('#liked-out');
+  if (liked && out) liked.addEventListener('input', () => { out.firstChild.textContent = liked.value; });
+}
+
+function newFilm() {
+  const form = $('#new-form');
+  if (!form) return;
+  const apply = () => {
+    const kind = (form.querySelector('input[name="kind"]:checked') || {}).value || 'montage';
+    $$('[data-kinds]', form).forEach((el) => { el.hidden = !el.dataset.kinds.split(' ').includes(kind); });
+  };
+  $$('input[name="kind"]', form).forEach((r) => r.addEventListener('change', apply));
+  apply();
+}
+
+function inviteLink() {
+  const link = $('#invite-link');
+  if (!link) return;
+  const full = window.location.origin + link.dataset.path;
+  link.textContent = `${full}  (tap to copy)`;
+  link.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(full); link.textContent = `${full}  ✓ copied`; } catch { /* select by hand */ }
+  });
+}
+
+function busyForms() {
+  $$('form[data-busy-text]').forEach((form) => form.addEventListener('submit', () => {
+    const btn = form.querySelector('button[type=submit]');
+    if (btn) { btn.textContent = form.dataset.busyText; btn.disabled = true; }
+  }));
+}
+
+export function studio() {
+  const pid = document.body.dataset.project;
+  if (pid) { uploads(pid); progress(pid); }
+  rating();
+  newFilm();
+  inviteLink();
+  busyForms();
+}

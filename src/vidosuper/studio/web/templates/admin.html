@@ -1,92 +1,205 @@
-{% extends "base.html" %}
-{% block title %}Admin · {{ app_name }}{% endblock %}
+{% extends "shell.html" %}
+{% set active = 'admin' %}
+{% block title %}Control room · {{ app_name }}{% endblock %}
+{% block bundle %}{{ vite("admin") }}{% endblock %}
+{% block main_class %}page wide{% endblock %}
 {% block content %}
-<h1>Admin</h1>
-<section class="card">
-  <h2>Health</h2>
-  <div class="stats">
-    <div><b>{% if health.worker_seen is none %}never{% else %}{{ health.worker_seen|int }} s ago{% endif %}</b><span>worker seen</span></div>
-    <div><b>{{ health.running }} / {{ health.queued }}</b><span>running / queued</span></div>
-    <div><b>{{ health.waiting }}</b><span>paused jobs</span></div>
-    <div><b>{{ health.failed_24h }}</b><span>failed (24 h)</span></div>
-    <div><b>{{ health.free_gb }} GB</b><span>disk free</span></div>
-    <div><b>${{ '%.2f'|format(health.month_usd) }} / ${{ '%.0f'|format(health.cap_usd) }}</b><span>API spend this month</span></div>
-    <div><b>${{ '%.2f'|format(health.month_usd_all) }}</b><span>incl. your plan (API-equivalent)</span></div>
+{% macro card(id, title, sub, legend=False, cls='') -%}
+<section class="viz-card {{ cls }}">
+  <div class="viz-head">
+    <div><h3>{{ title }}</h3><p>{{ sub }}</p></div>
+    <button type="button" class="viz-toggle" data-table-toggle aria-pressed="false">Table</button>
   </div>
-  {% if health.worker_seen is none or health.worker_seen > 60 %}<p class="error">The worker isn't running: videos won't move. Start it with <code>vido studio serve</code>.</p>{% endif %}
+  {% if legend %}<div class="viz-legend" id="l-{{ id }}"></div>{% endif %}
+  <div class="viz-plot" id="c-{{ id }}"></div>
+  <div class="viz-tablebox" id="t-{{ id }}"></div>
 </section>
+{%- endmacro %}
 
-<section class="card">
-  <h2>Invite a friend</h2>
-  {% if new_link %}
-  <div class="note">Send this link (it works once, for 7 days). It won't be shown again:<br>
-    <code class="copy" id="invite-link" data-path="{{ new_link }}">{{ new_link }}</code></div>
-  {% endif %}
-  <form method="post" action="/admin/invite" class="row">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <input name="label" maxlength="60" placeholder="Their first name (shown on the welcome page)">
-    <button class="btn primary" type="submit">Make invite link</button>
-  </form>
-  {% if invites %}<p class="muted small">{{ invites|length }} open invite(s).</p>{% endif %}
-</section>
+<div class="dash">
+  <header class="dash-head">
+    <div>
+      <p class="eyebrow-s rise">Admin</p>
+      <h1 class="page-title rise d1">The <em class="sun-text">control room.</em></h1>
+      <div class="flags rise d2">
+        <span class="flag plain"><i class="pulse-dot" data-health-dot></i><span data-health="worker">worker…</span></span>
+        <span class="flag {{ 'on' if public else 'off' }}">Sign-up {{ 'open to everyone' if public else 'by invite only' }}</span>
+        <span class="flag {{ 'on' if health.month_usd < health.cap_usd else 'off' }}">AI budget {{ 'within cap' if health.month_usd < health.cap_usd else 'at cap' }}</span>
+      </div>
+    </div>
+  </header>
 
-<section class="card">
-  <h2>People</h2>
-  <table>
-    <tr><th>Name</th><th>Role</th><th>Videos</th><th>API $</th><th></th></tr>
-    {% for u in users %}
-    <tr class="{{ 'off' if u.disabled }}">
-      <td>{{ u.name }}</td><td>{{ u.role }}</td><td>{{ u.projects }}{% if u.role != 'owner' %} / {{ u.videos_allowed if u.videos_allowed is not none else default_videos }}{% endif %}</td>
-      <td>{{ '%.2f'|format(u.usd) }}</td>
-      <td>{% if u.role != 'owner' %}
-        <form method="post" action="/admin/user" class="row">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="uid" value="{{ u.id }}">
-          <input type="number" name="videos" min="0" max="50" value="{{ u.videos_allowed if u.videos_allowed is not none else default_videos }}" class="num">
-          <button class="link" name="action" value="videos" type="submit">Set</button>
-          {% if u.disabled %}<button class="link" name="action" value="enable" type="submit">Enable</button>
-          {% else %}<button class="link danger-text" name="action" value="disable" type="submit">Disable</button>{% endif %}
-        </form>{% endif %}</td>
-    </tr>
-    {% endfor %}
-  </table>
-</section>
+  <div class="filters" role="group" aria-label="Range">
+    <span>Showing</span>
+    <div class="seg">
+      <button type="button" data-range="7" aria-pressed="false">7 days</button>
+      <button type="button" data-range="30" aria-pressed="true">30 days</button>
+      <button type="button" data-range="90" aria-pressed="false">90 days</button>
+    </div>
+  </div>
 
-<section class="card">
-  <div class="row between"><h2>Alerts</h2>
-    <form method="post" action="/admin/alerts"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link" type="submit">Mark all seen</button></form></div>
-  {% if not alerts %}<p class="muted">None.</p>{% endif %}
-  <ul class="files">{% for a in alerts %}<li class="{{ 'off' if a.seen }}"><span><b class="lvl-{{ a.level }}">{{ a.kind }}</b> {{ a.message }}</span><span class="muted small">{{ a.at|ago }}</span></li>{% endfor %}</ul>
-</section>
+  <!-- KPI row: one hero, then tiles -->
+  <div class="kpis">
+    <div class="kpi hero">
+      <span class="k">Films finished, <span data-period>last 30 days</span></span>
+      <b data-kpi="films">–</b>
+      <span class="kpi-delta" data-delta="films"></span>
+      <div class="spark" data-spark="films"></div>
+    </div>
+    <div class="kpi"><span class="k">Visitors</span><b data-kpi="visitors">–</b><span class="kpi-delta" data-delta="visitors"></span><div class="spark" data-spark="visitors"></div></div>
+    <div class="kpi"><span class="k">New accounts</span><b data-kpi="signups">–</b><span class="kpi-delta" data-delta="signups"></span><div class="spark" data-spark="signups"></div></div>
+    <div class="kpi"><span class="k">Active creators</span><b data-kpi="active">–</b><small>people who ran a film step</small></div>
+    <div class="kpi"><span class="k">Average rating</span><b><span data-kpi="rating">–</span><small> /10</small></b><small data-kpi="rating-n"></small></div>
+    <div class="kpi"><span class="k">Steps that finished</span><b data-kpi="success">–</b><small data-kpi="success-n"></small></div>
+    <div class="kpi"><span class="k">AI spend</span><b data-kpi="spend">–</b><span class="kpi-delta" data-delta="spend"></span>
+      <small>This month: <span data-health="cap">–</span></small><div class="meter-track"><i data-health-meter></i></div></div>
+  </div>
 
-<section class="card">
-  <h2>Jobs</h2>
-  <table>
-    <tr><th>#</th><th>Kind</th><th>Who / video</th><th>Status</th><th>When</th><th></th></tr>
-    {% for j in jobs %}
-    <tr>
-      <td>{{ j.id }}</td><td>{{ j.kind }}</td>
-      <td>{{ j.name or '-' }} · {% if j.project_id %}<a href="/admin/events/{{ j.project_id }}">{{ j.title or j.project_id }}</a>{% endif %}</td>
-      <td class="lvl-{{ 'fail' if j.status == 'failed' else 'ok' }}">{{ j.status }}{% if j.status == 'running' %} {{ (j.progress * 100)|int }}%{% endif %}
-        {% if j.error %}<div class="muted small">{{ j.error[:160] }}</div>{% endif %}</td>
-      <td class="small">{{ j.created|ago }}</td>
-      <td>{% if j.status in ('failed', 'waiting') %}
-        <form method="post" action="/admin/job" class="row"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job" value="{{ j.id }}">
-          <button class="link" name="action" value="retry" type="submit">Retry</button>
-          {% if j.status == 'waiting' %}<button class="link" name="action" value="cancel" type="submit">Cancel</button>{% endif %}</form>
-      {% elif j.status == 'queued' %}
-        <form method="post" action="/admin/job"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job" value="{{ j.id }}">
-          <button class="link" name="action" value="cancel" type="submit">Cancel</button></form>{% endif %}</td>
-    </tr>
-    {% endfor %}
-  </table>
-</section>
+  <div class="grid-3">
+    {{ card('visitors', 'Visitors per day', 'Counted without cookies; the same person counts once a day.') }}
+    {{ card('signups', 'New accounts per day', 'People who finished signing up.') }}
+    {{ card('films', 'Films finished per day', 'First finished version of each film.') }}
+  </div>
 
-<section class="card">
-  <h2>AI cost by step</h2>
-  <table>
-    <tr><th>Step</th><th>Model</th><th>Brain</th><th>Calls</th><th>Tokens in / out</th><th>$</th><th>Avg s</th></tr>
-    {% for r in spend %}<tr><td>{{ r.task }}</td><td>{{ r.model }}</td><td>{{ r.backend }}</td><td>{{ r.n }}</td>
-      <td>{{ r.tin }} / {{ r.tout }}</td><td>{{ '%.3f'|format(r.usd or 0) }}</td><td>{{ (r.s or 0)|int }}</td></tr>{% endfor %}
-  </table>
-</section>
+  <div class="grid-2">
+    <section class="viz-card">
+      <div class="viz-head">
+        <div><h3>From visit to second film</h3><p>Accounts made in this range, and how far each got.</p></div>
+        <button type="button" class="viz-toggle" data-table-toggle aria-pressed="false">Table</button>
+      </div>
+      <p class="funnel-head" id="funnel-head"></p>
+      <div class="viz-plot" id="c-funnel"></div>
+      <div class="viz-tablebox" id="t-funnel"></div>
+    </section>
+    {{ card('spend', 'AI spend per day, by step', 'Billed API spend; your own plan is not included.', legend=True) }}
+  </div>
+
+  <div class="grid-2">
+    {{ card('outcomes', 'Steps finished vs failed', 'Each job type: ✓ finished, ✕ failed, and the success rate.') }}
+    <section class="viz-card">
+      <div class="viz-head">
+        <div><h3>Ratings</h3><p>How much people like their films (1-10), and what they flagged.</p></div>
+        <button type="button" class="viz-toggle" data-table-toggle aria-pressed="false">Table</button>
+      </div>
+      <div class="viz-plot" id="c-ratings"></div>
+      <div class="viz-tablebox" id="t-ratings"></div>
+      <div id="c-tags"></div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    {{ card('cohorts', 'Do people come back?', 'Share of each week\'s new accounts active in the weeks after.', cls='span-2') }}
+  </div>
+
+  <div class="grid-2">
+    <section class="viz-card"><div class="viz-head"><div><h3>Where visitors come from</h3><p>Referring site or utm_source.</p></div></div><div class="viz-plot" id="c-referrers"></div></section>
+    <section class="viz-card"><div class="viz-head"><div><h3>Most visited pages</h3><p>Private pages are grouped, never named.</p></div></div><div class="viz-plot" id="c-pages"></div></section>
+    <section class="viz-card"><div class="viz-head"><div><h3>Devices</h3><p>From the browser's own description.</p></div></div><div class="viz-plot" id="c-devices"></div></section>
+    <section class="viz-card"><div class="viz-head"><div><h3>Browsers</h3><p>Where to test first.</p></div></div><div class="viz-plot" id="c-browsers"></div></section>
+  </div>
+
+  <div class="grid-2">
+    <section class="viz-card">
+      <div class="viz-head"><div><h3>Right now</h3><p><span data-health="queue">–</span> · failed in 24 h: <span data-health="failed">–</span> · <span data-health="disk">–</span></p></div></div>
+      <div id="live" class="mini-list"></div>
+    </section>
+    <section class="viz-card">
+      <div class="viz-head"><div><h3>Alerts</h3><p>What the watcher noticed.</p></div>
+        <form method="post" action="/admin/alerts"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="viz-toggle" type="submit">Mark all seen</button></form></div>
+      <div class="mini-list">
+        {% for a in alerts[:12] %}<div><span class="lvl {{ a.level }}">{{ a.kind }}</span><span class="what">{{ a.message }}</span><span class="when">{{ a.at|ago }}</span></div>{% endfor %}
+        {% if not alerts %}<p class="viz-empty">No alerts.</p>{% endif %}
+      </div>
+    </section>
+  </div>
+
+  <section class="panel gap-top">
+    <h2>People</h2>
+    <p class="lead-s">{{ users|length }} account{{ '' if users|length == 1 else 's' }} · {{ consents.yes or 0 }} of {{ consents.n or 0 }} opted in to product emails.</p>
+    <div class="people-tools">
+      <input id="people-search" type="search" placeholder="Search by name or email" aria-label="Search people">
+      <button type="button" class="btn" id="people-more" hidden>Show all</button>
+    </div>
+    <div class="scroll-x">
+      <table class="people people-list">
+        <thead><tr><th>Person</th><th>Joined</th><th>Signs in with</th><th>Films</th><th>Allowance</th><th>Last seen</th><th>AI $</th><th></th></tr></thead>
+        <tbody>
+        {% for u in users %}
+        <tr class="{{ 'off' if u.disabled }}">
+          <td><b>{{ u.display or u.name }}</b>{% if u.role == 'owner' %} · owner{% endif %}<br><span class="muted">{{ u.email or 'no email' }}</span></td>
+          <td>{{ u.created|ago }}<br><span class="muted">{{ u.joined_by or 'invite' }}</span></td>
+          <td><span class="ways">{% if u.google_sub %}<i>Google</i>{% endif %}{% if u.email %}<i>Code</i>{% endif %}{% if u.keys %}<i>Passkey</i>{% endif %}{% if u.pw %}<i>Password</i>{% endif %}</span></td>
+          <td>{{ u.films }} <span class="muted">/ {{ u.projects }} started</span></td>
+          <td>{% if u.role != 'owner' %}
+            <form method="post" action="/admin/user">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="uid" value="{{ u.id }}">
+              <input type="number" class="num" name="videos" min="0" max="50" value="{{ u.videos_allowed if u.videos_allowed is not none else default_videos }}">
+              <button class="link" name="action" value="videos" type="submit">Set</button>
+            </form>{% else %}unlimited{% endif %}</td>
+          <td>{{ u.last_seen|ago if u.last_seen else '–' }}</td>
+          <td>{{ '%.2f'|format(u.usd) }}</td>
+          <td>{% if u.role != 'owner' %}
+            <form method="post" action="/admin/user"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="uid" value="{{ u.id }}">
+              {% if u.disabled %}<button class="link" name="action" value="enable" type="submit">Switch on</button>
+              {% else %}<button class="link" name="action" value="disable" type="submit">Switch off</button>{% endif %}</form>{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="panel">
+      <h2>Invite someone</h2>
+      <p class="lead-s">A one-time link, valid 7 days. It works even while sign-up is closed.</p>
+      {% if new_link %}<div class="doc-summary"><b>Send this link (shown once)</b><p><code class="copy" id="invite-link" data-path="{{ new_link }}">{{ new_link }}</code></p></div>{% endif %}
+      <form method="post" action="/admin/invite" class="row-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label class="field"><span>Their first name</span><input name="label" maxlength="60" placeholder="Shown on their welcome page"></label>
+        <button class="btn" type="submit">Make link</button>
+      </form>
+      {% if invites %}<p class="help">{{ invites|length }} open invite{{ '' if invites|length == 1 else 's' }}.</p>{% endif %}
+    </section>
+    <section class="panel">
+      <h2>Security log</h2>
+      <p class="lead-s">Sign-ins, sign-ups, exports and deletions. Kept 180 days.</p>
+      <div class="mini-list">
+        {% for a in audit[:12] %}<div><span class="lvl">{{ a.action }}</span><span class="what">{{ a.who or '–' }}{% if a.detail %} · {{ a.detail }}{% endif %}</span><span class="when">{{ a.at|ago }}</span></div>{% endfor %}
+        {% if not audit %}<p class="viz-empty">Nothing yet.</p>{% endif %}
+      </div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="panel">
+      <h2>AI cost by step</h2>
+      <div class="scroll-x"><table class="people">
+        <thead><tr><th>Step</th><th>Model</th><th>Calls</th><th>Tokens in / out</th><th>$</th><th>Avg s</th></tr></thead>
+        <tbody>{% for r in spend %}<tr><td>{{ r.task }}</td><td>{{ r.model }}</td><td>{{ r.n }}</td><td>{{ r.tin }} / {{ r.tout }}</td><td>{{ '%.3f'|format(r.usd or 0) }}</td><td>{{ (r.s or 0)|int }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </section>
+    <section class="panel">
+      <h2>Recent jobs</h2>
+      <div class="mini-list">
+        {% for j in jobs[:14] %}<div><span class="lvl {{ 'error' if j.status == 'failed' else '' }}">{{ j.status }}</span>
+          <span class="what">#{{ j.id }} {{ j.kind }} · {{ j.name or '–' }}{% if j.project_id %} · <a href="/admin/events/{{ j.project_id }}">log</a>{% endif %}{% if j.error %}<br><span class="muted">{{ j.error[:140] }}</span>{% endif %}</span>
+          <span class="when">{{ j.created|ago }}
+          {% if j.status in ('failed', 'waiting', 'queued') %}
+            <form method="post" action="/admin/job" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job" value="{{ j.id }}">
+              {% if j.status in ('failed', 'waiting') %}<button class="link" name="action" value="retry" type="submit">Retry</button>{% endif %}
+              {% if j.status in ('waiting', 'queued') %}<button class="link" name="action" value="cancel" type="submit">Cancel</button>{% endif %}</form>
+          {% endif %}</span></div>{% endfor %}
+      </div>
+    </section>
+  </div>
+
+  <div class="privacy-note gap-top">
+    <span aria-hidden="true">🔒</span>
+    <p><b>What this page doesn't show.</b> People's footage, films, titles, requests and written feedback stay private to them: this
+      dashboard works from counts and settings. A failed job's technical log can quote short fragments (an animation
+      topic, a style summary) so problems can be fixed; open those only to fix something. Visits are counted without
+      cookies, and no IP address is stored.</p>
+  </div>
+</div>
 {% endblock %}

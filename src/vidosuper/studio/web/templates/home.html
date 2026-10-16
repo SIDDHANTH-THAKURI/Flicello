@@ -1,27 +1,49 @@
-{% extends "base.html" %}
+{% extends "shell.html" %}
+{% set active = 'films' %}
+{% block title %}Your films · {{ app_name }}{% endblock %}
 {% block content %}
-<div class="row between">
-  <h1>My videos</h1>
-  {% if left is none or left > 0 %}<a class="btn primary" href="/new">+ New video</a>{% endif %}
-</div>
-{% if left is not none %}<p class="muted small">{{ left }} video{{ '' if left == 1 else 's' }} left in this trial.</p>{% endif %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow-s rise">Your films</p>
+    <h1 class="page-title rise d1">{% if projects %}Hi {{ user.display or user.name }}. <em class="sun-text">What's next?</em>{% else %}Let's make your <em class="sun-text">first film.</em>{% endif %}</h1>
+  </div>
+  {% if left is not none %}
+  <div class="allowance rise d2" title="Films left during early access">
+    <i>{% for n in range(allowed) %}<span class="{{ 'on' if n < left else '' }}"></span>{% endfor %}</i>
+    {{ left }} film{{ '' if left == 1 else 's' }} left in early access
+  </div>
+  {% endif %}
+</header>
+
 {% if not projects %}
-<section class="card center empty">
-  <p class="big">Make your first video.</p>
-  <p class="muted">Clips from your phone or camera and a song you love: that's all it needs.</p>
-  {% if left is none or left > 0 %}<a class="btn primary" href="/new">Start</a>{% endif %}
+<section class="empty-hero rise d2">
+  <div>
+    <h2>Clips from your phone. A song you love. <em class="sun-text">That's all.</em></h2>
+    <p>Flicello watches every clip, pitches you three stories, and cuts the one you pick on the beat. Most films are ready in minutes.</p>
+    {% if left is none or left > 0 %}<a class="btn-sun big" href="/new"><span>Start a film</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>{% endif %}
+  </div>
+  <div class="empty-reel" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
 </section>
 {% else %}
-<div class="grid">
+<div class="films">
+  {% if left is none or left > 0 %}
+  <a class="film film-new rise d1" href="/new">
+    <span class="plus" aria-hidden="true">+</span>
+    <b>New film</b>
+    <small class="muted">Clips, a song, a story</small>
+  </a>
+  {% endif %}
   {% for p in projects %}
-  <a class="tile" href="/p/{{ p.id }}">
-    <div class="thumb {{ 'tall' if p.shapes == '9:16' else '' }}">
-      {% if thumbs[p.id] %}<img src="/m/{{ p.id }}/stills/{{ thumbs[p.id] }}" alt="" loading="lazy">{% endif %}
+  {% set busy = p.stage in BUSY %}
+  <a class="film rise d{{ loop.index0 % 4 + 1 }}" href="/p/{{ p.id }}">
+    <span class="badge {{ 'busy' if busy else p.stage }}">{{ STAGES.get(p.stage, p.stage) }}</span>
+    <div class="film-thumb">
+      {% if thumbs[p.id] %}<img src="/m/{{ p.id }}/stills/{{ thumbs[p.id] }}" alt="" loading="lazy">
+      {% else %}<div class="film-empty-thumb"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="8" y="6" width="32" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 18l10 6-10 6z" fill="currentColor"/></svg></div>{% endif %}
     </div>
-    <div class="tile-body">
+    <div class="film-body">
       <b>{{ p.title }}</b>
-      <span class="pill {{ 'busy' if p.stage in BUSY else p.stage }}">{{ STAGES.get(p.stage, p.stage) }}</span>
-      <span class="muted small">{{ p.shapes|shapes }} · {{ p.length|int }} s · {{ p.updated|ago }}</span>
+      <small>{% if p.kind == 'talk' %}Talking video{% elif p.kind == 'voice' %}Voice to animation{% else %}{{ p.shapes|shapes }} · {{ p.length|int }} s{% endif %} · {{ p.updated|ago }}</small>
     </div>
   </a>
   {% endfor %}

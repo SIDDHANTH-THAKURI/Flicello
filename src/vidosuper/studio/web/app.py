@@ -24,10 +24,11 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .. import accounts
+from .. import accounts, analytics
 from ..brain.context import read_note
 from ..profiles import QUESTIONS
 from ..service import BUSY, FEEDBACK_TAGS, LENGTHS, STAGES, ActionError, Studio
@@ -49,6 +50,47 @@ def eta_text(seconds) -> str:
     return f"about {round(s / 60)} min"
 
 
+DIST = HERE / "static" / "dist"
+PUBLIC_PAGES = {"/", "/tour", "/signin", "/legal"}  # the public face: always readable by search and Google's brand check
+
+
+def indexable(request: Request, public_signup: bool) -> bool:
+    """Only signed-out views of the public face (and /signup while anyone can join) may be indexed."""
+    if getattr(request.state, "uid", None):
+        return False
+    path = request.url.path
+    return path in PUBLIC_PAGES or path.startswith("/legal/") or (path == "/signup" and public_signup)
+_MANIFEST: dict = {"mtime": None, "data": {}}
+
+
+def _manifest() -> dict:
+    """Vite's build manifest (frontend/ -> static/dist), re-read when a new build lands."""
+    path = DIST / "manifest.json"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {}
+    if _MANIFEST["mtime"] != mtime:
+        _MANIFEST.update(mtime=mtime, data=json.loads(path.read_text(encoding="utf-8")))
+    return _MANIFEST["data"]
+
+
+def vite_tags(name: str) -> Markup:
+    """<link>/<script> tags for a front-end entry (frontend/src/<name>/main.js): its CSS, the CSS of the chunks
+    it imports, and the module itself. External files only, so the strict CSP holds."""
+    m = _manifest()
+    entry = m.get(f"src/{name}/main.js")
+    if not entry:
+        return Markup(f"<!-- front end '{escape(name)}' not built: cd frontend && npm run build -->")
+    css: list[str] = []
+    for imp in entry.get("imports", []):  # shared chunks first: the entry's own rules must come last to win
+        css += [c for c in m.get(imp, {}).get("css", []) if c not in css]
+    css += [c for c in entry.get("css", []) if c not in css]
+    tags = [f'<link rel="stylesheet" href="/static/dist/{escape(c)}">' for c in css]
+    tags.append(f'<script type="module" src="/static/dist/{escape(entry["file"])}"></script>')
+    return Markup("\n  ".join(tags))
+
+
 MOMENT_ID = re.compile(r"\(?\b[cC]\d{2,3}#\d+\b\)?:?\s*")  # catalog ids like c04#1 mean nothing to people
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; "
        "style-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
@@ -65,7 +107,8 @@ def create_app(studio: Studio) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     templates.env.globals.update(STAGES=STAGES, BUSY=BUSY, QUESTIONS=QUESTIONS, TAGS=FEEDBACK_TAGS, LENGTHS=LENGTHS,
-                                 app_name=s.name)
+                                 app_name=s.name, vite=vite_tags,
+                                 is_public=lambda request: indexable(request, s.public_signup))
     templates.env.filters["fromjson"] = json.loads
     templates.env.filters["ago"] = _ago
     templates.env.filters["mmss"] = lambda x: f"{int(x or 0) // 60}:{int(x or 0) % 60:02d}"
@@ -73,19 +116,34 @@ def create_app(studio: Studio) -> FastAPI:
     templates.env.filters["eta"] = eta_text
     templates.env.filters["noids"] = lambda t: MOMENT_ID.sub("", str(t or "")).strip()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+    analytics.ensure(studio.db)
 
     # ------------------------------------------------------------------ plumbing
     @app.middleware("http")
     async def headers(request: Request, call_next):
         response = await call_next(request)
+        if request.method == "GET" and response.status_code == 200 and \
+                "text/html" in response.headers.get("content-type", ""):
+            try:  # cookieless page-view count (see analytics.py); never in the way of the page
+                analytics.record(studio.db, path=request.url.path, ip=client_ip(request),
+                                 ua=request.headers.get("user-agent", ""), ref=request.headers.get("referer"),
+                                 host=request.url.hostname or "", utm=request.query_params.get("utm_source"),
+                                 user_id=getattr(request.state, "uid", None))
+            except Exception:  # noqa: BLE001
+                pass
+        renewed = getattr(request.state, "renew", None)
+        if renewed and COOKIE not in response.headers.get("set-cookie", ""):
+            response.set_cookie(COOKIE, renewed, max_age=s.session_days * 86400, httponly=True, samesite="lax",
+                                secure=s.https, path="/")
         response.headers["Content-Security-Policy"] = CSP
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Referrer-Policy"] = "same-origin"  # no referrer to other sites; our own forms keep their Origin
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
-        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"  # private: keep out of search engines
+        public = indexable(request, s.public_signup)
+        response.headers["X-Robots-Tag"] = "index, follow" if public else "noindex, nofollow, noarchive"
         if s.https:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         if request.url.path.startswith(("/m/", "/api/")) or "text/html" in response.headers.get("content-type", ""):
@@ -113,11 +171,21 @@ def create_app(studio: Studio) -> FastAPI:
         return templates.TemplateResponse(request, "error.html", {"message": "Something went wrong on our side.",
                                                                   "user": None}, status_code=500)
 
-    def client_ip(request: Request) -> str:
-        """The caller's address. Only our own proxy (tailscale serve/funnel) connects from loopback, so only then is
-        its X-Forwarded-For believed (its last entry: the one the proxy itself added)."""
-        peer = request.client.host if request.client else "?"
+    proxy_net = ipaddress.ip_network(s.proxy_net) if s.proxy_net else None
+
+    def ours(peer: str) -> bool:
         if peer in ("127.0.0.1", "::1"):
+            return True
+        try:
+            return proxy_net is not None and ipaddress.ip_address(peer) in proxy_net
+        except ValueError:
+            return False
+
+    def client_ip(request: Request) -> str:
+        """The caller's address. Only our own proxy (tailscale serve/funnel on loopback, or Caddy on the server's
+        proxy network) is believed about X-Forwarded-For (its last entry: the one the proxy itself added)."""
+        peer = request.client.host if request.client else "?"
+        if ours(peer):
             forwarded = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()
             try:
                 return str(ipaddress.ip_address(forwarded))
@@ -126,14 +194,23 @@ def create_app(studio: Studio) -> FastAPI:
         return peer
 
     def current(request: Request) -> tuple[dict, dict] | None:
-        return accounts.session_user(studio.db, request.cookies.get(COOKIE))
+        token = request.cookies.get(COOKIE)
+        found = accounts.session_user(studio.db, token)
+        if found:
+            request.state.uid = found[0]["id"]
+        if found and accounts.renew(studio.db, s, found[1]):
+            request.state.renew = token  # the middleware sends the cookie again with a fresh lifetime
+        return found
 
     def need_user(request: Request, api: bool = False) -> tuple[dict, dict]:
         found = current(request)
         if found is None:
             if api:
                 raise HTTPException(401, "Please sign in again.")
-            raise Redirect("/login")
+            from urllib.parse import quote
+
+            path = request.url.path if request.method == "GET" else "/"
+            raise Redirect("/signin" + (f"?next={quote(path)}" if path not in ("/", "") else ""))
         return found
 
     def need_owner(request: Request) -> tuple[dict, dict]:
@@ -158,7 +235,9 @@ def create_app(studio: Studio) -> FastAPI:
         return RedirectResponse(url + (f"?msg={quote(msg)}" if msg else ""), status_code=303)
 
     def set_cookie(resp: Response, token: str) -> None:
-        resp.set_cookie(COOKIE, token, max_age=s.session_days * 86400, httponly=True, samesite="strict",
+        # Lax, not Strict: someone opening a Flicello link from email or a chat app arrives signed in. Every state
+        # change still needs the session's CSRF token, and anonymous forms are checked for our own origin.
+        resp.set_cookie(COOKIE, token, max_age=s.session_days * 86400, httponly=True, samesite="lax",
                         secure=s.https, path="/")
 
     def remember_device(request: Request, resp: Response, user_id: str) -> None:
@@ -166,11 +245,24 @@ def create_app(studio: Studio) -> FastAPI:
         if accounts._known_device(studio.db, request.cookies.get(DEVICE), user_id):
             return
         resp.set_cookie(DEVICE, accounts.new_device(studio.db, user_id), max_age=365 * 86400, httponly=True,
-                        samesite="strict", secure=s.https, path="/")
+                        samesite="lax", secure=s.https, path="/")
+
+    from types import SimpleNamespace
+
+    from . import authweb, legalweb
+
+    helpers = SimpleNamespace(page=page, back=back, current=current, need_user=need_user, check_csrf=check_csrf,
+                              client_ip=client_ip, set_cookie=set_cookie, remember_device=remember_device,
+                              templates=templates)
+    authweb.mount(app, studio, helpers)
+    legalweb.mount(app, studio, helpers)
 
     @app.get("/robots.txt", response_class=PlainTextResponse)
     def robots():
-        return "User-agent: *\nDisallow: /\n"
+        private = ["/p/", "/m/", "/api/", "/admin", "/account", "/style", "/new", "/welcome", "/join", "/auth/"]
+        if not s.public_signup:
+            private.append("/signup")
+        return "User-agent: *\n" + "".join(f"Disallow: {x}\n" for x in private) + "Allow: /\n"
 
     # ------------------------------------------------------------------ health (no login, no details)
     @app.get("/healthz")
@@ -184,6 +276,8 @@ def create_app(studio: Studio) -> FastAPI:
     def login_page(request: Request):
         if current(request):
             return back("/")
+        if request.query_params.get("legacy") != "1":
+            return back("/signin")
         return page(request, "login.html", None, None)
 
     @app.post("/login")
@@ -203,16 +297,9 @@ def create_app(studio: Studio) -> FastAPI:
         if found:
             check_csrf(found[1], csrf)
             accounts.end_session(studio.db, request.cookies.get(COOKIE))
-        resp = back("/login")
+        resp = back("/")
         resp.delete_cookie(COOKIE, path="/")
         return resp
-
-    @app.get("/join/{token}", response_class=HTMLResponse)
-    def join_page(request: Request, token: str):
-        invite = accounts.open_invite(studio.db, token)
-        if invite is None:
-            raise HTTPException(404, "This invite link has expired or was already used. Ask for a new one.")
-        return page(request, "join.html", None, None, invite=invite, token=token, limits=s.limits)
 
     @app.post("/join/{token}")
     def join_post(request: Request, token: str, name: str = Form(""), password: str = Form(""),
@@ -231,8 +318,8 @@ def create_app(studio: Studio) -> FastAPI:
             except accounts.AccountError as exc:
                 error = str(exc)
         if error:
-            return page(request, "join.html", None, None, invite=invite, token=token, limits=s.limits, error=error,
-                        typed=name[:40])
+            return page(request, "invite.html", None, None, invite=invite, token=token, limits=s.limits, error=error,
+                        typed=name[:40], legacy_open=True, google=False, email_ok=False, next="/welcome")
         resp = back("/welcome")
         set_cookie(resp, accounts.new_session(studio.db, s, user["id"], client_ip(request)))
         remember_device(request, resp, user["id"])
@@ -257,8 +344,18 @@ def create_app(studio: Studio) -> FastAPI:
         return back("/", "Thanks! Your style is saved; you can change it any time.")
 
     # ------------------------------------------------------------------ home and projects
+    def landing(request: Request) -> HTMLResponse:
+        site = f"{request.url.scheme}://{request.url.netloc}"
+        return templates.TemplateResponse(request, "landing.html", {"site_url": site, "year": time.gmtime().tm_year})
+
+    @app.get("/tour", response_class=HTMLResponse)
+    def tour(request: Request):
+        return landing(request)
+
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request):
+        if current(request) is None:
+            return landing(request)
         user, sess = need_user(request)
         if not user["onboarded"] and not studio.is_owner(user):
             raise Redirect("/welcome")
@@ -269,7 +366,8 @@ def create_app(studio: Studio) -> FastAPI:
                                   (p["id"], p["chosen"] or 0))
             names = json.loads(still["stills"]) if still else []
             thumbs[p["id"]] = names[0] if names else None
-        return page(request, "home.html", user, sess, projects=projects, thumbs=thumbs, left=studio.videos_left(user))
+        return page(request, "home.html", user, sess, projects=projects, thumbs=thumbs, left=studio.videos_left(user),
+                    allowed=user["videos_allowed"] or s.limits.videos_per_user)
 
     @app.get("/new", response_class=HTMLResponse)
     def new_page(request: Request):
@@ -528,12 +626,12 @@ def create_app(studio: Studio) -> FastAPI:
         user, sess = need_user(request)
         check_csrf(sess, csrf)
         if new != new2:
-            return back("/style", "The two new passwords are different.")
+            return back("/account", "The two new passwords are different.")
         try:
             accounts.change_password(studio.db, user["id"], old, new)
         except accounts.AccountError as exc:
-            return back("/style", str(exc))
-        resp = back("/login", "Password changed. Sign in again.")
+            return back("/account", str(exc))
+        resp = back("/login?legacy=1", "Password changed. Sign in again.")
         resp.delete_cookie(COOKIE, path="/")
         return resp
 
@@ -557,17 +655,35 @@ def create_app(studio: Studio) -> FastAPI:
 
     def admin_page(request: Request, user: dict, sess: dict, new_link: str = "") -> HTMLResponse:
         db = studio.db
-        users = db.all("SELECT u.*, (SELECT COUNT(*) FROM projects p WHERE p.user_id=u.id) AS projects, "
+        users = db.all("SELECT u.*, (SELECT COUNT(*) FROM projects p WHERE p.user_id=u.id AND p.deleted=0) AS projects, "
+                       "(SELECT COUNT(DISTINCT r.project_id) FROM renders r JOIN projects p ON p.id=r.project_id "
+                       " WHERE p.user_id=u.id AND r.kind='final') AS films, "
+                       "(SELECT COUNT(*) FROM passkeys k WHERE k.user_id=u.id) AS keys, "
                        "(SELECT COALESCE(SUM(usd),0) FROM spend sp WHERE sp.user_id=u.id AND sp.billed=1) AS usd "
-                       "FROM users u ORDER BY created")
+                       "FROM users u ORDER BY created DESC")
         jobs = db.all("SELECT j.*, p.title, u.name FROM jobs j LEFT JOIN projects p ON p.id=j.project_id "
                       "LEFT JOIN users u ON u.id=j.user_id ORDER BY j.id DESC LIMIT 40")
         alerts = db.all("SELECT * FROM alerts ORDER BY id DESC LIMIT 30")
         invites = db.all("SELECT * FROM invites WHERE used_by IS NULL AND expires > ? ORDER BY created DESC", (time.time(),))
         spend = db.all("SELECT task, model, backend, COUNT(*) AS n, SUM(usd) AS usd, SUM(tin) AS tin, SUM(tout) AS tout, "
                        "AVG(seconds) AS s FROM spend GROUP BY task, model, backend ORDER BY usd DESC")
+        audit = db.all("SELECT a.at, a.action, a.detail, COALESCE(u.display, u.name) AS who FROM audit a "
+                       "LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT 40")
+        consents = db.one("SELECT SUM(marketing) AS yes, COUNT(*) AS n FROM users WHERE role != 'owner'") or {}
         return page(request, "admin.html", user, sess, health=studio.health(), users=users, jobs=jobs, alerts=alerts,
-                    invites=invites, spend=spend, new_link=new_link, default_videos=s.limits.videos_per_user)
+                    invites=invites, spend=spend, new_link=new_link, default_videos=s.limits.videos_per_user,
+                    audit=audit, consents=consents, active="admin", public=s.public_signup)
+
+    @app.get("/admin/api/metrics")
+    def admin_metrics(request: Request, days: int = 30):
+        need_owner(request)
+        days = max(7, min(180, days))
+        return JSONResponse(analytics.metrics(studio.db, days), headers={"Cache-Control": "no-store"})
+
+    @app.get("/admin/api/live")
+    def admin_live(request: Request):
+        need_owner(request)
+        return JSONResponse({**analytics.live(studio.db), "health": studio.health()}, headers={"Cache-Control": "no-store"})
 
     @app.post("/admin/invite")
     def admin_invite(request: Request, csrf: str = Form(""), label: str = Form("")):

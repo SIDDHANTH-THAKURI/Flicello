@@ -1,0 +1,9 @@
+# HTTPS for Flicello. Caddy gets the certificates from Let's Encrypt once DNS points here.
+flicello.com {
+	encode zstd gzip
+	reverse_proxy studio:8765
+}
+
+www.flicello.com {
+	redir https://flicello.com{uri} permanent
+}

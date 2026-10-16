@@ -31,3 +31,7 @@ Thumbs.db
 # Studio secrets (API key, alert topic)
 .env.*
 !.env.example
+
+# front end: installs stay local; the landing page's own footage is part of the site
+frontend/node_modules/
+!src/vidosuper/studio/web/static/media/*.mp4

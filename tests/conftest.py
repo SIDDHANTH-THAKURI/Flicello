@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -31,6 +33,26 @@ def ingested(media, cfg):
     signals = measure_project(project, cfg)
     by_name = {Path(c.rel_path).stem: c for c in clips}
     return project, by_name, signals
+
+
+CREDENTIAL = re.compile(r"(API_KEY|_SECRET|_TOKEN|CLIENT_ID)$")
+
+
+@pytest.fixture(autouse=True)
+def no_real_credentials(monkeypatch):
+    """No test reaches a real service with the developer's own keys. The code under test loads the repo's .env with
+    setdefault(), so every credential named there or in the environment is blanked (blank means "not set"
+    everywhere); a test that needs one sets a fake."""
+    from vidosuper.config import REPO_ROOT
+
+    names = set(os.environ)
+    env = REPO_ROOT / ".env"
+    if env.exists():
+        names |= {line.split("=", 1)[0].strip() for line in env.read_text(encoding="utf-8").splitlines()
+                  if "=" in line and not line.lstrip().startswith("#")}
+    for name in names:
+        if CREDENTIAL.search(name):
+            monkeypatch.setenv(name, "")
 
 
 @pytest.fixture(autouse=True)

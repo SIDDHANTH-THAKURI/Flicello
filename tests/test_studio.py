@@ -232,7 +232,7 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     assert r.status_code == 303 and "vs_session" in r.headers["set-cookie"]
     home = client.get("/", follow_redirects=True)
     csrf = _csrf(home.text)
-    assert "Three quick questions" in home.text  # friends answer the style questions first
+    assert "Three questions" in home.text  # friends answer the style questions first
     client.post("/welcome", data={"csrf": csrf, "pace": "fast", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Beach", "shapes": "both", "length": 15, "intent": "fun"},
                     follow_redirects=False)
@@ -399,11 +399,11 @@ def test_a_spray_of_guesses_from_one_address_is_stopped_and_known_browsers_still
     assert found["id"] == user["id"]
 
 
-def test_public_pages_are_kept_out_of_search_and_carry_security_headers(studio):
+def test_private_pages_are_kept_out_of_search_and_every_page_carries_security_headers(studio):
     client = TestClient(create_app(studio))
     r = client.get("/robots.txt")
-    assert r.status_code == 200 and "Disallow: /" in r.text
-    r = client.get("/login")
+    assert r.status_code == 200 and "Disallow: /admin\n" in r.text and "Disallow: /p/\n" in r.text
+    r = client.get("/login?legacy=1")  # the owner's password fallback: never in search
     assert "noindex" in r.headers["x-robots-tag"] and "noindex" in r.text and "Flicello" in r.text
     assert r.headers["x-frame-options"] == "DENY" and "default-src 'self'" in r.headers["content-security-policy"]
     assert client.get("/static/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
@@ -420,6 +420,50 @@ def test_the_proxys_forwarded_address_is_only_believed_from_loopback(studio):
         client.post("/login", data={"name": "ghost", "password": "x"}, headers={"X-Forwarded-For": "8.8.4.4"})
     r = client.post("/login", data={"name": "ghost2", "password": "x"}, headers={"X-Forwarded-For": "1.2.3.4"})
     assert "Too many" in r.text  # limited by the real peer address, whatever the header says
+
+
+def test_visitors_get_the_landing_page_and_people_signed_in_get_their_videos(studio, monkeypatch):
+    from vidosuper.studio.web import app as web
+
+    monkeypatch.setattr(web, "_manifest", lambda: {"src/landing/main.js": {"file": "assets/landing-x.js",
+                                                                          "css": ["assets/landing-x.css"]}})
+    client = TestClient(create_app(studio))
+    r = client.get("/")
+    assert r.status_code == 200 and "camera roll" in r.text
+    assert '<script type="module" src="/static/dist/assets/landing-x.js">' in r.text  # external only: CSP holds
+    assert "/static/dist/assets/landing-x.css" in r.text and "<script>" not in r.text
+    # Google's brand check reads the home page: what Flicello is, what Google sign-in is for, no intimate fakes
+    assert "Flicello is an AI video editor" in r.text and "Sign in with Google is used only" in r.text
+    assert "deepfakes" in r.text and 'href="/legal/acceptable-use"' in r.text and 'href="/legal/privacy"' in r.text
+    assert client.get("/tour").status_code == 200
+    owner = _owner(studio)
+    studio.db.run("UPDATE users SET onboarded=1 WHERE id=?", (owner["id"],))
+    _, token = accounts.login(studio.db, studio.s, "owner", "a long password 1", "1.2.3.4")
+    client.cookies.set(web.COOKIE, token)
+    r = client.get("/")
+    assert r.status_code == 200 and "Your films" in r.text and "camera roll" not in r.text
+
+
+def test_an_unbuilt_front_end_says_how_to_build_it_instead_of_failing(monkeypatch):
+    from vidosuper.studio.web import app as web
+
+    monkeypatch.setattr(web, "_manifest", lambda: {})
+    assert "npm run build" in str(web.vite_tags("landing"))
+
+
+def test_on_the_server_the_proxys_network_is_believed_and_other_addresses_are_not(studio):
+    studio.s.proxy_net = "172.18.0.0/16"  # Caddy's Docker network
+    app = create_app(studio)
+    caddy = TestClient(app, client=("172.18.0.3", 40000))
+    for _ in range(studio.s.limits.login_attempts):
+        caddy.post("/login", data={"name": "ghost", "password": "x"}, headers={"X-Forwarded-For": "8.8.4.4"})
+    r = caddy.post("/login", data={"name": "ghost2", "password": "x"}, headers={"X-Forwarded-For": "1.2.3.4"})
+    assert "Too many" not in r.text  # another visitor behind the same proxy is not locked out
+    outsider = TestClient(app, client=("203.0.113.9", 40000))
+    for _ in range(studio.s.limits.login_attempts):
+        outsider.post("/login", data={"name": "phantom", "password": "x"}, headers={"X-Forwarded-For": "8.8.4.4"})
+    r = outsider.post("/login", data={"name": "phantom2", "password": "x"}, headers={"X-Forwarded-For": "1.2.3.5"})
+    assert "Too many" in r.text  # a forged header from outside the proxy's network is ignored
 
 
 def _thin_ctx():
@@ -501,7 +545,7 @@ def test_the_page_warns_when_the_song_is_shorter_than_the_length(studio):
     client = TestClient(create_app(studio))
     client.post("/login", data={"name": "Kit", "password": "a long password 2"})
     page = client.get(f"/p/{p['id']}").text
-    assert "Heads-up about the length" in page and "about 14 s" in page and "Or make the video 15 s" in page
+    assert "Heads-up about the length" in page and "about 14 s" in page and "Make it 15 s instead" in page
     csrf = _csrf(page)
     client.post(f"/p/{p['id']}/length", data={"csrf": csrf, "seconds": 15})
     assert studio.db.project(p["id"])["length"] == 15.0

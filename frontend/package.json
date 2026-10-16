@@ -1,0 +1,23 @@
+{
+  "name": "flicello-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Flicello's front end: the landing page's WebGL story, the app's motion and UI, the admin's charts. Built by Vite into src/vidosuper/studio/web/static/dist (served by the studio, CSP 'self').",
+  "scripts": {
+    "dev": "vite build --watch --mode development",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "gsap": "^3.13.0",
+    "lenis": "^1.1.20",
+    "postprocessing": "^6.36.4",
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.11"
+  }
+}

@@ -163,6 +163,17 @@ def session_user(db: DB, token: str | None) -> tuple[dict, dict] | None:
     return user, sess
 
 
+def renew(db: DB, s: StudioSettings, sess: dict) -> bool:
+    """Push an active sign-in's end out again (at most once a day), so people who keep coming back stay signed in;
+    never past `session_max_days` from when they signed in. True when the cookie should be sent again."""
+    now = time.time()
+    target = min(now + s.session_days * 86400, sess["created"] + s.session_max_days * 86400)
+    if target - sess["expires"] < 86400:
+        return False
+    db.run("UPDATE sessions SET expires=? WHERE token=?", (target, sess["token"]))
+    return True
+
+
 def end_session(db: DB, token: str | None) -> None:
     if token:
         db.run("DELETE FROM sessions WHERE token=?", (token_hash(token),))

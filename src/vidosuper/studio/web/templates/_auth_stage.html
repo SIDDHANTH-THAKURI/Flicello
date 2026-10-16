@@ -1,0 +1,17 @@
+{% from "_logo.html" import mark %}
+{# The left half of the sign-in screens: the footage wall, the brand, one sentence of why. #}
+<aside class="auth-stage" aria-hidden="true">
+  <canvas></canvas>
+  <a class="lp-brand auth-brand" href="/" tabindex="-1">{{ mark("lp-logo") }}<span>{{ app_name }}</span></a>
+  <div class="auth-quote">
+    <h2>Your camera roll has a <em class="sun-text">film</em> in it.</h2>
+    <ul>
+      <li>Watches every clip and finds the story</li>
+      <li>Cuts on the beat of the song you choose</li>
+      <li>Your footage is never used to train AI</li>
+    </ul>
+  </div>
+  <video id="auth-video" class="auth-video" muted loop playsinline preload="auto" tabindex="-1">
+    <source src="/static/media/mosaic.mp4" type="video/mp4">
+  </video>
+</aside>

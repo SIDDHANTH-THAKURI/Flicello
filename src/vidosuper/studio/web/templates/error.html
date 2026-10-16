@@ -1,8 +1,11 @@
-{% extends "base.html" %}
+{% extends "shell.html" %}
+{% block title %}{{ app_name }}{% endblock %}
+{% block main_class %}page narrow{% endblock %}
 {% block content %}
-<section class="card narrow center">
-  <h1>Hmm.</h1>
-  <p>{{ message }}</p>
-  <p><a class="btn" href="/">Go to my videos</a></p>
+<section class="working rise">
+  <div class="reel" aria-hidden="true"><div>{% for _ in range(16) %}<span></span>{% endfor %}</div></div>
+  <h2>That didn't go to plan.</h2>
+  <p class="msg">{{ message }}</p>
+  <a class="btn-sun" href="/"><span>{{ 'Back to your films' if user else 'Go to the start' }}</span></a>
 </section>
 {% endblock %}

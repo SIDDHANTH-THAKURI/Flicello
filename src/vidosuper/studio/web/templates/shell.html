@@ -1,0 +1,50 @@
+{% from "_logo.html" import mark %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf" content="{{ csrf }}">
+  <meta name="theme-color" content="#06060a">
+  <meta name="color-scheme" content="dark">
+  {% if not is_public(request) %}<meta name="robots" content="noindex, nofollow, noarchive">{% endif %}
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  {% block meta %}{% endblock %}
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  {% block bundle %}{{ vite("app") }}{% endblock %}
+</head>
+<body class="app {% block body_class %}{% endblock %}"{% block body_attrs %}{% endblock %}>
+  <a class="skip" href="#main">Skip to content</a>
+  {% block top %}
+  <header class="app-top">
+    <a class="lp-brand" href="/" aria-label="{{ app_name }} home">{{ mark("lp-logo") }}<span>{{ app_name }}</span></a>
+    <nav class="app-nav" aria-label="Main">
+      {% if user %}
+      <a href="/" {% if active == 'films' %}aria-current="page"{% endif %}>Films</a>
+      <a href="/style" {% if active == 'style' %}aria-current="page"{% endif %} class="hide-s">My style</a>
+      {% if is_owner %}<a href="/admin" {% if active == 'admin' %}aria-current="page"{% endif %} class="hide-s">Admin</a>{% endif %}
+      <a href="/account" {% if active == 'account' %}aria-current="page"{% endif %}>Account</a>
+      {% else %}
+      <a href="/signin">Sign in</a>
+      <a class="btn-sun" href="/signup"><span>Start free</span></a>
+      {% endif %}
+    </nav>
+  </header>
+  {% endblock %}
+  <main id="main" class="{% block main_class %}page{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+  {% block foot %}
+  <footer class="app-foot">
+    <span>© {{ now_year or 2026 }} Siddhanth Thakuri, trading as Flicello · ABN 25 443 793 186</span>
+    <nav aria-label="Legal">
+      <a href="/legal/terms">Terms</a><a href="/legal/privacy">Privacy</a><a href="/legal/cookies">Cookies</a>
+      <a href="/legal/acceptable-use">Acceptable use</a><a href="/legal/ai">AI</a><a href="/legal/contact">Contact</a>
+    </nav>
+  </footer>
+  {% endblock %}
+  {% if flash %}<div class="toast" role="status">{{ flash }}</div>{% endif %}
+</body>
+</html>

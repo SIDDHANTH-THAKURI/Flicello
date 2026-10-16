@@ -17,3 +17,10 @@ docs
 *.m4a
 *.jpg
 !assets/**
+
+# the front end is built inside the image; never ship local installs or builds
+frontend/node_modules
+frontend/tools
+src/vidosuper/studio/web/static/dist
+# the landing page's own media is part of the site
+!src/vidosuper/studio/web/static/media/*

@@ -1,16 +1,22 @@
-{% extends "base.html" %}
-{% from "_logo.html" import mark %}
-{% block title %}Sign in · {{ app_name }}{% endblock %}
+{% extends "shell.html" %}
+{% block title %}Sign in with a password · {{ app_name }}{% endblock %}
+{% block top %}{% endblock %}
+{% block foot %}{% endblock %}
+{% block main_class %}auth{% endblock %}
 {% block content %}
-<section class="card narrow">
-  <div class="hero">{{ mark("hero-mark") }}<h1>{{ app_name }}</h1><p>Your clips. One story. On the beat.</p></div>
-  <h2>Sign in</h2>
-  {% if error %}<p class="error">{{ error }}</p>{% endif %}
-  <form method="post" action="/login" class="stack">
-    <label>Name <input name="name" value="{{ typed or '' }}" autocomplete="username" required maxlength="40" autofocus></label>
-    <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-    <button class="btn primary" type="submit">Sign in</button>
-  </form>
-  <p class="muted small">New here? Open the invite link you were sent.</p>
+{% include "_auth_stage.html" %}
+<section class="auth-side">
+  <div class="auth-card">
+    <p class="eyebrow-s rise">Invited accounts</p>
+    <h1 class="rise d1">Sign in with your <em class="sun-text">name.</em></h1>
+    <p class="page-sub rise d2">For accounts made from an invite with a name and password. Once you're in, add a passkey on your account page and you won't need the password again.</p>
+    {% if error %}<div class="error-box rise" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/login" class="rise d3">
+      <label class="field"><span>Name</span><input name="name" value="{{ typed or '' }}" autocomplete="username" required maxlength="40" autofocus></label>
+      <label class="field"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>
+      <button class="btn-sun wide" type="submit"><span>Sign in</span></button>
+    </form>
+    <p class="auth-switch rise d4"><a href="/signin">← Other ways to sign in</a></p>
+  </div>
 </section>
 {% endblock %}

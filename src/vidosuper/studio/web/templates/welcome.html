@@ -1,25 +1,29 @@
-{% extends "base.html" %}
+{% extends "shell.html" %}
+{% set active = 'style' %}
 {% block title %}Your style · {{ app_name }}{% endblock %}
+{% block main_class %}page narrow{% endblock %}
 {% block content %}
-<section class="card narrow">
-  <h1>Three quick questions</h1>
-  <p class="muted">So your first video already looks like you. You can change these later, or skip.</p>
-  <form method="post" action="/welcome" class="stack">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    {% for key, question, options in QUESTIONS %}
-    <fieldset>
-      <legend>{{ question }}</legend>
-      <div class="chips">
-        {% for value, label in options %}
-        <label class="chip"><input type="radio" name="{{ key }}" value="{{ value }}"
-          {% if profile.answers.get(key) == value %}checked{% endif %}><span>{{ label }}</span></label>
-        {% endfor %}
-      </div>
-    </fieldset>
-    {% endfor %}
-    <label>Anything that should never appear? <span class="muted">(optional)</span>
-      <input name="never" maxlength="200" value="{{ profile.answers.get('never', '') }}" placeholder="e.g. my licence plate, the kitchen"></label>
-    <button class="btn primary" type="submit">Save and start</button>
-  </form>
-</section>
+<header class="page-head">
+  <div>
+    <p class="eyebrow-s rise">Welcome{% if user.display %}, {{ user.display }}{% endif %}</p>
+    <h1 class="page-title rise d1">Three questions, so your first film <em class="sun-text">feels like you.</em></h1>
+    <p class="page-sub rise d2">Change them any time on your style page, or skip them.</p>
+  </div>
+</header>
+<form method="post" action="/welcome" class="rise d2">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% for key, question, options in QUESTIONS %}
+  <fieldset class="group">
+    <legend>{{ question }}</legend>
+    <div class="choices">
+      {% for value, label in options %}
+      <label class="choice"><input type="radio" name="{{ key }}" value="{{ value }}" {% if profile.answers.get(key) == value %}checked{% endif %}><span>{{ label }}</span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% endfor %}
+  <label class="field"><span>Anything that should never appear? <small class="muted">(optional)</small></span>
+    <input name="never" maxlength="200" value="{{ profile.answers.get('never', '') }}" placeholder="e.g. my licence plate, the kitchen"></label>
+  <button class="btn-sun wide" type="submit"><span>Save and start</span></button>
+</form>
 {% endblock %}

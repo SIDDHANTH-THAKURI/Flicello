@@ -1,0 +1,40 @@
+{% extends "shell.html" %}
+{% block title %}One last step · {{ app_name }}{% endblock %}
+{% block top %}{% endblock %}
+{% block foot %}{% endblock %}
+{% block main_class %}auth{% endblock %}
+{% block content %}
+{% include "_auth_stage.html" %}
+<section class="auth-side">
+  <div class="auth-card">
+    <p class="eyebrow-s rise">Last step</p>
+    <h1 class="rise d1">Nearly <em class="sun-text">there.</em></h1>
+    <p class="page-sub rise d2">{% if pending.email %}Signing up as <b>{{ pending.email }}</b>. {% endif %}A few things we need you to confirm.</p>
+    {% if error %}<div class="error-box rise" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/join" class="rise d3">
+      <label class="field"><span>What should we call you?</span>
+        <input name="display" value="{{ typed or pending.name or '' }}" maxlength="40" autocomplete="name" required>
+      </label>
+      <label class="tick">
+        <input type="checkbox" name="adult" value="yes" required>
+        <span><b>I'm 18 or older</b><small>Flicello is only for adults.</small></span>
+      </label>
+      <label class="tick">
+        <input type="checkbox" name="agree" value="yes" required>
+        <span><b>I agree to the Terms and the Privacy Policy</b>
+          <small>Read the <a href="/legal/terms" target="_blank" rel="noopener">Terms</a>, the <a href="/legal/privacy" target="_blank" rel="noopener">Privacy Policy</a> and the <a href="/legal/acceptable-use" target="_blank" rel="noopener">Acceptable Use Policy</a> (version {{ version }}).</small></span>
+      </label>
+      <label class="tick">
+        <input type="checkbox" name="marketing" value="yes">
+        <span><b>Send me the occasional product update</b><small>Optional. A few emails a year at most; stop any time from your account page.</small></span>
+      </label>
+      <div class="doc-summary gap-top">
+        <b>Your footage stays yours</b>
+        <p>We use your clips only to make your videos. They're never sold and never used to train AI, and projects you
+          stop working on are deleted after 14 days.</p>
+      </div>
+      <button class="btn-sun wide" type="submit"><span>Create my account</span></button>
+    </form>
+  </div>
+</section>
+{% endblock %}

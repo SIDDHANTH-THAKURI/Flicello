@@ -1,59 +1,65 @@
-{% extends "base.html" %}
+{% extends "shell.html" %}
+{% set active = 'style' %}
 {% block title %}My style · {{ app_name }}{% endblock %}
+{% block main_class %}page narrow{% endblock %}
 {% block content %}
-<h1>My style</h1>
-<p class="muted">What the editor knows about your taste. It reads this before every video, and adds to it when you rate one. Remove anything that's wrong.</p>
-<section class="card">
+<header class="page-head">
+  <div>
+    <p class="eyebrow-s rise">My style</p>
+    <h1 class="page-title rise d1">What Flicello knows <em class="sun-text">about your taste.</em></h1>
+    <p class="page-sub rise d2">The editor reads this before every film and adds to it when you rate one. Remove anything that's wrong, or add your own.</p>
+  </div>
+</header>
+
+<section class="panel rise d2">
+  <h2>Rules</h2>
+  <p class="lead-s">{{ profile.rules|length }} rule{{ '' if profile.rules|length == 1 else 's' }} so far.</p>
   {% if profile.rules %}
   <ul class="rules">
     {% for r in profile.rules %}
-    <li><span>{{ r.text }}{% if r.why %} <i class="muted small">· {{ r.why }}</i>{% endif %}</span>
-      <form method="post" action="/style/drop"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="rule" value="{{ r.id }}">
-        <button class="link danger-text" type="submit">Remove</button></form></li>
+    <li class="{{ r.source }}"><span>{{ r.text }}{% if r.why %} <i>· {{ r.why }}</i>{% endif %}</span>
+      <form method="post" action="/style/drop" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="rule" value="{{ r.id }}">
+        <button class="link" type="submit">Remove</button></form></li>
     {% endfor %}
   </ul>
-  {% else %}<p class="muted">Nothing yet. It fills in as you make and rate videos.</p>{% endif %}
-  <form method="post" action="/style/add" class="row top-gap">
+  {% else %}<p class="muted">Nothing yet. It fills in as you make and rate films.</p>{% endif %}
+  <form method="post" action="/style/add" class="row-form gap-top">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <input name="text" maxlength="240" placeholder="Add your own, e.g. Never use slow motion" required>
+    <label class="field"><span>Add your own</span><input name="text" maxlength="240" placeholder="e.g. Never use slow motion" required></label>
     <button class="btn" type="submit">Add</button>
   </form>
 </section>
-<section class="card">
+
+<section class="panel rise d3">
   <h2>Starting answers</h2>
-  <form method="post" action="/welcome" class="stack">
+  <form method="post" action="/welcome">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="next" value="/style">
     {% for key, question, options in QUESTIONS %}
-    <fieldset><legend>{{ question }}</legend><div class="chips">
-      {% for value, label in options %}<label class="chip"><input type="radio" name="{{ key }}" value="{{ value }}" {% if profile.answers.get(key) == value %}checked{% endif %}><span>{{ label }}</span></label>{% endfor %}
+    <fieldset class="group"><legend>{{ question }}</legend><div class="choices">
+      {% for value, label in options %}<label class="choice"><input type="radio" name="{{ key }}" value="{{ value }}" {% if profile.answers.get(key) == value %}checked{% endif %}><span>{{ label }}</span></label>{% endfor %}
     </div></fieldset>
     {% endfor %}
-    <label>Never show <input name="never" maxlength="200" value="{{ profile.answers.get('never', '') }}"></label>
+    <label class="field"><span>Never show</span><input name="never" maxlength="200" value="{{ profile.answers.get('never', '') }}"></label>
     <button class="btn" type="submit">Save answers</button>
   </form>
 </section>
+
 {% if profile.history %}
-<section class="card"><h2>What it learned</h2><ul class="files">
-  {% for h in profile.history|reverse %}<li><span>{{ h.summary or "Updated" }}</span><span class="muted small">{{ h.at }}</span></li>{% endfor %}
-</ul></section>
-{% endif %}
-<section class="card">
-  <h2>Password</h2>
-  <form method="post" action="/account/password" class="stack">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>Current <input type="password" name="old" autocomplete="current-password" required></label>
-    <label>New (10+ characters) <input type="password" name="new" autocomplete="new-password" minlength="10" required></label>
-    <label>New again <input type="password" name="new2" autocomplete="new-password" minlength="10" required></label>
-    <button class="btn" type="submit">Change password</button>
-  </form>
+<section class="panel rise d3">
+  <h2>What it learned</h2>
+  <div class="rows">
+    {% for h in profile.history|reverse %}<div><span class="k">{{ h.summary or "Updated" }}</span><span class="v">{{ h.at }}</span></div>{% endfor %}
+  </div>
 </section>
-<details class="danger card">
-  <summary>Delete all my videos and data</summary>
-  <form method="post" action="/account/wipe" class="stack">
+{% endif %}
+
+<details class="danger-zone">
+  <summary>Delete all my films and my style (keep my account)</summary>
+  <form method="post" action="/account/wipe">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="check"><input type="checkbox" name="sure" value="yes"> Yes, delete every video, clip and my style profile</label>
-    <button class="btn danger" type="submit">Delete everything</button>
+    <label class="tick"><input type="checkbox" name="sure" value="yes" required><span><b>Yes, delete every film, clip and my style</b><small>Your account stays, so you can start again. To delete the account too, see your <a href="/account">account page</a>.</small></span></label>
+    <button class="btn danger gap-top" type="submit">Delete everything</button>
   </form>
 </details>
 {% endblock %}

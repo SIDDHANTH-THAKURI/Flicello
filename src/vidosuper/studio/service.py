@@ -148,6 +148,61 @@ class Studio:
         prof = user_dir(self.s, user["id"]) / "profile.json"
         prof.unlink(missing_ok=True)
 
+    def delete_account(self, user: dict) -> None:
+        """Erase a person (their right to erasure): every project row and file, their sign-ins, passkeys, consents and
+        profile, then the account. Spend rows stay for the books, with the person and project removed from them."""
+        import shutil
+
+        if self.is_owner(user):
+            raise ActionError("The owner's account can't delete itself.")
+        self.delete_everything(user)
+        pids = [r["id"] for r in self.db.all("SELECT id FROM projects WHERE user_id=?", (user["id"],))]
+        for pid in pids:
+            for table in ("pitches", "plans", "renders", "feedback", "events", "uploads", "clips", "jobs"):
+                self.db.run(f"DELETE FROM {table} WHERE project_id=?", (pid,))
+        self.db.run("DELETE FROM projects WHERE user_id=?", (user["id"],))
+        self.db.run("UPDATE spend SET user_id=NULL, project_id=NULL WHERE user_id=?", (user["id"],))
+        self.db.run("UPDATE audit SET user_id=NULL, ip=NULL, detail='' WHERE user_id=?", (user["id"],))
+        for table in ("sessions", "devices", "passkeys", "challenges", "consents", "jobs"):
+            self.db.run(f"DELETE FROM {table} WHERE user_id=?", (user["id"],))
+        if user.get("email"):
+            self.db.run("DELETE FROM login_codes WHERE email=?", (user["email"],))
+            self.db.run("DELETE FROM pending WHERE email=?", (user["email"],))
+        self.db.run("DELETE FROM users WHERE id=?", (user["id"],))
+        shutil.rmtree(user_dir(self.s, user["id"]), ignore_errors=True)
+        self.db.run("INSERT INTO audit(at, action, detail) VALUES (?,?,?)", (time.time(), "account_deleted", ""))
+
+    def export(self, user: dict) -> dict:
+        """Everything Flicello keeps about a person, as data (their right of access and portability). Video files are
+        downloaded from each project's page; this lists them."""
+        projects = []
+        for p in self.db.all("SELECT * FROM projects WHERE user_id=? AND deleted=0 ORDER BY created", (user["id"],)):
+            projects.append({
+                "id": p["id"], "title": p["title"], "kind": p["kind"], "created": p["created"], "updated": p["updated"],
+                "request": p["intent"], "shapes": p["shapes"], "length": p["length"], "song": p["song"],
+                "pitches": [json.loads(x["data"]) for x in
+                            self.db.all("SELECT data FROM pitches WHERE project_id=? ORDER BY id", (p["id"],))],
+                "videos": [r["file"] for r in self.db.all("SELECT file FROM renders WHERE project_id=?", (p["id"],))],
+                "feedback": self.db.all("SELECT stage, version, match, liked, tags, text, created FROM feedback "
+                                        "WHERE project_id=? ORDER BY id", (p["id"],)),
+            })
+        prof = user_dir(self.s, user["id"]) / "profile.json"
+        return {
+            "account": {k: user.get(k) for k in ("id", "name", "display", "email", "role", "created", "joined_by",
+                                                 "marketing", "adult", "terms", "last_seen")},
+            "sign_in": {"google": bool(user.get("google_sub")),
+                        "passkeys": self.db.all("SELECT name, created, last_used FROM passkeys WHERE user_id=?",
+                                                (user["id"],)),
+                        "sessions": self.db.all("SELECT created, expires, seen FROM sessions WHERE user_id=?",
+                                                (user["id"],))},
+            "consents": self.db.all("SELECT kind, version, granted, at FROM consents WHERE user_id=? ORDER BY at",
+                                    (user["id"],)),
+            "style_profile": json.loads(prof.read_text(encoding="utf-8")) if prof.exists() else None,
+            "projects": projects,
+            "ai_spend_usd": round(self.db.value("SELECT SUM(usd) FROM spend WHERE user_id=?", (user["id"],), 0) or 0, 4),
+            "exported": time.time(),
+        }
+
     # ------------------------------------------------------------------ actions
     def _guard(self, project: dict, *stages: str) -> None:
         if self.db.active_job(project["id"]):

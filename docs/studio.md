@@ -216,5 +216,81 @@ A talking video (or a voice) can now have **designer animations**: `projects.sty
   the free zone above/beside the person (may sink behind the head), labels in front above the head, stacks, counting
   stats, kinetic titles, full-screen cutaways, captions (split numbers rejoined), a slow push-in and one punch. Their audio
   is copied untouched. Final videos are drawn by `render_processes` (3) processes in parallel and joined.
-- Speed on this laptop: ~12 s of work per second of video with 3 processes (a 2-minute talk: ~25 minutes).
+- Speed on this laptop: ~11 s of work per second of video with 3 processes (the 124 s Undertone talk: 23 minutes).
+  Fewer processes when memory is short (`safe_workers`: ~1.3 GB per part at its peak, drawing + encoder + decoder,
+  2.5 GB kept spare); the encoder and decoder threads are capped, since uncapped x264 took ~0.9 GB per part.
 - The transcript for talk/voice keeps every sentence (Whisper's "unsure" flag dropped real lines, like the rating).
+
+## The public site (2026-10-17)
+
+Flicello now runs on its own server at **https://flicello.com**: a DigitalOcean droplet in Sydney (`ssh flicello`;
+it moved from Bangalore on 2026-10-17), with Docker Compose (`deploy/docker-compose.server.yml`) running the
+studio behind Caddy. Caddy handles HTTPS by itself. Secrets live in `/srv/flicello/.env.studio` on the server,
+never in git and never in chat.
+
+**Server notes.**
+- **Setup:** user `deploy` with only the PC's key, root login off, `AllowUsers deploy`. ufw allows 22, 80 and
+  443 (tcp and udp), with fail2ban, unattended upgrades and 4 GB of swap. Docker logs rotate (10 MB × 5).
+- **Deploy:**
+  - Ship `git ls-files -co --exclude-standard`, without `tests/` and `docs/`, as a tarball into `/srv/flicello`.
+  - Then run `docker compose -f deploy/docker-compose.server.yml build && ... up -d`.
+- **Caddyfile trap:** Caddy mounts the Caddyfile as a single file, which pins the file's inode. Replacing the
+  file (rm and extract, tar, an editor that renames) leaves the running Caddy on the old copy. After changing it,
+  run `docker compose ... up -d --no-deps --force-recreate caddy`.
+- **Moving servers:**
+  1. Copy the `caddy-data` volume, so the certificates come along and HTTPS works from the first second.
+  2. Stop the old studio and copy `studio-data`. SQLite is consistent once the app is stopped.
+  3. Point the old Caddy at the new server with `reverse_proxy https://<new ip>`, plus
+     `header_up Host {host}` and `tls_server_name flicello.com`. Without the Host line, Caddy sends the IP and
+     the new Caddy answers an empty 200.
+  4. Change DNS, and delete the old droplet a day later.
+- **Packages:** the image installs only `.[ai,studio]`. `tests/test_packaging.py` fails when the code imports a
+  package that isn't declared there. httpx once arrived only through dev and anthropic, and the server
+  crashed on sign-in emails.
+
+**Front end.** `frontend/` is a Vite project built into `src/vidosuper/studio/web/static/dist`. Templates load
+it with `{{ vite("app") }}`, `vite("landing")` or `vite("admin")`, which reads the manifest. The CSP stays
+`'self'` only: no inline scripts or styles, and fonts are self-hosted.
+- `npm run build` for one build, or `npm run dev` to rebuild on save.
+- The Docker image builds the front end in its own stage.
+- Check pages by looking, not by trusting the code:
+  - `node frontend/tools/shoot.mjs <url> <dir>`: the landing page, with frame stats;
+  - `pages.mjs`: walks through sign-up;
+  - `studio_pages.mjs`: the app screens;
+  - `admin_shot.mjs`: the dashboard;
+  - `section_shot.mjs <url> <selector> <dir> 1440x900 390x844 ...`: one section at several sizes, flagging
+    anything wider than its box and a page that scrolls sideways.
+
+**Sign-in** (`auth.py`, `web/authweb.py`).
+- **Methods:** Google (OpenID Connect with PKCE, plus state and nonce), a one-time email code (stored as an
+  HMAC, 10 minutes, 5 tries, rate-limited), and passkeys (WebAuthn).
+- **New accounts:** confirm 18+ and accept the Terms and the Privacy Policy. Every consent is stored with its
+  version, the time and a keyed hash of the IP address.
+- **Sessions:** renew whenever the person uses the site (60 days after last use, a year at most). Cookies are
+  `SameSite=Lax`; anonymous forms must come from our own Origin.
+- **Invites:** still work while public sign-up is off, and the name-and-password route remains as a fallback.
+- **To switch features on:**
+  - Put `RESEND_API_KEY` (email codes), and `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` (redirect URI
+    `https://flicello.com/auth/google/callback`), in the server's `.env.studio`.
+  - Then set `VIDO_STUDIO_PUBLIC_SIGNUP=1` to open sign-up to everyone.
+- **Search and Google's brand check:** the public face (`/`, `/tour`, `/signin`, `/legal/*`) is always
+  indexable, even while sign-up is closed. Google's OAuth brand verification reads the home page, and it must
+  say what Flicello is, what Google sign-in is for, and that intimate fakes are banned (tested). Signed-in
+  pages, `/signup` while closed, and the private paths in `robots.txt` never are.
+
+**Legal** (`legal/*.md`, served at `/legal/...`). The documents are rendered with the facts in
+`web/legalweb.py` (`FACTS`: operator, state, hosting location, contact emails); change a fact there and every
+document follows. Keep `auth.LEGAL_VERSION` in step with material changes.
+
+**People's rights.**
+- `/account/export`: everything kept about the person, as JSON.
+- `/account/delete`: erases every row and file for the person; spend rows stay for the books, anonymised.
+
+**Analytics** (`analytics.py`) are cookieless. Each visitor is a keyed hash of (IP, browser) with a salt that
+changes daily and is deleted the next day. No IP address is stored, bots are skipped, and project ids and
+invite tokens never reach the log.
+
+**The owner's dashboard** at `/admin` runs on `/admin/api/metrics` and `/admin/api/live`. It shows counts and
+settings, never anyone's footage, titles, requests or written feedback.
+- **Charts:** follow the dataviz method. The palette was validated against the panel surface `#101016`.
+- **Live data:** refreshes every 5 seconds.

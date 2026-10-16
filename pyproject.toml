@@ -37,6 +37,10 @@ studio = [
   "anthropic>=0.40",
   "onnxruntime>=1.17",  # the portrait cut-out (MODNet) for designed talking videos
   "rlottie-python>=1.3",  # designer animations (Lottie)
+  "webauthn>=2.2",  # passkeys (sign in with Face ID / fingerprint / security key)
+  "PyJWT[crypto]>=2.9",  # Google sign-in: the ID token's signature is checked against Google's keys
+  "markdown>=3.7",  # the legal pages are written in markdown
+  "httpx>=0.27",  # sign-in emails (Resend) and Google's token exchange; anthropic 1.x no longer brings it
 ]
 dev = ["pytest>=8.0", "httpx>=0.27"]
 

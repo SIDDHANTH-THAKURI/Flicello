@@ -77,12 +77,23 @@ class StudioSettings(_Strict):
     host: str = "127.0.0.1"
     port: int = 8765
     https: bool = Field(False, description="Served over HTTPS (e.g. tailscale serve): cookies are marked Secure.")
+    proxy_net: str | None = Field(None, description="Network our own reverse proxy connects from (e.g. the Docker "
+                                  "network of Caddy on the cloud server): its X-Forwarded-For is believed too.")
     workers: int = Field(1, description="Jobs run at once. Renders are heavy: keep 1 on a laptop.")
     render_preset: str = "medium"  # x264 preset for finished videos (slow is ~2x slower for a little quality)
     alert_url: str | None = Field(None, description="Alerts are POSTed here as plain text (e.g. an ntfy.sh topic). "
                                                     "Only short messages, never footage or names of files.")
-    session_days: int = 14
+    session_days: int = Field(60, description="A sign-in lasts this long and is renewed whenever the person uses the "
+                                               "site, so people who come back stay signed in.")
+    session_max_days: int = Field(365, description="However active, a sign-in ends after this long.")
     invite_days: int = 7
+    public_signup: bool = Field(False, description="Anyone may make an account (Google, email code); otherwise only "
+                                                   "invite links work.")
+    site_url: str | None = Field(None, description="The public address (https://flicello.com): Google sign-in's "
+                                                   "return address, passkeys' domain, links in emails.")
+    signups_per_day: int = Field(100, description="New accounts a day; past it, people join a waiting list.")
+    mail_from: str = "Flicello <hello@flicello.com>"
+    mail_outbox: bool = Field(False, description="Write emails to <home>/outbox instead of sending them (local tests).")
     improve_every: int = Field(5, description="Start the improvement routine after this many new ratings.")
     render_processes: int = Field(3, description="Processes that draw a designed talking video at once (a laptop "
                                                  "with 12+ threads: 3).")
@@ -155,6 +166,10 @@ _ENV = {  # environment variable -> setting (strings are parsed by pydantic)
     "VIDO_STUDIO_HOST": "host",
     "VIDO_STUDIO_PORT": "port",
     "VIDO_STUDIO_HTTPS": "https",
+    "VIDO_STUDIO_PROXY_NET": "proxy_net",
+    "VIDO_STUDIO_PUBLIC_SIGNUP": "public_signup",
+    "VIDO_STUDIO_SITE_URL": "site_url",
+    "VIDO_STUDIO_MAIL_OUTBOX": "mail_outbox",
     "VIDO_STUDIO_WORKERS": "workers",
     "VIDO_STUDIO_ALERT_URL": "alert_url",
 }

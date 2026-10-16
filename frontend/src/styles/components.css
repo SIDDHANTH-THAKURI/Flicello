@@ -1,0 +1,49 @@
+/* Shared pieces for the landing page and the app: buttons first; the app adds forms, cards and more. */
+
+/* ------------------------------------------------------------------ buttons */
+.btn-sun {
+  --h: 42px;
+  position: relative; isolation: isolate; display: inline-flex; align-items: center; gap: .55rem; height: var(--h); padding: 0 1.2rem;
+  border-radius: 999px; text-decoration: none; font-weight: 700; color: #120a0c; letter-spacing: -0.01em; font-size: .95rem;
+  background: var(--sun); background-size: 160% 100%; background-position: 0% 50%;
+  box-shadow: 0 10px 40px -10px rgba(255, 46, 126, .6), inset 0 1px 0 rgba(255, 255, 255, .35);
+  transition: transform .35s var(--ease-spring), box-shadow .35s var(--ease-out), background-position .8s var(--ease-out);
+  overflow: hidden; white-space: nowrap;
+}
+.btn-sun::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, .55) 46%, transparent 62%);
+  transform: translateX(-120%); transition: transform .9s var(--ease-out);
+}
+.btn-sun:hover { transform: translateY(-2px) scale(1.02); background-position: 100% 50%; box-shadow: 0 18px 60px -12px rgba(255, 46, 126, .75), inset 0 1px 0 rgba(255, 255, 255, .4); }
+.btn-sun:hover::before { transform: translateX(120%); }
+.btn-sun:active { transform: translateY(0) scale(.98); }
+.btn-sun svg { width: 18px; height: 18px; transition: transform .35s var(--ease-out); }
+.btn-sun:hover svg { transform: translateX(3px); }
+.btn-sun.big { --h: clamp(52px, 4.4vw, 62px); padding: 0 clamp(1.4rem, 2.2vw, 2rem); font-size: clamp(1rem, .9rem + .3vw, 1.12rem); }
+.btn-ghost {
+  display: inline-flex; align-items: center; height: clamp(52px, 4.4vw, 62px); padding: 0 1.5rem; border-radius: 999px;
+  color: var(--paper); text-decoration: none; font-weight: 600; border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, .03); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  transition: border-color .3s, background .3s, transform .35s var(--ease-spring);
+}
+.btn-ghost:hover { border-color: rgba(255, 255, 255, .34); background: rgba(255, 255, 255, .07); transform: translateY(-2px); }
+
+
+/* brand mark and skip link (every page) */
+.skip { position: absolute; left: 1rem; top: -4rem; z-index: 50; background: var(--paper); color: var(--ink); padding: .6rem 1rem; border-radius: 999px; font-weight: 700; text-decoration: none; }
+.skip:focus { top: 1rem; }
+
+.lp-brand { display: inline-flex; align-items: center; gap: .65rem; text-decoration: none; font-weight: 750; font-size: 1.12rem; letter-spacing: -0.02em; }
+.lp-logo { width: 30px; height: 30px; filter: drop-shadow(0 6px 18px rgba(255, 46, 126, .35)); }
+.lp-logo .b1, .lp-logo .b2, .lp-logo .b3 { transform-box: fill-box; transform-origin: 50% 100%; animation: lp-bars 1.07s var(--ease-io) infinite; }
+.lp-logo .b2 { animation-delay: -.18s; }
+.lp-logo .b3 { animation-delay: -.36s; }
+@keyframes lp-bars { 0%, 100% { transform: scaleY(1); } 40% { transform: scaleY(.72); } }
+
+.lp-brand { color: var(--paper); }
+
+.btn-sun[disabled], .btn-sun[aria-disabled="true"] {
+  opacity: .42; filter: grayscale(.5); cursor: not-allowed; transform: none; box-shadow: none; background-position: 0% 50%;
+}
+.btn-sun[disabled]::before { display: none; }

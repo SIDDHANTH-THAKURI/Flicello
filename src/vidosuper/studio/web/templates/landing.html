@@ -1,0 +1,250 @@
+{% from "_logo.html" import mark %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Flicello · Your camera roll has a film in it</title>
+  <meta name="description" content="Flicello is an AI film editor. Drop in the clips you never posted and a song you love: it watches every second, finds the story and cuts it on the beat.">
+  <meta name="theme-color" content="#06060a">
+  <meta name="color-scheme" content="dark">
+  <link rel="canonical" href="{{ site_url }}/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Flicello">
+  <meta property="og:title" content="Flicello · Your camera roll has a film in it">
+  <meta property="og:description" content="Clips you never posted, a song you love: Flicello finds the story and cuts it on the beat.">
+  <meta property="og:url" content="{{ site_url }}/">
+  <meta property="og:image" content="{{ site_url }}/static/media/og.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  {{ vite("landing") }}
+</head>
+<body class="lp" data-state="loading">
+  <canvas id="gl" class="gl" aria-hidden="true"></canvas>
+  <div class="gl-poster" aria-hidden="true"></div>
+  <div class="lp-veil" aria-hidden="true"></div>
+
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="lp-nav" data-nav>
+    <a class="lp-brand" href="/" aria-label="Flicello home">{{ mark("lp-logo") }}<span>Flicello</span></a>
+    <nav class="lp-links" aria-label="Sections">
+      <a href="#watch">How it works</a>
+      <a href="#anything">What it makes</a>
+      <a href="#yours">Privacy</a>
+    </nav>
+    <div class="lp-actions">
+      <button type="button" class="sound" data-sound aria-pressed="false" aria-label="Sound">
+        <span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <span class="sound-label">Sound off</span>
+      </button>
+      <a class="lp-signin" href="/signin">Sign in</a>
+      <a class="btn-sun" href="/signup"><span>Start free</span></a>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- 0 · hero ---------------------------------------------------------------- -->
+    <section class="hero" id="top" data-chapter="0">
+      <div class="hero-copy">
+        <p class="eyebrow mono"><span class="rec" aria-hidden="true"></span>AI film editor · early access</p>
+        <h1 class="hero-title" data-split>
+          <span class="line">Your camera roll</span>
+          <span class="line">has a <em class="serif sun-text">film</em> in it.</span>
+        </h1>
+        <p class="hero-sub" data-rise>Drop in the clips you never posted and a song you love. Flicello watches every second, finds the story and cuts it on the beat.</p>
+        <div class="hero-ctas" data-rise>
+          <a class="btn-sun big" href="/signup"><span>Make my first film</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+          <a class="btn-ghost" href="#watch">See how it works</a>
+        </div>
+        <p class="hero-note mono" data-rise>Free during early access · No card · 18+</p>
+      </div>
+      <div class="hud mono" aria-hidden="true">
+        <span class="hud-l">RAW · 12 CLIPS · 4K · UNEDITED</span>
+        <span class="hud-r"><span class="tc-label">TC</span><span data-timecode>00:00:00:00</span></span>
+      </div>
+      <div class="scroll-cue" aria-hidden="true"><span></span></div>
+    </section>
+
+    <!-- 1 · watch --------------------------------------------------------------- -->
+    <section class="chapter" id="watch" data-chapter="1">
+      <div class="chapter-sticky">
+        <div class="chapter-copy">
+          <p class="kicker mono"><span>01</span>Watch</p>
+          <h2>It watches <em class="serif sun-text">everything.</em></h2>
+          <p>Every second of every clip: what's in it, where the light is good, how the camera moves. The shaky, the blurry and the boring don't make the cut.</p>
+          <dl class="readout mono" aria-label="In this example">
+            <div><dt>frames read</dt><dd data-count="14400">0</dd></div>
+            <div><dt>shots kept</dt><dd data-count="31" class="keep">0</dd></div>
+            <div><dt>shots cut</dt><dd data-count="89" class="cut">0</dd></div>
+          </dl>
+        </div>
+        <div class="tags" data-tags aria-hidden="true"></div>
+      </div>
+    </section>
+
+    <!-- 2 · story --------------------------------------------------------------- -->
+    <section class="chapter" id="story" data-chapter="2">
+      <div class="chapter-sticky">
+        <div class="pitches" data-pitches aria-label="Three pitches from the same footage">
+          <article class="pitch" data-pitch="0"><p class="mono">Pitch A</p><h3>Harbour Hours</h3><p>One city, measured in ferries.</p></article>
+          <article class="pitch" data-pitch="1"><p class="mono">Pitch B <span class="pick">· your pick</span></p><h3>Salt</h3><p>The sea keeps rewriting the coast.</p></article>
+          <article class="pitch" data-pitch="2"><p class="mono">Pitch C</p><h3>Edge of the Map</h3><p>Every road ends at water.</p></article>
+        </div>
+        <div class="chapter-copy low">
+          <p class="kicker mono"><span>02</span>Story</p>
+          <h2>Then it finds the <em class="serif sun-text">story.</em></h2>
+          <p>Not a template. Three different films hiding in the same footage, each with a beginning, a turn and an ending. Pick one, or tell it what to change.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 · beat ---------------------------------------------------------------- -->
+    <section class="chapter" id="beat" data-chapter="3">
+      <div class="chapter-sticky">
+        <div class="chapter-copy">
+          <p class="kicker mono"><span>03</span>Beat</p>
+          <h2>Every cut lands on the <em class="serif sun-text">beat.</em></h2>
+          <p>Bring a song you love, or pick one of ours. Flicello maps every beat, drop and breath in it, then cuts so each shot lands on the rhythm, the way an editor would, frame by frame.</p>
+          <button type="button" class="sound-cta" data-sound aria-pressed="false"><span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="sound-cta-label">Turn the sound on and hear it cut</span></button>
+        </div>
+        <div class="beat-hud mono" aria-hidden="true"><span>112 BPM</span><span><b data-cuts>0</b> cuts</span><span>0 off-beat</span></div>
+      </div>
+    </section>
+
+    <!-- 4 · film ---------------------------------------------------------------- -->
+    <section class="chapter" id="film" data-chapter="4">
+      <div class="chapter-sticky">
+        <div class="chapter-copy">
+          <p class="kicker mono"><span>04</span>Film</p>
+          <h2>Out comes a <em class="serif sun-text">film.</em></h2>
+          <p>Graded, titled and ready for Reels, Shorts or a big screen, in vertical or widescreen. Want it different? Say so in plain words.</p>
+          <ul class="asks" data-asks aria-label="Things people ask for">
+            <li>“faster after the drop”</li><li>“warmer colours”</li><li>“less text”</li><li>“end on the lighthouse”</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- compare ------------------------------------------------------------------ -->
+    <section class="compare" id="compare">
+      <div class="compare-copy">
+        <p class="kicker mono"><span>✦</span>The difference</p>
+        <h2>Same clip. <em class="serif sun-text">Different film.</em></h2>
+        <p>Drag across the frame. On the left is what your phone recorded. On the right is what an edit does with it: framing, colour, contrast, mood.</p>
+      </div>
+      <div class="compare-stage" data-compare>
+        <canvas width="720" height="1280" aria-label="Raw footage on the left, edited on the right"></canvas>
+        <div class="compare-handle" role="slider" tabindex="0" aria-label="Compare raw and edited" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"><span></span></div>
+        <span class="compare-tag raw mono">RAW</span>
+        <span class="compare-tag ed mono">FLICELLO</span>
+      </div>
+    </section>
+
+    <!-- anything ------------------------------------------------------------------ -->
+    <section class="anything" id="anything">
+      <div class="anything-head">
+        <p class="kicker mono"><span>✦</span>What it makes</p>
+        <h2>Describe it like you'd tell a <em class="serif sun-text">friend.</em></h2>
+      </div>
+      <div class="prompt" data-prompt>
+        <span class="prompt-spark" aria-hidden="true">✦</span>
+        <span class="prompt-text" data-typer aria-live="off"></span><span class="caret" aria-hidden="true"></span>
+        <a class="prompt-go" href="/signup">Make it <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      </div>
+      <div class="bento">
+        <article class="b b-wide" data-clip="4"><canvas></canvas><div class="b-body"><h3>Travel films</h3><p>Every road trip, finally edited.</p></div></article>
+        <article class="b" data-clip="2"><canvas></canvas><div class="b-body"><h3>Talking videos</h3><p>Motion graphics land on the words you say.</p></div></article>
+        <article class="b" data-clip="5"><canvas></canvas><div class="b-body"><h3>Highlights</h3><p>Every hit and every goal, on the beat.</p></div></article>
+        <article class="b b-tall" data-clip="11"><canvas></canvas><div class="b-body"><h3>Music videos</h3><p>Your song, your footage, cut to every drop.</p></div></article>
+        <article class="b" data-clip="8"><canvas></canvas><div class="b-body"><h3>Big days</h3><p>Birthdays, weddings and graduations, told like films.</p></div></article>
+        <article class="b" data-clip="0"><canvas></canvas><div class="b-body"><h3>Reels for your business</h3><p>From footage you already have.</p></div></article>
+        <article class="b b-soon" data-clip="7"><canvas></canvas><div class="b-body"><span class="soon mono">Coming soon</span><h3>Stories, acted out</h3><p>Tell a story; it finds the scenes to play it.</p></div></article>
+        <article class="b b-soon" data-clip="3"><canvas></canvas><div class="b-body"><span class="soon mono">Coming soon</span><h3>Cartoon versions</h3><p>Your holiday, drawn and animated.</p></div></article>
+      </div>
+    </section>
+
+    <!-- learns you -------------------------------------------------------------- -->
+    <section class="learn" id="you">
+      <div class="learn-copy">
+        <p class="kicker mono"><span>05</span>You</p>
+        <h2>And it learns <em class="serif sun-text">you.</em></h2>
+        <p>Rate a film and say why. Flicello turns your words into rules for the next one: your pace, your colours, how much text you like. Each film fits you a little better than the last.</p>
+      </div>
+      <div class="taste" data-taste>
+        <svg viewBox="-160 -160 320 320" class="radar" aria-hidden="true">
+          <g class="radar-grid"></g>
+          <path class="radar-a"></path>
+          <path class="radar-b"></path>
+          <g class="radar-labels mono"></g>
+        </svg>
+        <ul class="lessons" aria-label="What it learned">
+          <li><span class="said">“less text”</span><span class="arrow">→</span><span class="rule">one title, no captions</span></li>
+          <li><span class="said">“faster after the drop”</span><span class="arrow">→</span><span class="rule">half-beat shots after the drop</span></li>
+          <li><span class="said">“warmer”</span><span class="arrow">→</span><span class="rule">golden grade by default</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- yours ---------------------------------------------------------------------- -->
+    <section class="yours" id="yours">
+      <h2>Your footage stays <em class="serif sun-text">yours.</em></h2>
+      <div class="pillars">
+        <article>
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 4l16 6v12c0 10-7 18-16 22C15 40 8 32 8 22V10z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M17 24l5 5 9-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <h3>Never used for training</h3>
+          <p>Your clips and films are not used to train AI models: not ours, not anyone's.</p>
+        </article>
+        <article>
+          <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="26" r="16" fill="none" stroke="currentColor" stroke-width="2"/><path d="M24 16v10l7 5M18 4h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <h3>Deleted on schedule</h3>
+          <p>A project you stop working on is deleted with its footage after 14 days. Delete anything sooner, any time.</p>
+        </article>
+        <article>
+          <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="18" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 37L37 11" stroke="currentColor" stroke-width="2"/><path d="M17 24h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <h3>No ad tracking</h3>
+          <p>No advertising cookies, no third-party trackers, and we never sell your data.</p>
+        </article>
+        <article>
+          <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="7" y="5" width="34" height="38" rx="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="24" cy="20" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 37c2-5.5 5.6-8 10-8s8 2.5 10 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <h3>Real footage, real consent</h3>
+          <p>It edits what you filmed and never invents people. No sexual or intimate imagery, “nudified” pictures or deepfakes: <a href="/legal/acceptable-use">our rules</a> ban them.</p>
+        </article>
+      </div>
+      <a class="link-arrow" href="/legal/privacy">Read the privacy policy <span aria-hidden="true">→</span></a>
+    </section>
+
+    <!-- finale --------------------------------------------------------------------- -->
+    <section class="finale" id="start">
+      <h2 class="finale-title" data-split><span class="line">Your next post</span><span class="line">is already <em class="serif sun-text">filmed.</em></span></h2>
+      <a class="btn-sun big" href="/signup"><span>Make my first film</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <p class="mono finale-note">Free during early access · No card · 18+</p>
+    </section>
+  </main>
+
+  <footer class="lp-foot">
+    <div class="foot-brand">
+      <a class="lp-brand" href="/" aria-label="Flicello home">{{ mark("lp-logo") }}<span>Flicello</span></a>
+      <p>Films from the footage you already have. Made in Australia.</p>
+      <p class="foot-about">Flicello is an AI video editor: upload clips you filmed and a song, and it finds the best moments and edits them into a finished video. Sign in with Google is used only to create your account and sign you in.</p>
+    </div>
+    <nav class="foot-links" aria-label="Legal">
+      <a href="/legal/terms">Terms</a>
+      <a href="/legal/privacy">Privacy</a>
+      <a href="/legal/cookies">Cookies</a>
+      <a href="/legal/acceptable-use">Acceptable use</a>
+      <a href="/legal/copyright">Copyright</a>
+      <a href="/legal/ai">AI transparency</a>
+      <a href="/legal/security">Security</a>
+      <a href="/legal/contact">Contact</a>
+    </nav>
+    <p class="foot-legal mono">© {{ year }} Siddhanth Thakuri, trading as Flicello · ABN 25 443 793 186 · NSW, Australia</p>
+  </footer>
+
+  <video id="mosaic" class="mosaic-src" muted loop playsinline preload="auto" aria-hidden="true" tabindex="-1">
+    <source src="/static/media/mosaic.mp4" type="video/mp4">
+  </video>
+</body>
+</html>

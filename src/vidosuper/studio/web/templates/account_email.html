@@ -1,0 +1,24 @@
+{% extends "shell.html" %}
+{% block title %}Confirm your email · {{ app_name }}{% endblock %}
+{% block main_class %}page narrow{% endblock %}
+{% block content %}
+<a class="crumbs" href="/account">← Account</a>
+<header class="page-head">
+  <div>
+    <p class="eyebrow-s rise">Add your email</p>
+    <h1 class="page-title rise d1">Check your <em class="sun-text">inbox.</em></h1>
+    <p class="page-sub rise d2">We sent a 6-digit code to <b>{{ email }}</b>. It works for {{ minutes }} minutes.</p>
+  </div>
+</header>
+{% if error %}<div class="error-box" role="alert">{{ error }}</div>{% endif %}
+<form method="post" action="/account/email/verify" class="panel rise d2">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="email" value="{{ email }}">
+  <label class="sr-only" for="code">The 6-digit code</label>
+  <div class="code" data-code {% if error %}data-error="1"{% endif %}>
+    <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" required>
+    <span></span><span></span><span></span><span></span><span></span><span></span>
+  </div>
+  <button class="btn-sun wide" type="submit"><span>Confirm</span></button>
+</form>
+{% endblock %}

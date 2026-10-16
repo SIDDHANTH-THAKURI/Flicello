@@ -71,6 +71,14 @@ def watch_stages(studio: Studio) -> None:
 def maintain(studio: Studio) -> None:
     db, s = studio.db, studio.s
     now = time.time()
+    try:
+        from .analytics import purge
+
+        purge(db)
+        db.run("DELETE FROM audit WHERE at < ?", (now - 180 * 86400,))  # security log: 180 days
+        db.run("DELETE FROM login_codes WHERE created < ?", (now - 86400,))
+    except Exception:  # noqa: BLE001 - housekeeping never stops the worker
+        pass
     for job in db.all("SELECT id, project_id, started FROM jobs WHERE status='running' AND (COALESCE(moved, started) < ? "
                       "OR started < ?)", (now - STUCK_SECONDS, now - LONGEST_SECONDS)):
         why = "ran for more than 12 hours" if job["started"] < now - LONGEST_SECONDS else "made no progress for an hour"

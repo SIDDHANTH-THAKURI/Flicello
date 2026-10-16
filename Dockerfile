@@ -1,5 +1,13 @@
 # VidoSuper Studio: the web app and its worker in one Linux container.
 #   docker compose up -d --build       (see docker-compose.yml and docs/studio.md)
+# The front end (landing page, app, admin) is built by Vite in its own stage; only its output is kept.
+FROM node:22-slim AS web
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.12-slim-trixie AS base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 # FFmpeg 7 (trixie) for -/filter_complex, vidstab and zscale; cairo for the graphics; tini as PID 1
@@ -28,6 +36,7 @@ RUN useradd --system --uid 10001 --create-home --home-dir /home/vido vido \
  && mkdir -p /data && chown vido:vido /data
 COPY --from=build /venv /venv
 COPY --from=build --chown=root:root /app /app
+COPY --from=web --chown=root:root /src/vidosuper/studio/web/static/dist /app/src/vidosuper/studio/web/static/dist
 WORKDIR /app
 ENV PATH=/venv/bin:$PATH \
     VIDO_STUDIO_HOME=/data \
