@@ -208,8 +208,10 @@ class DB:
         """`moved` is when the progress or the message last changed: a step that stops moving may be stuck, however
         long it is (a long video simply takes longer)."""
         p, msg = max(0.0, min(1.0, progress)), message[:200]
+        # never backwards: a step that reports its own 0-100% (a second shape, a retry inside the job) must not make
+        # the bar jump back to the start; a job claimed again starts at 0 (see claim)
         self.run("UPDATE jobs SET moved=CASE WHEN ABS(progress - ?) > 1e-6 OR message != ? THEN ? ELSE moved END, "
-                 "progress=?, message=? WHERE id=?", (p, msg, time.time(), p, msg, job_id))
+                 "progress=MAX(progress, ?), message=? WHERE id=?", (p, msg, time.time(), p, msg, job_id))
 
     def job_done(self, job_id: int, status: str = "done", error: str | None = None) -> None:
         self.run("UPDATE jobs SET status=?, error=?, finished=?, progress=CASE WHEN ?='done' THEN 1 ELSE progress END "

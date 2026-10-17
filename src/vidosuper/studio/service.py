@@ -581,7 +581,7 @@ class Studio:
 
         shape = self.shapes(project)[0] if project["kind"] == "voice" else (
             "9:16" if (speech.get("height") or 0) > (speech.get("width") or 0) else "16:9")
-        self.db.job_progress(job["id"], 0.3, "Imagining how it could look")
+        self.db.job_progress(job["id"], 0.25, "Imagining how it could look")
         profile = self.profile(user)
         looks = pipe.brain.directions(speech["utterances"], float(speech["duration"]), project["kind"], project["intent"],
                                       rules_for(profile.rules, project["kind"]), shape, n=n,
@@ -652,8 +652,9 @@ class Studio:
         return look, ref if ref is not None and ref.exists() else None
 
     def _paint(self, job, project, user, script, look: Direction | None, ref, shapes: list[str],
-               window: tuple[float, float] | None = None):
-        """Every place of the script painted for each shape (only those inside `window` for a sample)."""
+               window: tuple[float, float] | None = None, span: tuple[float, float] = (0.3, 0.4)):
+        """Every place of the script painted for each shape (only those inside `window` for a sample), the job's
+        progress moving through `span` as each picture arrives."""
         from ..explainer.backdrops import make_plates, make_props
 
         if look is None:
@@ -663,12 +664,19 @@ class Studio:
             return script  # no images: the stock animations fill in after (see _explainer_render)
         work = workdir(self.s, project["user_id"], project["id"])
         notes: list[str] = []
+        a, b = span
+        parts = len(shapes) + 1  # each shape's backdrops, then the props
         for k, shape in enumerate(shapes):
-            self.db.job_progress(job["id"], 0.3 + 0.1 * k / max(1, len(shapes)), "Painting the backdrops")
+            lo_k = a + (b - a) * k / parts
+            self.db.job_progress(job["id"], lo_k, "Painting the backdrops")
             script = make_plates(script, look.model_dump(), maker, shape, work.root / "backdrops", ref, window,
-                                 notes.append, project["kind"])
-        self.db.job_progress(job["id"], 0.38, "Painting the props")
-        script = make_props(script, look.model_dump(), maker, work.root / "backdrops", ref, window, notes.append)
+                                 notes.append, project["kind"],
+                                 tick=lambda f, lo_k=lo_k: self.db.job_progress(job["id"], lo_k + (b - a) / parts * f,
+                                                                                "Painting the backdrops"))
+        lo_p = a + (b - a) * len(shapes) / parts
+        self.db.job_progress(job["id"], lo_p, "Painting the props")
+        script = make_props(script, look.model_dump(), maker, work.root / "backdrops", ref, window, notes.append,
+                            tick=lambda f: self.db.job_progress(job["id"], lo_p + (b - lo_p) * f, "Painting the props"))
         if notes:
             self.db.event(project["id"], "backdrops: " + "; ".join(notes)[:900], "warn")
         return script
@@ -710,16 +718,23 @@ class Studio:
                 make_beat(bed, speech["duration"] + 4, "calm")
         version = project["version"] + (0 if sample else 1)
         look, ref = self._look(project)
-        if look is not None:
+        if look is not None:  # painting takes the first part of what is left of the bar, drawing the rest
             window = (sample_start, sample_start + make.SAMPLE_SECONDS) if sample else None
-            script = self._paint(job, project, user, script, look, ref, shapes[:1] if sample else shapes, window)
+            paint_to = lo + (0.98 - lo) * (0.45 if sample else 0.3)
+            script = self._paint(job, project, user, script, look, ref, shapes[:1] if sample else shapes, window,
+                                 (lo, paint_to))
             script = self._animations_where_no_prop(project, script, job, user, window)
             self.db.run("UPDATE plans SET data=? WHERE id=?", (script.model_dump_json(), plan_id))
-        for shape in (shapes[:1] if sample else shapes):
+            lo = paint_to
+        todo = shapes[:1] if sample else shapes
+        for n, shape in enumerate(todo):
             name = f"sample-{plan_id}" if sample else f"v{version}-{shape.replace(':', 'x')}"
             out = work.out / f"{name}.mp4"
+            a = lo + (0.98 - lo) * n / len(todo)  # each shape its own stretch of the bar, one after the other
+            b = lo + (0.98 - lo) * (n + 1) / len(todo)
             info = make.render(script, speech, shape, out, music=bed, sample=sample, sample_start=sample_start,
-                               progress=lambda f: self.db.job_progress(job["id"], lo + (0.98 - lo) * f, "Drawing your video"),
+                               progress=lambda f, a=a, b=b: self.db.job_progress(job["id"], a + (b - a) * f,
+                                                                               "Drawing your video"),
                                workers=1 if sample else self.s.render_processes,
                                plates_dir=work.root / "backdrops" if look is not None else None)
             rows = requirements.explainer(

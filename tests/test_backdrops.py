@@ -143,3 +143,17 @@ def test_props_are_painted_once_per_visual(tmp_path):
     assert out.scenes[0].prop_file == out.scenes[1].prop_file != out.scenes[2].prop_file != ""
     props = Props(tmp_path)
     assert props.get(out.scenes[2].prop_file, 120).width == 120 and props.aspect(out.scenes[2].prop_file) > 1
+
+
+def test_a_jobs_progress_never_goes_back_until_it_is_claimed_again(tmp_path):
+    from vidosuper.studio.db import DB
+
+    db = DB(tmp_path / "s.db")
+    job = db.enqueue("render", None, None, {}, 5)
+    assert db.claim()["id"] == job
+    db.job_progress(job, 0.6, "Drawing your video")
+    db.job_progress(job, 0.1, "Drawing your video")  # the second shape starts its own 0-100%
+    assert db.one("SELECT progress FROM jobs WHERE id=?", (job,))["progress"] == 0.6
+    db.requeue(job)
+    assert db.claim()["id"] == job  # tried again: it starts from the beginning
+    assert db.one("SELECT progress FROM jobs WHERE id=?", (job,))["progress"] == 0

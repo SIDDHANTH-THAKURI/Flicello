@@ -152,7 +152,7 @@ fieldset.group legend small { font-weight: 400; color: var(--muted); }
 /* the working screen */
 .working { position: relative; overflow: hidden; display: grid; justify-items: center; text-align: center; gap: .9rem; padding: clamp(2rem, 6vw, 4rem) 1.4rem; border-radius: var(--r-xl); border: 1px solid var(--line); background: radial-gradient(60% 80% at 50% 0%, rgba(255, 46, 126, .1), transparent 70%), rgba(255, 255, 255, .015); }
 .reel { position: relative; width: min(420px, 90%); height: 120px; overflow: hidden; mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
-.reel div { position: absolute; top: 10px; left: 0; display: flex; gap: 10px; animation: reel 9s linear infinite; }
+.reel div { position: absolute; top: 10px; left: 0; display: flex; gap: 10px; padding-right: 10px; animation: reel 9s linear infinite; } /* 18 frames + a trailing gap: half the strip is exactly 9 frames, so the loop has no hitch */
 .reel span { flex: none; width: 56px; height: 100px; border-radius: 10px; border: 1px solid var(--line-2); background: linear-gradient(170deg, rgba(255, 179, 71, .22), rgba(255, 46, 126, .14) 55%, rgba(143, 91, 255, .2)); }
 .reel span:nth-child(3n) { background: linear-gradient(170deg, rgba(124, 243, 196, .18), rgba(143, 91, 255, .16)); }
 .reel::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--paper); box-shadow: 0 0 18px 2px rgba(255, 106, 61, .8); }

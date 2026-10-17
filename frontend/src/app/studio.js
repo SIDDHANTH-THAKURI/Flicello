@@ -141,18 +141,39 @@ function progress(pid) {
   const msg = $('#job-msg');
   const eta = $('#job-eta');
   let misses = 0;
+  // What the bar shows: never less than before, and between updates it creeps on slowly (towards where the time
+  // left says the step should be, never more than 6% past the last real value), so a long step never looks frozen.
+  let shown = bar ? parseFloat(bar.dataset.progress || '0') || 0 : 0;
+  let real = shown;
+  let left = null; // seconds left as shown, counted down every second
+  let lastTick = Date.now();
+  const paint = () => { if (bar) bar.style.width = `${Math.max(3, Math.round(shown * 100))}%`; };
+  const say = () => {
+    if (!eta) return;
+    eta.textContent = left === null ? '' :
+      `${left < 45 ? 'under a minute' : left < 90 ? 'about a minute' : `about ${Math.round(left / 60)} min`} left`;
+  };
+  setInterval(() => {
+    const dt = (Date.now() - lastTick) / 1000;
+    lastTick = Date.now();
+    if (left !== null) left = Math.max(20, left - dt);
+    const rate = left ? (1 - shown) / left : 0.002;
+    shown = Math.min(Math.max(shown, real) + rate * dt * 0.6, real + 0.06, 0.985);
+    paint();
+    say();
+  }, 1000);
   const poll = async () => {
     try {
       const st = await api('GET', `/api/p/${pid}/status`);
       misses = 0;
       if (st.stage !== stage || !st.busy) { window.location.reload(); return; }
-      if (bar && st.progress !== null) bar.style.width = `${Math.max(3, Math.round(st.progress * 100))}%`;
+      if (st.progress !== null) { real = Math.max(real, st.progress); shown = Math.max(shown, real); paint(); }
       if (msg) msg.textContent = st.queued ? (st.queued_note || 'Waiting for its turn…') : (st.message || 'Working…');
-      if (eta) {
-        const s = st.eta;
-        eta.textContent = s === null || s === undefined ? '' :
-          `${s < 45 ? 'under a minute' : s < 90 ? 'about a minute' : `about ${Math.round(s / 60)} min`} left`;
-      }
+      const s = st.eta;
+      if (s === null || s === undefined) left = null;
+      else if (left === null || Math.abs(s - left) > Math.max(30, 0.35 * left)) left = s; // big news: take it
+      else left = 0.8 * left + 0.2 * s; // small news: ease towards it, no jumping
+      say();
     } catch (err) {
       misses += 1;
       if (err.status === 401) { window.location.href = '/signin'; return; }

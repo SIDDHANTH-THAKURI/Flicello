@@ -188,7 +188,7 @@ def make_preview(look: dict, maker: ImageMaker, aspect: str, path: Path,
 
 def make_plates(script: VoiceScript, look: dict, maker: ImageMaker, aspect: str, folder: Path, style_ref: Path | None,
                 window: tuple[float, float] | None = None, log: Callable[[str], None] | None = None,
-                mode: str = "voice") -> VoiceScript:
+                mode: str = "voice", tick: Callable[[float], None] | None = None) -> VoiceScript:
     """The script with `backdrop_file` (and `stage_file`) set to the key of each plate, every plate made for `aspect`
     (only the scenes inside `window`, for a sample). Plates already made are reused."""
     log = log or (lambda m: None)
@@ -207,6 +207,8 @@ def make_plates(script: VoiceScript, look: dict, maker: ImageMaker, aspect: str,
     made: set[str] = {keys[x] for x in places if x not in todo}
     refs = [style_ref] if style_ref and Path(style_ref).exists() else []
 
+    count = [0, max(1, len(todo))]
+
     def one(item) -> str | None:
         place, behind = item
         try:
@@ -216,6 +218,10 @@ def make_plates(script: VoiceScript, look: dict, maker: ImageMaker, aspect: str,
         except ImageError as exc:
             log(f"backdrop not made ({exc}): {place[:60]}")
             return None
+        finally:
+            count[0] += 1
+            if tick:
+                tick(count[0] / count[1])
 
     if todo and maker.available:
         if not refs:  # no preview to match: the first plate sets the style for the rest
@@ -292,7 +298,8 @@ def prop_path(folder: Path, key: str) -> Path:
 
 
 def make_props(script: VoiceScript, look: dict, maker: ImageMaker, folder: Path, style_ref: Path | None,
-               window: tuple[float, float] | None = None, log: Callable[[str], None] | None = None) -> VoiceScript:
+               window: tuple[float, float] | None = None, log: Callable[[str], None] | None = None,
+               tick: Callable[[float], None] | None = None) -> VoiceScript:
     """The script with `prop_file` set on every scene whose `visual` could be painted and cut out (once per visual;
     only scenes inside `window` for a sample). Already painted props are reused."""
     log = log or (lambda m: None)
@@ -303,8 +310,17 @@ def make_props(script: VoiceScript, look: dict, maker: ImageMaker, folder: Path,
             wanted.setdefault(v, key_of(look, v, False) + "p")
     refs = [style_ref] if style_ref and Path(style_ref).exists() else []
     todo = [(v, k) for v, k in wanted.items() if not prop_path(folder, k).exists()]
+    count = [0, max(1, len(todo))]
 
     def one(item) -> None:
+        try:
+            _one(item)
+        finally:
+            count[0] += 1
+            if tick:
+                tick(count[0] / count[1])
+
+    def _one(item) -> None:
         visual, key = item
         for attempt in range(2):
             try:
