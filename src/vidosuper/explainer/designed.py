@@ -188,6 +188,10 @@ class Designer:
         self.s, self.words, self.size, self.lib, self.levels, self.cut = script, join_numbers(words), size, lib, levels, cut
         self.w, self.h = size
         self.plates = Plates(plates_dir, size, "9:16" if self.h > self.w else "16:9") if plates_dir else None
+        from . import draw as _draw
+        from .backdrops import Props
+
+        _draw.PROPS = Props(plates_dir) if plates_dir else None  # the cutaway scenes' painted props
         self.shots = shots(script)
         self.duration = max(1.0, duration)
         pal = STAGES.get(script.palette, STAGES["midnight"])

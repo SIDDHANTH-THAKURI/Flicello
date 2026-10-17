@@ -559,7 +559,7 @@ class Studio:
         script = fit(raw.model_copy(update=update), speech)
         if previous is not None:  # places painted before keep their plates
             script = script.model_copy(update={"stage_file": previous.stage_file})
-        if project["style"] == "designed":
+        if project["style"] == "designed" and look is None:  # with a look, props are painted first (see _paint)
             script = self._animations(pipe, project, script)
         return script
 
@@ -621,6 +621,21 @@ class Studio:
         self._make_looks(job, project, user, pipe, speech, 1, project["pitch_round"] + 1, rejected=None if base else old,
                          reason=job["params"].get("reason", ""), own=job["params"].get("own", ""), base=base)
 
+    def _animations_where_no_prop(self, project: dict, script, job, user, window=None):
+        """Stock animations, only for scenes whose painted prop could not be made (and that have none yet); for a
+        sample, only the scenes inside it."""
+        if project["style"] != "designed":
+            return script
+        bare = [k for k, s in enumerate(script.scenes) if s.visual and not s.prop_file and not s.lottie
+                and (window is None or (s.end > window[0] and s.start < window[1]))]
+        if not bare:
+            return script
+        only = script.model_copy(update={"scenes": [s if k in bare else s.model_copy(update={"visual": ""})
+                                                    for k, s in enumerate(script.scenes)]})
+        filled = self._animations(self._pipeline(job, project, user), project, only)
+        return script.model_copy(update={"scenes": [s.model_copy(update={"lottie": f.lottie}) if k in bare else s
+                                                    for k, (s, f) in enumerate(zip(script.scenes, filled.scenes))]})
+
     def _look(self, project: dict) -> tuple[Direction | None, "Path | None"]:
         """The look picked for this video and its preview, or (None, None)."""
         if not project.get("chosen") or not uses_looks(project):
@@ -639,19 +654,21 @@ class Studio:
     def _paint(self, job, project, user, script, look: Direction | None, ref, shapes: list[str],
                window: tuple[float, float] | None = None):
         """Every place of the script painted for each shape (only those inside `window` for a sample)."""
-        from ..explainer.backdrops import make_plates
+        from ..explainer.backdrops import make_plates, make_props
 
         if look is None:
             return script
         maker = self._image_maker(project, user, job)
         if not maker.available:
-            return script
+            return script  # no images: the stock animations fill in after (see _explainer_render)
         work = workdir(self.s, project["user_id"], project["id"])
         notes: list[str] = []
         for k, shape in enumerate(shapes):
             self.db.job_progress(job["id"], 0.3 + 0.1 * k / max(1, len(shapes)), "Painting the backdrops")
             script = make_plates(script, look.model_dump(), maker, shape, work.root / "backdrops", ref, window,
                                  notes.append, project["kind"])
+        self.db.job_progress(job["id"], 0.38, "Painting the props")
+        script = make_props(script, look.model_dump(), maker, work.root / "backdrops", ref, window, notes.append)
         if notes:
             self.db.event(project["id"], "backdrops: " + "; ".join(notes)[:900], "warn")
         return script
@@ -696,6 +713,7 @@ class Studio:
         if look is not None:
             window = (sample_start, sample_start + make.SAMPLE_SECONDS) if sample else None
             script = self._paint(job, project, user, script, look, ref, shapes[:1] if sample else shapes, window)
+            script = self._animations_where_no_prop(project, script, job, user, window)
             self.db.run("UPDATE plans SET data=? WHERE id=?", (script.model_dump_json(), plan_id))
         for shape in (shapes[:1] if sample else shapes):
             name = f"sample-{plan_id}" if sample else f"v{version}-{shape.replace(':', 'x')}"

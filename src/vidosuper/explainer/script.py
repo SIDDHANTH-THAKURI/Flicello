@@ -81,6 +81,7 @@ class Scene(BaseModel):
                                           "same place use the SAME words, so the camera moves on through one world.")
     camera: Camera = Field("push", description="How the camera moves over the backdrop during the scene.")
     backdrop_file: str = Field("", description="Leave empty: filled in by the tool.")
+    prop_file: str = Field("", description="Leave empty: filled in by the tool.")
 
 
 class Callout(BaseModel):

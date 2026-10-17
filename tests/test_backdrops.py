@@ -95,3 +95,51 @@ def test_scenes_are_drawn_over_their_plate_and_the_camera_moves(tmp_path):
     assert a.shape == (180, 320, 3) and np.abs(a - b).mean() > 3  # it travels
     frame = np.asarray(_scene_frame(script, script.scenes[2], 9.0, (320, 180), 0.0, plates, shots(script)).convert("RGB"))
     assert frame[..., 0].mean() > frame[..., 2].mean() + 20  # the orange plate, not the blue gradient
+
+
+def _on_green() -> bytes:
+    img = Image.new("RGB", (200, 200), (0, 255, 0))
+    img.paste((220, 90, 60), (60, 50, 140, 150))  # the prop
+    img.paste((0, 255, 0), (90, 90, 110, 110))  # green inside it, not touching the border: a hole in the prop
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_a_painted_prop_is_cut_out_of_its_green_ground():
+    cut = backdrops.cut_prop(_on_green())
+    assert cut is not None and cut.mode == "RGBA"
+    assert 78 <= cut.width <= 92 and 98 <= cut.height <= 112  # cropped to the prop
+    a = np.asarray(cut)[..., 3]
+    assert a[cut.height // 2 - 30, cut.width // 2 - 30] > 200  # the prop stays
+    grey = io.BytesIO()
+    Image.new("RGB", (200, 200), (128, 128, 128)).save(grey, "PNG")
+    assert backdrops.cut_prop(grey.getvalue()) is None  # not painted on green: never guessed
+
+
+def test_props_are_painted_once_per_visual(tmp_path):
+    class GreenHttp(FakeHttp):
+        def post(self, url, headers=None, json=None):
+            self.calls.append(json)
+
+            class R:
+                status_code = 200
+                text = ""
+
+                @staticmethod
+                def json():
+                    return {"output_image": {"data": base64.b64encode(_on_green()).decode()}}
+
+            return R()
+
+    from vidosuper.explainer.backdrops import Props, make_props
+
+    http = GreenHttp()
+    sc = _script()
+    sc = sc.model_copy(update={"scenes": [s.model_copy(update={"visual": v}) for s, v in
+                                          zip(sc.scenes, ["a paper brain", "a paper brain", "a toggle switch"])]})
+    out = make_props(sc, LOOK, ImageMaker(key="test", http=http), tmp_path, None)
+    assert len(http.calls) == 2 and "#00FF00" in json.dumps(http.calls[0])
+    assert out.scenes[0].prop_file == out.scenes[1].prop_file != out.scenes[2].prop_file != ""
+    props = Props(tmp_path)
+    assert props.get(out.scenes[2].prop_file, 120).width == 120 and props.aspect(out.scenes[2].prop_file) > 1

@@ -1,5 +1,8 @@
 """Backdrops: the world behind a voice or talking video, painted by an image model in the look the person picked.
 
+Props too: each scene's `visual` (its main picture) is painted in the same look on a flat green ground and cut out,
+so the objects that pop in front belong to the painted world instead of being stock stickers in another style.
+
 A look (studio/brain/schemas.Direction) is pitched with a preview frame; once picked, every place the script names
 (`Scene.backdrop`, and `VoiceScript.stage` behind a talking person) becomes one background plate in that look, made
 with the preview as its style reference so the scenes belong to one film. Neighbouring scenes that name the same place
@@ -233,6 +236,127 @@ def make_plates(script: VoiceScript, look: dict, maker: ImageMaker, aspect: str,
     stage = keys.get((script.stage.strip(), True), "") if mode == "talk" and script.stage.strip() else ""
     return script.model_copy(update={"scenes": scenes,
                                      "stage_file": stage if stage in made else script.stage_file})
+
+
+# ---------------------------------------------------------------- props: the scene's main picture, painted in the look
+
+KEY = (0, 255, 0)  # the flat ground props are painted on, cut away after
+
+
+def prop_prompt(look: dict, visual: str) -> str:
+    return (f"One prop for an animated explainer video, painted in this look.\n{_look_text(look)}"
+            f"The prop: {visual}\n"
+            "Show it whole and centred with a clear margin all round, as a single object or a small tight group, lit "
+            "like the look, readable at a glance. Put it on a perfectly flat, pure bright green (#00FF00) background, "
+            "edge to edge: no floor, no cast shadow on the background, no gradient, no other objects, and no green "
+            "anywhere in the prop itself. Match the attached reference image exactly in medium, rendering, texture "
+            "and colours. " + NO_TEXT)
+
+
+def cut_prop(data: bytes) -> Image.Image | None:
+    """The prop alone (RGBA, cropped to it): the flat ground is found from the border (so the same colour inside the
+    prop stays), its edge softened and the green spill taken out. None when no clean ground is found."""
+    import cv2
+
+    img = np.asarray(Image.open(io.BytesIO(data)).convert("RGB"))
+    h, w = img.shape[:2]
+    border = np.concatenate([img[0], img[-1], img[:, 0], img[:, -1]]).astype(np.float32)
+    ground = np.median(border, axis=0)
+    if ground[1] < 120 or ground[1] < ground[0] + 50 or ground[1] < ground[2] + 50:
+        return None  # not painted on green: don't guess
+    f = img.astype(np.float32)
+    greenness = f[..., 1] - np.maximum(f[..., 0], f[..., 2])  # how much greener than red/blue
+    dist = np.linalg.norm(f - ground, axis=2)
+    bg_like = ((dist < 90) | (greenness > 70)).astype(np.uint8)
+    n, labels = cv2.connectedComponents(bg_like, connectivity=4)
+    edge_labels = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))) - {0}
+    bg = np.isin(labels, list(edge_labels)) & (bg_like > 0)
+    alpha = (~bg).astype(np.float32)
+    alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    soft = cv2.GaussianBlur(alpha, (0, 0), 1.0)
+    edge = (soft > 0.02) & (soft < 0.98)  # partly green pixels at the edge: take the green out
+    a = np.clip(soft, 0, 1)
+    spill = np.clip(greenness, 0, None)
+    f[..., 1] = np.where(edge | (spill > 25), np.minimum(f[..., 1], np.maximum(f[..., 0], f[..., 2]) + 8), f[..., 1])
+    out = np.dstack([np.clip(f, 0, 255).astype(np.uint8), (a * 255).astype(np.uint8)])
+    ys, xs = np.nonzero(a > 0.1)
+    if len(xs) < 0.01 * w * h or (a > 0.1).mean() > 0.92:
+        return None  # nothing there, or the ground wasn't removed
+    pad = 4
+    crop = out[max(0, ys.min() - pad):ys.max() + pad + 1, max(0, xs.min() - pad):xs.max() + pad + 1]
+    return Image.fromarray(crop, "RGBA")
+
+
+def prop_path(folder: Path, key: str) -> Path:
+    return Path(folder) / f"prop-{key}.png"
+
+
+def make_props(script: VoiceScript, look: dict, maker: ImageMaker, folder: Path, style_ref: Path | None,
+               window: tuple[float, float] | None = None, log: Callable[[str], None] | None = None) -> VoiceScript:
+    """The script with `prop_file` set on every scene whose `visual` could be painted and cut out (once per visual;
+    only scenes inside `window` for a sample). Already painted props are reused."""
+    log = log or (lambda m: None)
+    wanted: dict[str, str] = {}
+    for s in script.scenes:
+        v = s.visual.strip()
+        if v and (window is None or (s.end > window[0] and s.start < window[1])):
+            wanted.setdefault(v, key_of(look, v, False) + "p")
+    refs = [style_ref] if style_ref and Path(style_ref).exists() else []
+    todo = [(v, k) for v, k in wanted.items() if not prop_path(folder, k).exists()]
+
+    def one(item) -> None:
+        visual, key = item
+        for attempt in range(2):
+            try:
+                cut = cut_prop(maker.make(prop_prompt(look, visual), "1:1", "1K", refs[:1], task="prop"))
+            except ImageError as exc:
+                log(f"prop not made ({exc}): {visual[:60]}")
+                return
+            if cut is not None:
+                Path(folder).mkdir(parents=True, exist_ok=True)
+                part = prop_path(folder, key).with_suffix(".part")
+                cut.save(part, "PNG")
+                os.replace(part, prop_path(folder, key))
+                return
+        log(f"prop not cut out cleanly: {visual[:60]}")
+
+    if todo and maker.available:
+        with ThreadPoolExecutor(4) as ex:
+            list(ex.map(one, todo))
+    scenes = [s.model_copy(update={"prop_file": wanted[s.visual.strip()]
+                                   if s.visual.strip() in wanted and prop_path(folder, wanted[s.visual.strip()]).exists()
+                                   else ("" if window is None else s.prop_file)}) for s in script.scenes]
+    return script.model_copy(update={"scenes": scenes})
+
+
+class Props:
+    """Painted props for drawing, scaled once per size asked."""
+
+    def __init__(self, folder: Path | None):
+        self.folder = Path(folder) if folder else None
+        self._src: dict[str, Image.Image | None] = {}
+        self._sized: dict[tuple[str, int], Image.Image] = {}
+
+    def get(self, key: str, width: int) -> Image.Image | None:
+        if not key or self.folder is None:
+            return None
+        if key not in self._src:
+            p = prop_path(self.folder, key)
+            self._src[key] = Image.open(p).convert("RGBA") if p.exists() else None
+        src = self._src[key]
+        if src is None:
+            return None
+        width = max(8, int(width) // 4 * 4)  # sizes in steps of 4 px: a pop-in reuses its scaled copies
+        if (key, width) not in self._sized:
+            if len(self._sized) > 400:
+                self._sized.clear()
+            hgt = max(1, round(src.height * width / src.width))
+            self._sized[(key, width)] = src.resize((width, hgt), Image.LANCZOS)
+        return self._sized[(key, width)]
+
+    def aspect(self, key: str) -> float | None:
+        img = self.get(key, 64)
+        return img.height / img.width if img is not None else None
 
 
 # ---------------------------------------------------------------- drawing them

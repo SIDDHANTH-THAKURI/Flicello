@@ -408,7 +408,11 @@ LOOK_TEXT = ("# The look they picked\nThe video is drawn in this look: every sce
              "backdrop. `camera` per scene: push (towards, the default), pull (away, for a reveal or an ending), left "
              "or right (travel, a new topic), rise (up, for growth or a big idea), still (a quiet beat). Set the "
              "script's `palette` to the look's palette. talk mode: `stage` is the place behind the person for the "
-             "whole video. The look's world and style are already known to the painter: describe only the place.\n")
+             "whole video. The look's world and style are already known to the painter: describe only the place.\n"
+             "Each scene's `visual` is PAINTED in the look as one prop that pops in front of the backdrop: one concrete "
+             "object or a small tight group that shows the point ('a paper brain clipped to a calendar page', 'a "
+             "balance scale with a toggle switch on one pan'), never a whole scene, never text. Give every scene its "
+             "own visual; the same words only when the same object should come back.\n")
 
 
 def check_directions(d: Directions, n: int) -> list[str]:

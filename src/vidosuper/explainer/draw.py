@@ -170,13 +170,17 @@ def _card(size: tuple[int, int], radius: int, fill: tuple[int, ...]) -> Image.Im
 
 
 LOTTIE = None  # set by the renderer: (animation id, seconds into it, width) -> RGBA image, for designer animations
-LOTTIE_ASPECT = None  # set with it: animation id -> height / width of its drawing (None when it can't be drawn)
+LOTTIE_ASPECT = None
+PROPS = None  # backdrops.Props when the look's painted props are drawn instead of animations  # set with it: animation id -> height / width of its drawing (None when it can't be drawn)
 
 
 def art_box(frame: Image.Image, s: Scene, cx: float, cy: float, mw: float, mh: float, t: float, t0: float, pal: dict,
             level: float) -> None:
     """The scene's picture at the largest size that fits the box (mw x mh, centred on cx, cy): its designer animation
     when it has one, else its emoji in rings that pulse with the voice. Never spills out of the box onto the text."""
+    if s.prop_file and PROPS is not None and (aspect := PROPS.aspect(s.prop_file)):
+        prop_art(frame, s.prop_file, aspect, cx, cy, mw, mh, t, t0, level)
+        return
     if s.lottie and LOTTIE is not None and LOTTIE_ASPECT is not None:
         aspect = LOTTIE_ASPECT(s.lottie)
         if aspect:
@@ -188,6 +192,23 @@ def art_box(frame: Image.Image, s: Scene, cx: float, cy: float, mw: float, mh: f
                       alpha=clamp(k * 1.5))
                 return
     hero(frame, s.emoji, cx, cy, int(min(mw, mh) * 0.42), t, t0, pal, level)
+
+
+def prop_art(frame: Image.Image, key: str, aspect: float, cx: float, cy: float, mw: float, mh: float, t: float,
+             t0: float, level: float) -> None:
+    """A painted prop, brought to life: it springs in, floats and breathes a little with the voice, as a motion
+    designer would animate a still illustration. (A drawn contact shadow read as a grey bar under the frosted
+    backing: the prop floats.)"""
+    k = pop(t, t0)
+    if k <= 0:
+        return
+    width = min(mw, mh / max(0.05, aspect)) * 0.92
+    scale = (0.55 + 0.45 * clamp(k, 0, 1.12)) * (1.0 + 0.012 * math.sin((t - t0) * 1.7) + 0.02 * level)
+    art = PROPS.get(key, int(width * scale))
+    if art is None:
+        return
+    bob = math.sin((t - t0) * 1.9) * mh * 0.012
+    place(frame, art, cx, cy + bob, alpha=clamp(k * 1.6))
 
 
 def _lerp(a: tuple, b: tuple, k: float) -> tuple:
@@ -248,7 +269,8 @@ def draw_scene(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) 
                                                      h * (0.75 if vertical else 0.825) + u * 0.014], u * 0.007, fill=(*accent, 255))
         cx0, cy0 = w / 2, h * (0.34 if vertical else 0.4)
         base_r = u * (0.34 if big else 0.28) * 0.95
-        for k, it in enumerate(s.items[:4] if s.layout == "keyword" else []):
+        painted = bool(s.prop_file and PROPS is not None)  # a painted prop: no stock emoji circling it
+        for k, it in enumerate(s.items[:4] if s.layout == "keyword" and not painted else []):
             pk = pop(t, it.at)
             em = emoji_sprite(it.emoji, int(u * 0.1)) if it.emoji else None
             if pk <= 0 or em is None:

@@ -146,6 +146,9 @@ def render_voice(script: VoiceScript, audio: Path, utterances: list[dict], out: 
     n = int((end - start) * FPS)
     pal = PALETTE[script.palette]
     plates = Plates(plates_dir, size, "9:16" if size[1] > size[0] else "16:9") if plates_dir else None
+    from .backdrops import Props
+
+    _draw.PROPS = Props(plates_dir) if plates_dir else None
     shots = shots_of(script)
 
     def frames():
