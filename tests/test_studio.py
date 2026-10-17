@@ -276,7 +276,14 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     # one more idea, then pick
     client.post(f"/p/{pid}/another", data={"csrf": csrf, "reason": "funnier"})
     _drain(studio)
-    assert studio.db.value("SELECT COUNT(*) FROM pitches WHERE project_id=?", (pid,)) == 4
+    assert "Improvise one" in client.get(f"/p/{pid}").text
+    before = len(studio.pitches(studio.db.project(pid)))
+    client.post(f"/p/{pid}/another", data={"csrf": csrf, "improvise": "95"})
+    job = studio.db.one("SELECT params FROM jobs WHERE project_id=? AND kind='pitch' ORDER BY id DESC LIMIT 1", (pid,))
+    assert json.loads(job["params"])["improvise"] == 95 and "Improvise" in json.loads(job["params"])["reason"]
+    _drain(studio)
+    assert len(studio.pitches(studio.db.project(pid))) == before + 1
+    assert studio.db.value("SELECT COUNT(*) FROM pitches WHERE project_id=?", (pid,)) == 5  # 3 + another + improvised
     client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": pitch_id})
     _drain(studio)
     page = client.get(f"/p/{pid}").text

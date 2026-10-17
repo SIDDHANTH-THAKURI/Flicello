@@ -579,7 +579,8 @@ class Studio:
                     prof.note_look("picked" if p["id"] == pitch_id else "passed", p["pitch"])
             prof.save()
 
-    def another(self, project: dict, reason: str = "", own_idea: str = "", base: int = 0) -> None:
+    def another(self, project: dict, reason: str = "", own_idea: str = "", base: int = 0,
+                improvise: int | None = None) -> None:
         """One more idea: something different (with why), their own idea shaped up, or (looks only) the look `base`
         with the change in `reason`."""
         self._guard(project, "choose")
@@ -595,7 +596,10 @@ class Studio:
             look = next((p["pitch"] for p in self.pitches(project) if p["id"] == base), {})
             prof.note_look("changed" if base else "own", look, reason if base else own_idea)
             prof.save()
+        if improvise is not None and not reason.strip() and not own_idea.strip():
+            reason = "Improvise: take it somewhere they would not have thought of"
         self._enqueue(project, "pitch", {"reason": " ".join(reason.split())[:300], "own": " ".join(own_idea.split())[:600],
+                                         **({"improvise": int(improvise)} if improvise is not None else {}),
                                          "base": int(base or 0)})
 
     def sample_verdict(self, user: dict, project: dict, ok: bool, note: str = "") -> None:
@@ -1143,6 +1147,8 @@ class Studio:
         if project["kind"] != "montage":
             return self._job_looks(job, project, user)
         pipe = self._pipeline(job, project, user)
+        if job["params"].get("improvise") is not None:  # 'Improvise one': this idea at the strength they set
+            project = {**project, "improvise": int(job["params"]["improvise"])}
         ctx = self._context(pipe, project, user)
         if job["params"].get("first"):  # the first ideas, from the brief they agreed
             self.db.job_progress(job["id"], 0.1, "Thinking up story ideas from what we agreed")

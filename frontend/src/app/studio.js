@@ -300,15 +300,17 @@ function newFilm() {
   });
   form.addEventListener('change', when);
   when();
-  // what the improvise slider means, in words, as it moves
+}
+
+// what an improvise slider means, in words, as it moves (new film, and 'Improvise one' on the ideas)
+function improviseSlider() {
   const slider = $('#improvise');
   const says = $('#improvise-says');
-  if (slider && says) {
-    const steps = JSON.parse(says.dataset.says);
-    const show = () => { says.textContent = (steps.find(([top]) => Number(slider.value) <= top) || steps[steps.length - 1])[1]; };
-    slider.addEventListener('input', show);
-    show();
-  }
+  if (!slider || !says) return;
+  const steps = JSON.parse(says.dataset.says);
+  const show = () => { says.textContent = (steps.find(([top]) => Number(slider.value) <= top) || steps[steps.length - 1])[1]; };
+  slider.addEventListener('input', show);
+  show();
 }
 
 function inviteLink() {
@@ -340,6 +342,7 @@ export function studio() {
   swatches();
   rating();
   newFilm();
+  improviseSlider();
   inviteLink();
   busyForms();
 }

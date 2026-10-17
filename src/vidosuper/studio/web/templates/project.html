@@ -329,6 +329,16 @@
     <label class="field"><span>Or describe your own idea</span><textarea name="own" rows="2" maxlength="600" placeholder="Start with the sunset, then rewind the day…"></textarea></label>
     <button class="btn" type="submit">Use my idea</button>
   </form>
+  <form method="post" action="/p/{{ p.id }}/another" class="improvise-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="slider">
+      <label for="improvise"><b>Or let it improvise</b></label>
+      <input type="range" name="improvise" min="0" max="100" step="5" value="80" id="improvise" aria-describedby="improvise-says">
+      <div class="slider-ends"><span>Close to my idea</span><span>Surprise me</span></div>
+      <p class="help" id="improvise-says" data-says='[[20, "Sticks to exactly what you ask for."], [50, "Follows your idea, adding its own touches where they clearly help."], [80, "Takes creative liberties: an unexpected structure, bold transitions. Keeps your must-haves."], [100, "Goes wild: the boldest version your footage can carry. Keeps only your must-haves."]]'>Takes creative liberties: an unexpected structure, bold transitions. Keeps your must-haves.</p>
+    </div>
+    <button class="btn" type="submit">Improvise one</button>
+  </form>
 </section>
 
 {# ------------------------------------------------------------------ check the sample #}

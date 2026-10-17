@@ -520,8 +520,9 @@ def create_app(studio: Studio) -> FastAPI:
 
     @app.post("/p/{pid}/another")
     def another(request: Request, pid: str, csrf: str = Form(""), reason: str = Form(""), own: str = Form(""),
-                base: int = Form(0)):
-        return act(request, csrf, pid, lambda u, p: studio.another(p, reason, own, base))
+                base: int = Form(0), improvise: int = Form(-1)):
+        return act(request, csrf, pid, lambda u, p: studio.another(p, reason, own, base,
+                                                                    improvise if 0 <= improvise <= 100 else None))
 
     @app.post("/p/{pid}/understood")
     async def understood(request: Request, pid: str):
