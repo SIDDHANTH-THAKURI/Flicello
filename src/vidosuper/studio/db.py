@@ -146,6 +146,11 @@ class DB:
             con.execute("ALTER TABLE projects ADD COLUMN music TEXT NOT NULL DEFAULT 'made'")
         if "pace" not in have:
             con.execute("ALTER TABLE projects ADD COLUMN pace TEXT NOT NULL DEFAULT 'balanced'")
+        # step 3a: their own words for the cut, how far the AI may go beyond them, and with no music, which sound
+        for col, kind in (("cut_note", "TEXT NOT NULL DEFAULT ''"), ("improvise", "INTEGER NOT NULL DEFAULT 35"),
+                          ("sound", "TEXT NOT NULL DEFAULT 'silent'"), ("routed", "TEXT NOT NULL DEFAULT ''")):
+            if col not in have:
+                con.execute(f"ALTER TABLE projects ADD COLUMN {col} {kind}")
         if "moved" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:
             con.execute("ALTER TABLE jobs ADD COLUMN moved REAL")
         if "worker" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:  # which renderer lane runs it

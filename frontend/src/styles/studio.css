@@ -261,3 +261,22 @@ details.danger-zone form { margin-top: 1rem; }
   .empty-reel { height: 180px; }
   .track li { font-size: .62rem; letter-spacing: .02em; }
 }
+
+/* new film: their own length, and how much to improvise */
+.inline-fields { display: flex; align-items: center; gap: .6rem; margin-top: .7rem; flex-wrap: wrap; }
+.inline-fields[hidden] { display: none; }
+.inline-fields .num-in { width: 6.5rem; }
+.inline-fields select.input { width: auto; }
+.slider { display: grid; gap: .4rem; }
+.slider input[type="range"] { width: 100%; accent-color: var(--rose); height: 28px; }
+.slider-ends { display: flex; justify-content: space-between; font-size: .82rem; color: var(--muted); }
+.slider .help { margin: 0; min-height: 2.6em; }
+
+/* going back: earlier steps in the track are buttons; a running step can be stopped */
+.track li form { margin: 0; }
+.step-back { all: unset; cursor: pointer; color: var(--muted); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 4px; font: inherit; letter-spacing: inherit; }
+.step-back:hover, .step-back:focus-visible { color: var(--paper); text-decoration-color: currentColor; }
+.working details.stop { margin-top: .4rem; font-size: .88rem; color: var(--muted); }
+.working details.stop summary { cursor: pointer; }
+.working details.stop form { display: grid; justify-items: center; gap: .5rem; margin-top: .6rem; }
+.back-zone .choices form { margin: 0; }

@@ -40,7 +40,7 @@ publish it, and tell Flicello what to fix.
 
 ## Labelling AI content
 
-Flicello edits footage that you filmed. Some elements can be AI-made: for example, a music bed composed for you. Where
+Flicello edits footage that you filmed. Some elements can be AI-made: for example, the backdrops and props painted in the look you pick. Where
 we add AI-generated material, we say so in the app.
 
 If you publish realistic content that was generated or substantially altered by AI, platform rules and some laws

@@ -56,6 +56,48 @@ FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad sho
                  "too long", "didn't follow my idea", "colour", "sound"]
 LENGTHS = (15, 30, 45, 60, 90, 120, 180, 300, 600)  # who may ask for which: Studio.lengths_for (access levels)
 MAX_SAMPLE_TRIES = 3
+
+
+IMPROVISE = [  # what the AI is told for each part of the slider (the person sees the left-hand words)
+    (20, "Follow their words closely. Add nothing they did not ask for."),
+    (50, "Follow their idea, adding your own touches where they clearly help."),
+    (80, "Take real creative liberties: an unexpected structure, bold transitions, play with the rhythm. Keep "
+         "everything they said they must have."),
+    (100, "Go wild: the boldest, most surprising version the footage can carry. Keep only their must-haves."),
+]
+
+
+def improvise_text(level: int) -> str:
+    return next(text for top, text in IMPROVISE if int(level) <= top)
+
+
+def ask_text(project: dict) -> str:
+    """Everything the person asked for, as the AI reads it: their note, how they want it cut in their own words, and
+    how far it may go beyond them (the slider)."""
+    parts = [(project.get("intent") or "").strip()]
+    if (project.get("cut_note") or "").strip():
+        parts.append(f"How they want it cut, in their words: {project['cut_note'].strip()}")
+    parts.append(f"How much to improvise ({int(project.get('improvise') or 35)}/100): "
+                 f"{improvise_text(project.get('improvise') or 35)}")
+    return "\n".join(p for p in parts if p)
+
+
+KIND_WORDS = [  # 'something else': which engine can make it (the person sees the reason and can change it)
+    ("voice", r"\b(voice ?(memo|note|over)|podcast|audio|narrat\w*|my voice|recording|no camera|animat\w* (of|from) my)"),
+    ("talk", r"\b(me talking|talking head|to camera|vlog|explain\w*|tutorial|lesson|interview|presentation|speech|pitch)"),
+]
+
+
+def route_kind(describe: str) -> tuple[str, str]:
+    import re
+
+    for kind, pattern in KIND_WORDS:
+        if re.search(pattern, describe, re.IGNORECASE):
+            return kind, {"voice": "It sounds like it's built on a recording of a voice, so it's made as an "
+                                   "animation of what is said.",
+                          "talk": "It sounds like someone talking to camera, so their video stays and graphics "
+                                  "land on their words."}[kind]
+    return "montage", "It sounds like it's made from your clips, so they're cut together into a story on the beat."
 STYLES = ("designed", "labels")  # designer animations behind the person; clean labels over the video
 TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180}  # first guesses, until real jobs have run
 DRAW_RATE = {"designed": 20.0, "labels": 3.0}  # first guesses: seconds of drawing per second of a voice or talking video
@@ -212,14 +254,29 @@ class Studio:
             raise ActionError("No such video.")
         return p
 
+    def length_ok(self, user: dict, length: float) -> None:
+        """Any length from 5 seconds up to what their access allows (the chips are only quick picks)."""
+        top = self.tier(user).max_seconds
+        if not 5 <= float(length) <= top:
+            raise ActionError(f"Pick a length between 5 seconds and {top // 60} minutes." if top >= 120 else
+                              f"Pick a length between 5 and {top} seconds."
+                              + (" Longer films come with special access." if top < max(LENGTHS) else ""))
+
     def create_project(self, user: dict, title: str, shapes: str, length: float, intent: str, pace: str = "balanced",
-                       kind: str = "montage", style: str = "designed") -> dict:
+                       kind: str = "montage", style: str = "designed", cut_note: str = "", improvise: int = 35,
+                       describe: str = "") -> dict:
         if (left := self.videos_left(user)) is not None and left <= 0:
             raise ActionError("You've used all your videos for this trial. Thank you!")
         if shapes not in ("9:16", "16:9", "both"):
             raise ActionError("Pick a shape.")
-        if int(length) not in self.lengths_for(user):
-            raise ActionError("Pick a length.")
+        routed = ""
+        if kind == "other":  # their own kind of film: the engine that can make it, and why (shown, and changeable)
+            describe = " ".join((describe or "").split())[:600]
+            if len(describe) < 3:
+                raise ActionError("Describe the film you have in mind.")
+            kind, routed = route_kind(describe)
+            intent = (describe + (" " + intent if intent.strip() else "")).strip()
+        self.length_ok(user, length)
         if pace not in ("calm", "balanced", "fast", "every"):
             raise ActionError("Pick how fast it should cut.")
         pace = pace_from_note(pace, intent)
@@ -233,9 +290,10 @@ class Studio:
         now = time.time()
         title = " ".join(title.split())[:60] or time.strftime("My video, %d %b")
         self.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated, pace, kind, "
-                    "music, style) VALUES (?,?,?,?,?,?,'setup',?,?,?,?,?,?)",
-                    (pid, user["id"], title, shapes, float(length), " ".join(intent.split())[:600], now, now, pace, kind,
-                     "none" if kind != "montage" or requirements.wants_no_music(intent) else "made", style))
+                    "music, style, cut_note, improvise, sound, routed) VALUES (?,?,?,?,?,?,'setup',?,?,?,?,?,?,?,?,?,?)",
+                    (pid, user["id"], title, shapes, round(float(length), 1), " ".join(intent.split())[:900], now, now,
+                     pace, kind, "none" if kind != "montage" or requirements.wants_no_music(intent) else "made", style,
+                     " ".join((cut_note or "").split())[:400], max(0, min(100, int(improvise))), "natural", routed))
         workdir(self.s, user["id"], pid).ensure()
         return self.db.project(pid)
 
@@ -446,10 +504,24 @@ class Studio:
             raise ActionError("Pick a beat made for you, or no music.")
         self.db.run("UPDATE projects SET music=?, updated=? WHERE id=?", (choice, time.time(), project["id"]))
 
+    def set_sound(self, project: dict, sound: str) -> None:
+        """With no music: keep the clips' own sound, or a silent film."""
+        self._guard(project, "setup")
+        if sound not in ("natural", "silent"):
+            raise ActionError("Pick the clips' own sound, or silence.")
+        self.db.run("UPDATE projects SET sound=?, updated=? WHERE id=?", (sound, time.time(), project["id"]))
+
+    def set_kind(self, project: dict, kind: str) -> None:
+        """Before starting, they can move a film to another engine (when the routing of 'something else' was wrong)."""
+        self._guard(project, "setup")
+        if kind not in ("montage", "voice", "talk"):
+            raise ActionError("Pick what you are making.")
+        self.db.run("UPDATE projects SET kind=?, routed='', music=?, updated=? WHERE id=?",
+                    (kind, "made" if kind == "montage" else "none", time.time(), project["id"]))
+
     def set_length(self, project: dict, length: int) -> None:
         self._guard(project, "setup")
-        if int(length) not in self.lengths_for(self.user(project["user_id"])):
-            raise ActionError("Pick one of the lengths.")
+        self.length_ok(self.user(project["user_id"]), length)
         self.db.run("UPDATE projects SET length=?, updated=? WHERE id=?", (float(length), time.time(), project["id"]))
 
     def start(self, project: dict) -> None:
@@ -529,6 +601,54 @@ class Studio:
             raise ActionError("Say what to change, so the next sample is better.")
         self.db.run("UPDATE projects SET sample_tries=sample_tries+1 WHERE id=?", (project["id"],))
         self._enqueue(project, "sample", {"pitch": project["chosen"], "note": note})
+
+    # ------------------------------------------------------------------ going back, stopping a step
+    BACK_FROM = {"setup": ("choose", "review", "failed", "paused"), "choose": ("review",)}
+    STOP_TO = {"prepare": "setup", "pitch": "choose", "sample": "choose", "render": "review", "revise": "done"}
+
+    def back_targets(self, project: dict) -> list[str]:
+        """The earlier stages this video can go back to now (none while a step runs)."""
+        if self.db.active_job(project["id"]):
+            return []
+        out = [to for to, froms in self.BACK_FROM.items() if project["stage"] in froms]
+        if "choose" in out and not self.pitches(project):
+            out.remove("choose")  # an explainer without looks has no ideas to go back to
+        return out
+
+    def go_back(self, project: dict, to: str) -> None:
+        """Back to an earlier stage to change something. To the clips and settings: their uploads stay, the ideas
+        made from the old set go (they would be about clips that may change), and starting again re-uses everything
+        already measured. To the ideas: the sample stays as it was."""
+        if to not in self.back_targets(project):
+            raise ActionError("This video can't go back there right now.")
+        if to == "choose":
+            self.back_to_ideas(project)
+            return
+        self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
+        self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0, sample_tries=0, error=NULL, note='', updated=? "
+                    "WHERE id=?", (time.time(), project["id"]))
+        self.db.set_stage(project["id"], "setup")
+        self.db.event(project["id"], f"Went back to the setup from '{project['stage']}'.", "info")
+
+    def stop(self, project: dict) -> None:
+        """Stop the step that is running or waiting, and go back to where they were before it. A step already
+        running on the renderer is dropped there (the lane starts again), so nothing it was making lands later."""
+        job = self.db.active_job(project["id"])
+        if job is None:
+            raise ActionError("Nothing is running for this video.")
+        if job["status"] == "running" and self.s.jobs != "remote":
+            raise ActionError("This step is in the middle of its work and can't be stopped right now.")
+        to = self.STOP_TO.get(job["kind"], "setup")
+        if job["kind"] == "sample" and not self.pitches(project):
+            to = "setup"
+        self.db.run("UPDATE jobs SET status='cancelled', finished=?, abort=CASE WHEN status='running' THEN ? ELSE abort "
+                    "END, error='stopped by the person' WHERE id=?", (time.time(), time.time(), job["id"]))
+        self.db.step(job["id"], "Stopped.")
+        if to == "setup":
+            self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
+            self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0, sample_tries=0 WHERE id=?", (project["id"],))
+        self.db.set_stage(project["id"], to)
+        self.db.event(project["id"], f"Stopped the {job['kind']} step; back to '{to}'.", "info", job["id"])
 
     def back_to_ideas(self, project: dict) -> None:
         self._guard(project, "review")
@@ -611,13 +731,14 @@ class Studio:
 
         pipe = Pipeline(work, self.cfg, None, progress, owner=owner)
         pipe.no_music = project["music"] == "none" and not project["song"]
+        pipe.natural_sound = project.get("sound") == "natural"
         kind = brain_kind_for(self.s, owner)
         pipe.brain = make_brain(kind, self.s, self._spender(project, user["id"], job["id"]), work.brain,
                                 pipe.project.load_signals)
         return pipe
 
     def _context(self, pipe: Pipeline, project: dict, user: dict):
-        return pipe.context(self.shapes(project), project["length"], project["intent"],
+        return pipe.context(self.shapes(project), project["length"], ask_text(project),
                             rules_for(self.profile(user).rules, project["kind"]),
                             project["pace"])
 
@@ -682,7 +803,7 @@ class Studio:
                     look: Direction | None = None):
         from ..explainer.make import fit
 
-        raw = pipe.brain.script_voice(speech["utterances"], speech["duration"], project["kind"], project["intent"],
+        raw = pipe.brain.script_voice(speech["utterances"], speech["duration"], project["kind"], ask_text(project),
                                       rules_for(self.profile(user).rules, project["kind"]), previous, feedback,
                                       style=project["style"], look=look)
         update = {"style": project["style"]}
@@ -715,7 +836,7 @@ class Studio:
             "9:16" if (speech.get("height") or 0) > (speech.get("width") or 0) else "16:9")
         self.db.job_progress(job["id"], 0.25, "Imagining how it could look")
         profile = self.profile(user)
-        looks = pipe.brain.directions(speech["utterances"], float(speech["duration"]), project["kind"], project["intent"],
+        looks = pipe.brain.directions(speech["utterances"], float(speech["duration"]), project["kind"], ask_text(project),
                                       rules_for(profile.rules, project["kind"]), shape, n=n,
                                       rejected=rejected, reason=reason, own_idea=own, base=base, change=reason,
                                       taste=profile.taste_text())

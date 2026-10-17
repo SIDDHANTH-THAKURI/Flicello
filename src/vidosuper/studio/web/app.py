@@ -116,6 +116,9 @@ def create_app(studio: Studio) -> FastAPI:
     templates.env.filters["eta"] = eta_text
     templates.env.filters["ago_s"] = lambda n: f"{int(n)} s" if int(n) < 60 else f"{int(n) // 60} min {int(n) % 60:02d} s" if int(n) < 3600 else f"{int(n) // 3600} h {int(n) % 3600 // 60} min"
     templates.env.filters["span"] = lambda n: f"{int(n)} seconds" if int(n) <= 60 else f"{int(n) / 60:g} min"
+    from ..service import IMPROVISE
+
+    templates.env.globals["IMPROVISE"] = IMPROVISE
     templates.env.filters["noids"] = lambda t: MOMENT_ID.sub("", str(t or "")).strip()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     analytics.ensure(studio.db)
@@ -416,12 +419,22 @@ def create_app(studio: Studio) -> FastAPI:
 
     @app.post("/new")
     def new_post(request: Request, csrf: str = Form(""), title: str = Form(""), shapes: str = Form("9:16"),
-                 length: int = Form(30), intent: str = Form(""), pace: str = Form("balanced"),
-                 kind: str = Form("montage"), style: str = Form("designed")):
+                 length: str = Form("30"), length_custom: str = Form(""), length_unit: str = Form("s"),
+                 intent: str = Form(""), pace: str = Form("balanced"), kind: str = Form("montage"),
+                 style: str = Form("designed"), cut_note: str = Form(""), improvise: int = Form(35),
+                 describe: str = Form("")):
         user, sess = need_user(request)
         check_csrf(sess, csrf)
         try:
-            project = studio.create_project(user, title, shapes, length, intent, pace, kind, style)
+            if length == "custom":  # their own length, in seconds or minutes
+                try:
+                    seconds = float(length_custom.replace(",", ".")) * (60 if length_unit == "min" else 1)
+                except ValueError:
+                    raise ActionError("Type the length as a number.") from None
+            else:
+                seconds = float(length or 30)
+            project = studio.create_project(user, title, shapes, seconds, intent, pace, kind, style, cut_note,
+                                            improvise, describe)
         except ActionError as exc:
             return page(request, "new.html", user, sess, left=studio.videos_left(user), error=str(exc),
                         default_pace=pace, **new_ctx(user))
@@ -450,6 +463,7 @@ def create_app(studio: Studio) -> FastAPI:
                     joblog=steps_of(job or (studio.db.one("SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
                                                           (pid,)) if p["stage"] == "failed" else None)),
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
+                    backs=studio.back_targets(p),
                     lengths=studio.lengths_for(user),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
                     note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
@@ -483,6 +497,14 @@ def create_app(studio: Studio) -> FastAPI:
     def music(request: Request, pid: str, csrf: str = Form(""), choice: str = Form("made")):
         return act(request, csrf, pid, lambda u, p: studio.set_music(p, choice))
 
+    @app.post("/p/{pid}/sound")
+    def sound(request: Request, pid: str, csrf: str = Form(""), sound: str = Form("natural")):
+        return act(request, csrf, pid, lambda u, p: studio.set_sound(p, sound))
+
+    @app.post("/p/{pid}/kind")
+    def kind(request: Request, pid: str, csrf: str = Form(""), kind: str = Form("montage")):
+        return act(request, csrf, pid, lambda u, p: studio.set_kind(p, kind))
+
     @app.post("/p/{pid}/length")
     def length(request: Request, pid: str, csrf: str = Form(""), seconds: int = Form(30)):
         return act(request, csrf, pid, lambda u, p: studio.set_length(p, seconds))
@@ -499,6 +521,14 @@ def create_app(studio: Studio) -> FastAPI:
     def another(request: Request, pid: str, csrf: str = Form(""), reason: str = Form(""), own: str = Form(""),
                 base: int = Form(0)):
         return act(request, csrf, pid, lambda u, p: studio.another(p, reason, own, base))
+
+    @app.post("/p/{pid}/back")
+    def go_back(request: Request, pid: str, csrf: str = Form(""), to: str = Form("setup")):
+        return act(request, csrf, pid, lambda u, p: studio.go_back(p, to))
+
+    @app.post("/p/{pid}/stop")
+    def stop(request: Request, pid: str, csrf: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.stop(p))
 
     @app.post("/p/{pid}/sample")
     def sample(request: Request, pid: str, csrf: str = Form(""), verdict: str = Form(""), note: str = Form("")):

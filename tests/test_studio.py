@@ -873,7 +873,7 @@ def test_no_song_asks_for_a_made_beat_or_no_music_and_no_music_means_none_plays(
         studio.set_music(studio.db.project(pid), "loud")
     client.post(f"/p/{pid}/music", data={"csrf": csrf, "choice": "none"})
     assert studio.db.project(pid)["music"] == "none"
-    assert "Your video plays with its own sound only" in client.get(f"/p/{pid}").text
+    assert "sound it was filmed with" in client.get(f"/p/{pid}").text  # the default with no music: the clips' own sound
     for name in ("a_stable.mp4", "c_pan.mp4"):
         _upload(client, csrf, pid, media / "clips" / name, "clip")
     client.post(f"/p/{pid}/start", data={"csrf": csrf})
@@ -889,6 +889,7 @@ def test_no_song_asks_for_a_made_beat_or_no_music_and_no_music_means_none_plays(
     work = studio.s.users_dir / friend["id"] / "projects" / pid
     edl = json.loads(next((work / "out").glob("v1-*.edl.json")).read_text(encoding="utf-8"))
     assert edl["music"] is None  # nothing plays under the cut
+    assert all(seg["audio"]["mode"] == "original" for seg in edl["segments"])  # ... and each shot keeps its own sound
 
 
 def test_the_improvement_routine_starts_after_five_new_ratings_once(studio, monkeypatch):
@@ -1110,3 +1111,39 @@ def test_the_time_left_for_drawing_a_talk_comes_from_its_length_and_how_fast_tal
     assert 2600 <= studio.eta(running) <= 3200  # ten minutes in, about fifty to go
     montage = studio.create_project(friend, "z", "9:16", 15, "")
     assert studio.eta({**job, "project_id": montage["id"]}) == 300  # montages: what such jobs usually take
+
+
+def test_a_new_film_takes_their_own_length_cut_and_kind_and_the_ai_is_told_all_of_it(studio):
+    from vidosuper.studio.service import ActionError, ask_text
+
+    fay = _friend(studio, "Fay")
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Fay", "password": "a long password 2"})
+    studio.db.run("UPDATE users SET onboarded=1 WHERE id=?", (fay["id"],))
+    page = client.get("/new").text
+    assert "Something else" in page and "My own length" in page and 'name="improvise"' in page
+    csrf = _csrf(page)
+    # their own length (a beta person: up to 60 s), their own words for the cut, a bold improvisation
+    r = client.post("/new", data={"csrf": csrf, "title": "Cafe", "shapes": "9:16", "length": "custom", "length_custom": "40",
+                                  "length_unit": "s", "pace": "balanced", "cut_note": "slow, then hard at the drop",
+                                  "improvise": "90", "intent": "my cafe's morning"}, follow_redirects=False)
+    p = studio.db.project(r.headers["location"].rsplit("/", 1)[1])
+    assert p["length"] == 40 and p["cut_note"] == "slow, then hard at the drop" and p["improvise"] == 90
+    ask = ask_text(p)
+    assert "my cafe's morning" in ask and "slow, then hard at the drop" in ask and "Go wild" in ask
+    with pytest.raises(ActionError, match="special access"):
+        studio.create_project(fay, "x", "9:16", 75, "")
+    # 'something else' is routed to the engine that can make it, with the reason shown and a way to change it
+    other = studio.create_project(fay, "Pod", "9:16", 30, "", kind="other", describe="my podcast as a cartoon")
+    assert other["kind"] == "voice" and "recording of a voice" in other["routed"] and "podcast" in other["intent"]
+    page = client.get(f"/p/{other['id']}").text
+    assert "How we'll make it" in page
+    studio.set_kind(other, "montage")
+    assert studio.db.project(other["id"])["kind"] == "montage"
+    # no music: their clips' own sound by default, or silence, and the page says which (truthfully)
+    p = studio.db.project(p["id"])
+    studio.set_music(p, "none")
+    page = client.get(f"/p/{p['id']}").text
+    assert "Keep my clips" in page and "sound it was filmed with" in page
+    studio.set_sound(studio.db.project(p["id"]), "silent")
+    assert "no sound at all" in client.get(f"/p/{p['id']}").text

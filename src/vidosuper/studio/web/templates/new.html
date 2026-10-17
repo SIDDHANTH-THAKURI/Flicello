@@ -29,8 +29,14 @@
       <label class="kind"><input type="radio" name="kind" value="voice">
         <span class="kind-card"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="18" y="5" width="12" height="22" rx="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 22c0 7 6 12 13 12s13-5 13-12M24 34v8M17 42h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <b>Just my voice</b><small>A voice memo becomes an animated video. No camera needed.</small></span></label>
+      <label class="kind"><input type="radio" name="kind" value="other">
+        <span class="kind-card"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6l4 10 10 4-10 4-4 10-4-10-10-4 10-4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M38 32l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <b>Something else</b><small>Describe it in your words; we'll say how we'd make it.</small></span></label>
     </div>
   </fieldset>
+
+  <label class="field" data-kinds="other"><span>Describe the film you have in mind</span>
+    <textarea name="describe" rows="3" maxlength="600" placeholder="A recipe video from my cooking clips with the steps on screen / my podcast as a cartoon / a trailer for my band's gig"></textarea></label>
 
   <label class="field"><span>Name it <small class="muted">(optional)</small></span><input name="title" maxlength="60" placeholder="Beach day"></label>
 
@@ -44,7 +50,7 @@
     </div>
   </fieldset>
 
-  <fieldset class="group" data-kinds="montage voice">
+  <fieldset class="group" data-kinds="montage voice other">
     <legend>Where will you post it?</legend>
     <div class="choices">
       <label class="choice"><input type="radio" name="shapes" value="9:16" checked><span>Reels · Shorts · TikTok <i>vertical 9:16</i></span></label>
@@ -53,21 +59,38 @@
     </div>
   </fieldset>
 
-  <fieldset class="group" data-kinds="montage">
+  <fieldset class="group" data-kinds="montage other">
     <legend>How long?</legend>
     <div class="choices">
       {% for n in lengths %}<label class="choice"><input type="radio" name="length" value="{{ n }}" {% if n == 30 %}checked{% endif %}><span>{{ n|span }}</span></label>{% endfor %}
+      <label class="choice"><input type="radio" name="length" value="custom"><span>My own length</span></label>
+    </div>
+    <div class="inline-fields" data-when="length=custom">
+      <input class="input num-in" name="length_custom" inputmode="decimal" maxlength="5" placeholder="{{ 40 if lengths[-1] <= 60 else 2 }}" aria-label="Length">
+      <select class="input" name="length_unit" aria-label="Unit"><option value="s">seconds</option>{% if lengths[-1] >= 120 %}<option value="min" selected>minutes</option>{% endif %}</select>
+      <small class="muted">up to {{ lengths[-1]|span }}</small>
     </div>
     {% if more_lengths %}<p class="lead-s muted">Longer films, up to 10 minutes, come with special access.</p>{% endif %}
   </fieldset>
 
-  <fieldset class="group" data-kinds="montage">
+  <fieldset class="group" data-kinds="montage other">
     <legend>How should it cut?</legend>
     <div class="choices">
       <label class="choice"><input type="radio" name="pace" value="calm" {% if default_pace == 'calm' %}checked{% endif %}><span>Calm and cinematic</span></label>
       <label class="choice"><input type="radio" name="pace" value="balanced" {% if default_pace not in ('calm', 'fast', 'every') %}checked{% endif %}><span>A mix</span></label>
       <label class="choice"><input type="radio" name="pace" value="fast" {% if default_pace == 'fast' %}checked{% endif %}><span>Fast, on the beat</span></label>
       <label class="choice"><input type="radio" name="pace" value="every" {% if default_pace == 'every' %}checked{% endif %}><span>A shot on every beat <i>every hit of the music</i></span></label>
+    </div>
+    <label class="field gap-top"><span>Or in your own words <small class="muted">(optional)</small></span>
+      <input name="cut_note" maxlength="400" placeholder="Slow and dreamy, then speed up hard at the drop / long takes, no fast cuts"></label>
+  </fieldset>
+
+  <fieldset class="group">
+    <legend>How much should it improvise?</legend>
+    <div class="slider">
+      <input type="range" name="improvise" min="0" max="100" step="5" value="35" id="improvise" aria-describedby="improvise-says">
+      <div class="slider-ends"><span>Follow me exactly</span><span>Surprise me</span></div>
+      <p class="help" id="improvise-says" data-says='[[20, "Sticks to exactly what you ask for."], [50, "Follows your idea, adding its own touches where they clearly help."], [80, "Takes creative liberties: an unexpected structure, bold transitions. Keeps your must-haves."], [100, "Goes wild: the boldest version your footage can carry. Keeps only your must-haves."]]'>Follows your idea, adding its own touches where they clearly help.</p>
     </div>
   </fieldset>
 

@@ -24,7 +24,7 @@
     <div class="meta rise d2">
       {% if p.kind == 'talk' %}<span>Talking video</span><span>{{ 'Designer animations' if p.style == 'designed' else 'Clean labels' }}</span>
       {% elif p.kind == 'voice' %}<span>Voice to animation</span><span>{{ p.shapes|shapes }}</span>
-      {% else %}<span>{{ p.shapes|shapes }}</span><span>{{ p.length|int }} s</span>{% endif %}
+      {% else %}<span>{{ p.shapes|shapes }}</span><span>{{ p.length|span }}</span>{% endif %}
       {% if p.song and p.kind == 'montage' %}<span>♪ {{ p.song }}</span>{% endif %}
       {% if p.intent %}<span><q>{{ p.intent }}</q></span>{% endif %}
     </div>
@@ -34,7 +34,12 @@
 {% if here >= 0 %}
 <ol class="track rise d2" aria-label="Progress">
   {% for key, label in steps %}
-  <li class="{{ 'past' if loop.index0 < here else ('now' ~ (' busy' if busy else '') if loop.index0 == here else '') }}">{{ label }}</li>
+  <li class="{{ 'past' if loop.index0 < here else ('now' ~ (' busy' if busy else '') if loop.index0 == here else '') }}">
+    {%- if loop.index0 < here and key in backs -%}
+    <form method="post" action="/p/{{ p.id }}/back"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="to" value="{{ key }}">
+      <button class="step-back" type="submit" title="Go back to change this">{{ label }}</button></form>
+    {%- else -%}{{ label }}{%- endif -%}
+  </li>
   {% endfor %}
 </ol>
 {% endif %}
@@ -101,6 +106,17 @@
   </div>
 
   <aside class="stick">
+    {% if p.routed %}
+    <section class="panel rise d3">
+      <h2>How we'll make it</h2>
+      <p class="lead-s">{{ p.routed }}</p>
+      <form method="post" action="/p/{{ p.id }}/kind" class="choices">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        {% for k, label in [('montage', 'A film from my clips'), ('talk', 'Me talking, with graphics'), ('voice', 'Just my voice')] %}
+        <button class="btn {% if p.kind == k %}btn-sun{% endif %}" type="submit" name="kind" value="{{ k }}"><span>{% if p.kind == k %}✓ {% endif %}{{ label }}</span></button>{% endfor %}
+      </form>
+    </section>
+    {% endif %}
     {% if p.kind == 'montage' %}
     <section class="panel rise d3">
       <h2>Music <small class="muted">(optional)</small></h2>
@@ -118,7 +134,16 @@
         <button class="btn {% if p.music != 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="made"><span>{% if p.music != 'none' %}✓ {% endif %}A beat made for you</span></button>
         <button class="btn {% if p.music == 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="none"><span>{% if p.music == 'none' %}✓ {% endif %}No music</span></button>
       </form>
-      <p class="help">{% if p.music == 'none' %}Your video plays with its own sound only. The cuts still follow a steady rhythm.{% else %}We compose a short original beat to cut on (AI-made). It's yours to post anywhere.{% endif %}</p>
+      {% if p.music == 'none' %}
+      <form method="post" action="/p/{{ p.id }}/sound" class="choices gap-top">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn {% if p.sound == 'natural' %}btn-sun{% endif %}" type="submit" name="sound" value="natural"><span>{% if p.sound == 'natural' %}✓ {% endif %}Keep my clips' own sound</span></button>
+        <button class="btn {% if p.sound != 'natural' %}btn-sun{% endif %}" type="submit" name="sound" value="silent"><span>{% if p.sound != 'natural' %}✓ {% endif %}Silent</span></button>
+      </form>
+      <p class="help">{% if p.sound == 'natural' %}Each shot plays with the sound it was filmed with, softened at the cuts.{% else %}The film has no sound at all.{% endif %} The cuts still follow a steady rhythm.</p>
+      {% else %}
+      <p class="help">We make a short original beat to cut on. It's yours to post anywhere.</p>
+      {% endif %}
       {% endif %}
     </section>
     {% elif p.kind == 'voice' %}
@@ -127,7 +152,7 @@
       <form method="post" action="/p/{{ p.id }}/music" class="choices">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button class="btn {% if p.music == 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="none"><span>{% if p.music == 'none' %}✓ {% endif %}No music</span></button>
-        <button class="btn {% if p.music != 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="made"><span>{% if p.music != 'none' %}✓ {% endif %}A soft beat (AI-made)</span></button>
+        <button class="btn {% if p.music != 'none' %}btn-sun{% endif %}" type="submit" name="choice" value="made"><span>{% if p.music != 'none' %}✓ {% endif %}A soft beat (made for you)</span></button>
       </form>
     </section>
     {% endif %}
@@ -152,6 +177,12 @@
     {% for st in joblog %}<li class="{{ 'now' if st.now else 'done' }}"><span>{{ st.m }}</span><time>{{ st.s|ago_s }}</time></li>{% endfor %}
   </ol>
   <p class="help">You can close this page; it keeps going.</p>
+  <details class="stop">
+    <summary>Stop this step</summary>
+    <form method="post" action="/p/{{ p.id }}/stop"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <p class="help">It stops now and goes back to where you were, so you can change something.</p>
+      <button class="btn" type="submit">Stop it</button></form>
+  </details>
 </section>
 
 {# ------------------------------------------------------------------ choose a look (voice and designed talking videos) #}
@@ -344,6 +375,17 @@
   <form method="post" action="/p/{{ p.id }}/retry"><input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="btn-sun" type="submit"><span>Try again</span></button></form>
   <p class="help"><a href="#report">Tell us what happened</a>: it helps us fix it for everyone.</p>
+</section>
+{% endif %}
+
+{% if 'setup' in backs and p.stage not in BUSY %}
+<section class="panel gap-top back-zone">
+  <h2>Change something?</h2>
+  <div class="choices">
+    <form method="post" action="/p/{{ p.id }}/back"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="to" value="setup">
+      <button class="btn" type="submit">Back to {{ 'clips' if p.kind == 'montage' else 'your ' ~ ('recording' if p.kind == 'voice' else 'video') }} and settings</button></form>
+  </div>
+  <p class="help">Your uploads stay. Add or remove {{ 'clips' if p.kind == 'montage' else 'files' }}, change the music or the length, then start again: what's already been measured is reused.</p>
 </section>
 {% endif %}
 

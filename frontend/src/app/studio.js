@@ -234,6 +234,24 @@ function newFilm() {
   };
   $$('input[name="kind"]', form).forEach((r) => r.addEventListener('change', apply));
   apply();
+  // fields shown only for one choice (data-when="length=custom")
+  const when = () => $$('[data-when]', form).forEach((el) => {
+    const [name, value] = el.dataset.when.split('=');
+    const on = (form.querySelector(`input[name="${name}"]:checked`) || {}).value === value;
+    el.hidden = !on;
+    if (on) { const first = el.querySelector('input'); if (first && document.activeElement?.name === name) first.focus(); }
+  });
+  form.addEventListener('change', when);
+  when();
+  // what the improvise slider means, in words, as it moves
+  const slider = $('#improvise');
+  const says = $('#improvise-says');
+  if (slider && says) {
+    const steps = JSON.parse(says.dataset.says);
+    const show = () => { says.textContent = (steps.find(([top]) => Number(slider.value) <= top) || steps[steps.length - 1])[1]; };
+    slider.addEventListener('input', show);
+    show();
+  }
 }
 
 function inviteLink() {

@@ -244,3 +244,36 @@ def test_a_reported_problem_is_kept_with_what_happened_and_the_owner_is_told(ser
 
     assert any("stuck for ages" in m["text"] and m["to"] == "me@example.com" for m in mail.outbox(server.s))
     assert "stuck for ages" in client.get("/admin").text
+
+
+def test_a_video_can_go_back_to_its_clips_and_a_running_step_can_be_stopped(server):
+    from vidosuper.studio.service import ActionError
+
+    user, p = _project(server)
+    # waiting for its turn: stopped at once, back to the setup
+    server.db.run("UPDATE projects SET stage='preparing' WHERE id=?", (p["id"],))
+    job = server.db.enqueue("prepare", p["id"], user["id"])
+    server.stop(server.db.project(p["id"]))
+    assert server.db.one("SELECT status FROM jobs WHERE id=?", (job,))["status"] == "cancelled"
+    assert server.db.project(p["id"])["stage"] == "setup"
+    # running on the renderer: cancelled, and the renderer is told to drop it
+    server.db.run("UPDATE projects SET stage='sampling', chosen=1 WHERE id=?", (p["id"],))
+    server.db.run("INSERT INTO pitches(project_id, round, data, stills, created) VALUES (?,1,'{}','[]',0)", (p["id"],))
+    job = server.db.enqueue("sample", p["id"], user["id"])
+    server.db.claim("quick", "renderer-quick")
+    server.stop(server.db.project(p["id"]))
+    row = server.db.one("SELECT status, abort FROM jobs WHERE id=?", (job,))
+    assert row["status"] == "cancelled" and row["abort"]
+    assert server.db.project(p["id"])["stage"] == "choose"  # back to the ideas
+    # from the ideas, back to the clips: the ideas made from the old set go, the uploads stay
+    assert server.back_targets(server.db.project(p["id"])) == ["setup"]
+    server.go_back(server.db.project(p["id"]), "setup")
+    proj = server.db.project(p["id"])
+    assert proj["stage"] == "setup" and proj["chosen"] is None and not server.pitches(proj)
+    with pytest.raises(ActionError):
+        server.go_back(proj, "setup")  # already there
+    client = TestClient(create_app(server))
+    client.cookies.set("vs_session", accounts.new_session(server.db, server.s, user["id"], "1.2.3.4"))
+    server.db.run("UPDATE projects SET stage='review' WHERE id=?", (p["id"],))
+    page = client.get(f"/p/{p['id']}").text
+    assert "Back to clips and settings" in page and 'class="step-back"' in page
