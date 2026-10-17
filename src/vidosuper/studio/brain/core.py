@@ -83,9 +83,11 @@ class StoryContext:
 
     def impact_text(self) -> list[str]:
         lines = []
-        for short, f in self.facts.items():
-            if f.impacts:
-                lines.append(f"- {short}: " + ", ".join(f"{t:.2f}" for t in f.impacts) + " s")
+        by_clip: dict[str, list[float]] = {}
+        for short, t in hero_hits(self.facts):  # the same hits the plan is checked against
+            by_clip.setdefault(short, []).append(t)
+        for short, ts in by_clip.items():
+            lines.append(f"- {short}: " + ", ".join(f"{t:.2f}" for t in ts) + " s")
         if not lines:
             return []
         return ["# Real hits in the footage (found from the clips' own sound, to the millisecond)\n" + "\n".join(lines) +
@@ -96,6 +98,25 @@ class StoryContext:
 
 
 # ---------------------------------------------------------------- checks shared by both brains
+
+def hero_hits(facts: dict[str, ClipFacts], gap: float = 1.2) -> list[tuple[str, float]]:
+    """The hits a plan must feature: inside a moment the analyst logged as usable (a clap in a stretch it threw out is
+    not a hero), and hits closer than `gap` seconds count once (a ball bouncing twice is one shot, not two: the
+    old rule asked for a shot per bounce and no plan could pass, so a friend's film never got made)."""
+    out: list[tuple[str, float]] = []
+    for short, f in facts.items():
+        last = None
+        for t in sorted(f.impacts):
+            if f.moments and not any(m["start"] - 0.05 <= t <= m["end"] + 0.05 for m in f.moments):
+                continue
+            if any(a <= t <= b for a, b in f.avoid):
+                continue
+            if last is not None and t - last < gap:
+                continue
+            out.append((short, t))
+            last = t
+    return out
+
 
 def check_analysis(analysis: ClipAnalysis, clip: ClipInfo) -> list[str]:
     problems = []
@@ -243,15 +264,16 @@ def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
             if s.kind != "stutter" and secs > limit:
                 problems.append(f"shot {i + 1} lasts {secs:.1f}s; keep shots under {limit:g}s "
                                 f"({int(limit / beats.period)} beats) - split it or move on")
-    hits = [(short, t) for short, f in facts.items() for t in f.impacts]
+    hits = hero_hits(facts)
     if hits and plan.plan and len(hits) <= 2 * len(plan.plan):  # real hits are the heroes: don't leave them out for
         # repeats (but a talking video's claps and consonants are not heroes: more hits than shots is noise, not a cue)
         used = [(short, t) for short, t in hits if any(m.clip == short and m.start - 0.05 <= t <= m.end + 0.05 for m in plan.pool)]
-        need = math.ceil(0.8 * min(len(hits), len(plan.plan)))
+        need = math.ceil(0.5 * min(len(hits), len(plan.plan)))  # most of them: a plan can have reasons to skip one
         if len(used) < need:
             left = [f"{short} at {t:.2f}" for short, t in hits if (short, t) not in used][:6]
             problems.append(f"{len(hits)} real hits were found in the footage but the plan uses only {len(used)}: give "
-                            f"each hit its own shot (pool window around it, `peak` = its time). Unused: {', '.join(left)}")
+                            f"at least {need} their own shot (pool window around it, `peak` = its time). Unused: "
+                            f"{', '.join(left)}")
     if ctx.pace == "fast" and plan.plan:
         lengths = [s.beats * (s.count if s.kind == "stutter" else 1) for s in plan.plan]
         mean = sum(lengths) / len(lengths)

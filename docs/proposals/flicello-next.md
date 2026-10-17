@@ -109,7 +109,9 @@ Paddle).
   - output token caps.
 - **Content:** NCII/CSAM rules (done in the policy). Later: automated checks on public films, plus the
   abuse@ inbox.
-- **Admin:** a flag for unusual accounts (volume, repeated failures, spend), with one-click suspend. the PC renders for flicello.com (owner's idea, 2026-10-17)
+- **Admin:** a flag for unusual accounts (volume, repeated failures, spend), with one-click suspend.
+
+## 3. The PC renders for flicello.com (owner's idea, 2026-10-17)
 
 - **Design: the PC pulls.**
   - A worker on the PC asks flicello.com over HTTPS for work, downloads the job's clips, renders and uploads the
@@ -159,3 +161,12 @@ Paddle).
 
 Agreed order (2026-10-17): 1 PC renderer (done), 2 abuse limits + payments, 3 understanding card + preview,
 4 test bench alongside, 5 Modal, 6 public gallery.
+
+## Done 2026-10-17 (not on the list, asked for in between)
+
+- The 16 Oct voice video fixed: no empty scenes, animations at their drawing's size, names respelled, film rules
+  kept out of explainers.
+- Looks: three painted looks per voice/talking video, refined live ("Repaint it", your own idea), learned per
+  person (profile taste); painted backdrops with camera moves; painted props in the look; a frosted text backing.
+  Needs GEMINI_API_KEY on the renderer (Tier 1, prepaid).
+- An allow-list for sign-in (three emails); the owner account linked to Google.

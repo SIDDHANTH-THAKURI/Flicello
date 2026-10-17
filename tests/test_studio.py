@@ -713,6 +713,8 @@ def test_a_fast_pace_is_enforced_and_hits_may_not_be_left_out():
     ctx = _ctx()
     ctx.pace = "fast"
     ctx.facts["c01"].impacts = [20.0, 30.0, 40.0, 50.0, 60.0]  # nowhere near any pool window
+    ctx.facts["c01"].moments = ctx.facts["c01"].moments + [{**ctx.facts["c01"].moments[0], "start": 18.0, "end": 62.0}]
+    ctx.facts["c01"].avoid = []
     shots = [PlanShot(kind="cut", beats=8, key="k1"), PlanShot(kind="cut", beats=8, key="k2"),
              PlanShot(kind="hit", beats=8, key="k3"), PlanShot(kind="hold", beats=8, key="k4")]
     problems = " | ".join(check_plan(_plan(shots), ctx))
@@ -720,6 +722,19 @@ def test_a_fast_pace_is_enforced_and_hits_may_not_be_left_out():
     assert "real hits were found" in problems  # five hits in c01, none given a shot
     ctx.pace = "balanced"
     assert "pace was asked" not in " | ".join(check_plan(_plan(shots), ctx))
+
+
+def test_hits_close_together_or_outside_usable_moments_dont_block_a_plan():
+    """A friend's film never got made: four hits, two 0.3 s apart, none in what the analyst logged as usable, and a
+    rule that wanted a shot for each. Close hits count once; hits outside usable moments don't count."""
+    from vidosuper.studio.brain.core import hero_hits
+
+    ctx = _ctx()
+    f = ctx.facts["c01"]
+    f.moments = [{**f.moments[0], "start": 20.0, "end": 30.0}]
+    f.avoid = []
+    f.impacts = [21.55, 21.88, 23.55, 28.70, 40.0]
+    assert hero_hits(ctx.facts) == [("c01", 21.55), ("c01", 23.55), ("c01", 28.70)]
 
 
 def test_reuse_barely_changes_the_framing_and_new_videos_remember_the_pace(studio):
