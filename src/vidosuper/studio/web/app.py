@@ -463,7 +463,7 @@ def create_app(studio: Studio) -> FastAPI:
                     joblog=steps_of(job or (studio.db.one("SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
                                                           (pid,)) if p["stage"] == "failed" else None)),
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
-                    backs=studio.back_targets(p), understood=studio.understanding(p),
+                    backs=studio.back_targets(p), understood=studio.understanding(p), tier=studio.tier(user),
                     names=clip_names(p) if p["stage"] == "understood" else {},
                     lengths=studio.lengths_for(user),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
@@ -660,10 +660,24 @@ def create_app(studio: Studio) -> FastAPI:
         p = owned(user, up["project_id"])
         if p["stage"] != "setup":
             raise HTTPException(409, "This video has already started.")
+        final = None
         try:
-            return await run_in_threadpool(finish_upload, studio.db, s, up, p)
+            body = await request.json()
+            final = int(body["size"]) if isinstance(body, dict) and body.get("size") is not None else None
+        except Exception:  # noqa: BLE001 - no body: the declared size stands
+            final = None
+        try:
+            return await run_in_threadpool(finish_upload, studio.db, s, up, p, final)
         except UploadError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/uploads/{uid}/cancel")
+    def upload_cancel(request: Request, uid: str):
+        user, _ = api_user(request)
+        from ..storage import cancel_upload
+
+        cancel_upload(studio.db, s, _upload(user, uid))
+        return {"ok": True}
 
     @app.post("/api/p/{pid}/clips/{cid}/delete")
     def clip_delete(request: Request, pid: str, cid: str):

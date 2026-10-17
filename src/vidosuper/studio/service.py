@@ -547,8 +547,8 @@ class Studio:
                 project = self.db.project(project["id"])
         if project["kind"] != "montage":
             tier = self.tier(self.user(project["user_id"]))
-            took = float(self.db.value("SELECT COALESCE(SUM(seconds), 0) FROM clips WHERE project_id=?",
-                                       (project["id"],), 0.0))
+            took = float(project.get("song_seconds") or 0.0) if project["kind"] == "voice" else float(
+                self.db.value("SELECT COALESCE(SUM(seconds), 0) FROM clips WHERE project_id=?", (project["id"],), 0.0))
             if took > tier.max_recording + 1:
                 raise ActionError(f"That recording is {took / 60:.1f} minutes; with your access a video can use up to "
                                   f"{tier.max_recording / 60:.0f}. Trim it and upload it again.")

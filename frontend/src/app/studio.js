@@ -64,7 +64,28 @@ function row(list, file) {
 }
 
 let uploading = 0;
-async function uploadFile(pid, file, kind, ui) {
+
+// One piece at `offset`, retried through a flaky connection; returns how many bytes the server has.
+async function putPiece(id, bytes, offset, ui, frac) {
+  let failures = 0;
+  for (;;) {
+    try {
+      return (await api('PUT', `/api/uploads/${id}?offset=${offset}`, bytes, true)).received;
+    } catch (err) {
+      if (err.status && err.status >= 400 && err.status < 500) throw err; // the server said no: stop
+      failures += 1;
+      if (failures > 8) throw new Error('connection lost; try again');
+      ui.set(frac, 'reconnecting…');
+      await sleep(Math.min(30000, 1000 * 2 ** failures));
+      try { // the piece may have arrived and only the answer got lost
+        const st = await api('GET', `/api/uploads/${id}`);
+        if (st.received === offset + bytes.byteLength) return st.received;
+      } catch { /* retry */ }
+    }
+  }
+}
+
+async function sendOriginal(pid, file, kind, ui) {
   const start = await api('POST', `/api/p/${pid}/uploads`, { kind, name: file.name, size: file.size });
   const chunk = start.chunk;
   let received = start.received, failures = 0;
@@ -87,13 +108,49 @@ async function uploadFile(pid, file, kind, ui) {
   return api('POST', `/api/uploads/${start.id}/done`);
 }
 
+// A clip is first made lighter on this device when that helps a lot (see shrink.js), and sent while it is made;
+// anything unusual and the original goes instead.
+async function uploadFile(pid, file, kind, ui) {
+  if (kind === 'clip') {
+    let p = null;
+    try {
+      const { plan } = await import('./shrink.js');
+      ui.set(0, 'checking…');
+      p = await plan(file, document.body.dataset.shapes, document.body.dataset.kind);
+    } catch { p = null; }
+    if (p) {
+      let start = null;
+      try {
+        const { convertAndSend } = await import('./shrink.js');
+        start = await api('POST', `/api/p/${pid}/uploads`, { kind, name: `${file.name.replace(/\.[^.]+$/, '')}.mp4`, size: file.size });
+        let frac = 0;
+        const size = await convertAndSend(p, start.chunk, (bytes, offset) => putPiece(start.id, bytes, offset, ui, frac), (f) => {
+          frac = f;
+          ui.set(f, `lighter on your device · ${Math.round(f * 100)}%`);
+        }, file.size);
+        ui.set(1, 'checking…');
+        return await api('POST', `/api/uploads/${start.id}/done`, { size });
+      } catch (err) {
+        console.warn('Flicello: sending the original instead of a lighter copy:', err && err.message);
+        if (!start && err.status && err.status >= 400 && err.status < 500) throw err; // refused (limits): same for the original
+        if (start) api('POST', `/api/uploads/${start.id}/cancel`).catch(() => {});
+        ui.set(0, 'sending the original…');
+      }
+    }
+  }
+  return sendOriginal(pid, file, kind, ui);
+}
+
 async function uploadAll(pid, files, kind, list) {
   uploading += 1;
   let ok = 0;
-  for (const file of files) {
-    const ui = row(list, file);
-    try { await uploadFile(pid, file, kind, ui); ui.ok(); ok += 1; } catch (err) { ui.fail(err.message); }
-  }
+  const queue = files.map((file) => ({ file, ui: row(list, file) }));
+  const lane = async () => { // two at a time: a slow first file doesn't hold up the rest
+    for (let job = queue.shift(); job; job = queue.shift()) {
+      try { await uploadFile(pid, job.file, kind, job.ui); job.ui.ok(); ok += 1; } catch (err) { job.ui.fail(err.message); }
+    }
+  };
+  await Promise.all([lane(), lane()]);
   uploading -= 1;
   if (ok && !uploading) setTimeout(() => window.location.reload(), 700);
 }

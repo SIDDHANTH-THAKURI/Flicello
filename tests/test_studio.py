@@ -1169,3 +1169,47 @@ def test_a_new_film_takes_their_own_length_cut_and_kind_and_the_ai_is_told_all_o
     assert "Keep my clips" in page and "sound it was filmed with" in page
     studio.set_sound(studio.db.project(p["id"]), "silent")
     assert "no sound at all" in client.get(f"/p/{p['id']}").text
+
+
+def test_a_clip_made_lighter_on_the_device_ends_at_its_real_size_and_a_given_up_one_is_cancelled(studio, media):
+    """The page streams a clip it re-encodes while sending it: it declares the original's size as an upper bound and
+    says the real size at the end; when it gives up, it cancels and sends the original."""
+    fay = _friend(studio, "Fay")
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Fay", "password": "a long password 2"})
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    pid = studio.create_project(fay, "Light", "9:16", 15, "")["id"]
+    data = (media / "clips" / "a_stable.mp4").read_bytes()
+    h = {"X-CSRF": csrf}
+    # given up half-way: cancelled, its space comes back, nothing is kept
+    up = client.post(f"/api/p/{pid}/uploads", json={"kind": "clip", "name": "big.mp4", "size": len(data) * 3}, headers=h).json()
+    client.put(f"/api/uploads/{up['id']}?offset=0", content=data[:1000], headers=h)
+    assert client.post(f"/api/uploads/{up['id']}/cancel", headers=h).json()["ok"]
+    assert studio.db.one("SELECT status FROM uploads WHERE id=?", (up["id"],))["status"] == "cancelled"
+    assert not (studio.s.uploads_dir / f"{up['id']}.part").exists()
+    # the lighter copy: declared at the original's size, finished at its own
+    up = client.post(f"/api/p/{pid}/uploads", json={"kind": "clip", "name": "big.mp4", "size": len(data) * 3}, headers=h).json()
+    assert client.put(f"/api/uploads/{up['id']}?offset=0", content=data, headers=h).json()["received"] == len(data)
+    assert client.post(f"/api/uploads/{up['id']}/done", json={"size": len(data) + 5}, headers=h).status_code == 400  # not what arrived
+    r = client.post(f"/api/uploads/{up['id']}/done", json={"size": len(data)}, headers=h)
+    assert r.status_code == 200, r.text
+    assert studio.db.one("SELECT bytes FROM clips WHERE project_id=?", (pid,))["bytes"] == len(data)
+    # and an upload without a final size still has to be complete
+    up = client.post(f"/api/p/{pid}/uploads", json={"kind": "clip", "name": "x.mp4", "size": len(data) + 10}, headers=h).json()
+    client.put(f"/api/uploads/{up['id']}?offset=0", content=data, headers=h)
+    assert client.post(f"/api/uploads/{up['id']}/done", headers=h).status_code == 400
+
+
+def test_a_recording_longer_than_their_access_allows_is_refused_with_their_own_limit(studio):
+    from vidosuper.studio.service import ActionError
+
+    fay = _friend(studio, "Fay")
+    for kind in ("voice", "talk"):
+        p = studio.create_project(fay, "Long", "9:16", 30, "", kind=kind)
+        if kind == "voice":
+            studio.db.run("UPDATE projects SET song='talk.m4a', song_seconds=400 WHERE id=?", (p["id"],))
+        else:
+            studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, created) VALUES "
+                          "('c1', ?, 'me.mp4', 'c1.mp4', 1, 400, 0)", (p["id"],))
+        with pytest.raises(ActionError, match="up to 3"):
+            studio.start(studio.db.project(p["id"]))

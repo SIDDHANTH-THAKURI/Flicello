@@ -69,7 +69,7 @@ def display_name(name: str) -> str:
 
 # ---------------------------------------------------------------- chunked uploads
 
-MAX_OPEN_UPLOADS = 4  # per person at once (the page sends one file at a time; a few spare for retries)
+MAX_OPEN_UPLOADS = 5  # per person at once (the page sends up to three files at a time; a few spare for retries)
 
 
 def _open_bytes(db: DB, where: str = "1=1", args: tuple = ()) -> int:
@@ -177,7 +177,20 @@ def _probe(path: Path, kind: str, s: StudioSettings) -> dict:
     return {"seconds": duration}
 
 
-def finish_upload(db: DB, s: StudioSettings, up: dict, project: dict) -> dict:
+def cancel_upload(db: DB, s: StudioSettings, up: dict) -> None:
+    """The page gave up on this upload (a clip shrunk on the device went wrong; it sends the original instead)."""
+    if up["status"] != "open":
+        return
+    _part(s, up["id"]).unlink(missing_ok=True)
+    db.run("UPDATE uploads SET status='cancelled', updated=? WHERE id=?", (time.time(), up["id"]))
+
+
+def finish_upload(db: DB, s: StudioSettings, up: dict, project: dict, final_size: int | None = None) -> dict:
+    """`final_size`: a clip shrunk on the device while it was sent declares its original size as an upper bound;
+    when it ends it says how big it came out (never more than declared, and exactly what has arrived)."""
+    if final_size is not None and up["status"] == "open" and 0 < final_size == up["received"] <= up["size"]:
+        db.run("UPDATE uploads SET size=? WHERE id=?", (final_size, up["id"]))
+        up = {**up, "size": final_size}
     if up["received"] != up["size"]:
         raise UploadError("The upload isn't complete yet.")
     if project["user_id"] != up["user_id"] or project["id"] != up["project_id"]:

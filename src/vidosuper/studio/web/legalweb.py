@@ -22,7 +22,7 @@ from ..service import Studio
 
 LEGAL = Path(__file__).resolve().parent.parent / "legal"
 SLUG = re.compile(r"^[a-z][a-z-]{1,30}$")
-ORDER = ["terms", "privacy", "cookies", "acceptable-use", "copyright", "ai", "subprocessors", "security", "contact"]
+ORDER = ["terms", "privacy", "cookies", "acceptable-use", "copyright", "ai", "subprocessors", "security", "open-source", "contact"]
 
 FACTS = {
     "operator": "Siddhanth Thakuri",
