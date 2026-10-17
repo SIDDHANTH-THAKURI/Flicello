@@ -37,8 +37,9 @@ from .storage import UploadError, user_dir, workdir
 STAGES = {
     "setup": "Add your clips and a song",
     "preparing": "Watching your clips",
+    "understood": "Check what I understood",
     "choose": "Pick a story",
-    "pitching": "Thinking of another idea",
+    "pitching": "Thinking up story ideas",
     "sampling": "Cutting a sample",
     "review": "Check the sample",
     "rendering": "Making your video",
@@ -72,13 +73,25 @@ def improvise_text(level: int) -> str:
 
 
 def ask_text(project: dict) -> str:
-    """Everything the person asked for, as the AI reads it: their note, how they want it cut in their own words, and
-    how far it may go beyond them (the slider)."""
+    """Everything the person asked for, as the AI reads it: their note, how they want it cut in their own words, how
+    far it may go beyond them (the slider), and the brief they checked and corrected (it wins over the rest)."""
     parts = [(project.get("intent") or "").strip()]
     if (project.get("cut_note") or "").strip():
         parts.append(f"How they want it cut, in their words: {project['cut_note'].strip()}")
     parts.append(f"How much to improvise ({int(project.get('improvise') or 35)}/100): "
                  f"{improvise_text(project.get('improvise') or 35)}")
+    if project.get("brief"):
+        b = json.loads(project["brief"])
+        agreed = [f"The film: {b['story']}"] if b.get("story") else []
+        agreed += [f"Feel: {', '.join(b['feel'])}"] if b.get("feel") else []
+        agreed += [f"Must have: {'; '.join(b['must'])}"] if b.get("must") else []
+        agreed += [f"Leave out: {'; '.join(b['avoid'])}"] if b.get("avoid") else []
+        agreed += [f"Do not use these clips at all: {', '.join(b['leave_out'])}"] if b.get("leave_out") else []
+        agreed += [f"About the music: {b['music']}"] if b.get("music") else []
+        agreed += [f"Asked '{x['ask']}', they answered: {x['answer']}" for x in b.get("answers") or []]
+        if agreed:
+            parts.append("# What we agreed with them (they checked and corrected this: it wins over anything above)\n"
+                         + "\n".join(f"- {line}" for line in agreed))
     return "\n".join(p for p in parts if p)
 
 
@@ -603,7 +616,8 @@ class Studio:
         self._enqueue(project, "sample", {"pitch": project["chosen"], "note": note})
 
     # ------------------------------------------------------------------ going back, stopping a step
-    BACK_FROM = {"setup": ("choose", "review", "failed", "paused"), "choose": ("review",)}
+    BACK_FROM = {"setup": ("understood", "choose", "review", "failed", "paused"), "understood": ("choose",),
+                 "choose": ("review",)}
     STOP_TO = {"prepare": "setup", "pitch": "choose", "sample": "choose", "render": "review", "revise": "done"}
 
     def back_targets(self, project: dict) -> list[str]:
@@ -613,6 +627,8 @@ class Studio:
         out = [to for to, froms in self.BACK_FROM.items() if project["stage"] in froms]
         if "choose" in out and not self.pitches(project):
             out.remove("choose")  # an explainer without looks has no ideas to go back to
+        if "understood" in out and not project.get("understood"):
+            out.remove("understood")
         return out
 
     def go_back(self, project: dict, to: str) -> None:
@@ -624,9 +640,14 @@ class Studio:
         if to == "choose":
             self.back_to_ideas(project)
             return
+        if to == "understood":  # change what was agreed: the ideas made from it go
+            self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
+            self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0, updated=? WHERE id=?", (time.time(), project["id"]))
+            self.db.set_stage(project["id"], "understood")
+            return
         self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
-        self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0, sample_tries=0, error=NULL, note='', updated=? "
-                    "WHERE id=?", (time.time(), project["id"]))
+        self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0, sample_tries=0, error=NULL, note='', understood=NULL, "
+                    "brief=NULL, updated=? WHERE id=?", (time.time(), project["id"]))
         self.db.set_stage(project["id"], "setup")
         self.db.event(project["id"], f"Went back to the setup from '{project['stage']}'.", "info")
 
@@ -639,14 +660,15 @@ class Studio:
         if job["status"] == "running" and self.s.jobs != "remote":
             raise ActionError("This step is in the middle of its work and can't be stopped right now.")
         to = self.STOP_TO.get(job["kind"], "setup")
-        if job["kind"] == "sample" and not self.pitches(project):
-            to = "setup"
+        if job["kind"] in ("sample", "pitch") and not self.pitches(project):
+            to = "understood" if project.get("understood") else "setup"
         self.db.run("UPDATE jobs SET status='cancelled', finished=?, abort=CASE WHEN status='running' THEN ? ELSE abort "
                     "END, error='stopped by the person' WHERE id=?", (time.time(), time.time(), job["id"]))
         self.db.step(job["id"], "Stopped.")
         if to == "setup":
             self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
-            self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0, sample_tries=0 WHERE id=?", (project["id"],))
+            self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0, sample_tries=0, understood=NULL, brief=NULL "
+                        "WHERE id=?", (project["id"],))
         self.db.set_stage(project["id"], to)
         self.db.event(project["id"], f"Stopped the {job['kind']} step; back to '{to}'.", "info", job["id"])
 
@@ -1080,16 +1102,53 @@ class Studio:
         self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
         if info["skipped"]:
             self.db.event(project["id"], f"{len(info['skipped'])} file(s) couldn't be read and were left out.", "warn")
-        pipe.progress = lambda f, m: self.db.job_progress(job["id"], 0.8 + 0.2 * f, m)
+        self.db.job_progress(job["id"], 0.85, "Putting what I saw into words")
         ctx = self._context(pipe, project, user)
-        self._save_pitches(project, pipe.pitch(ctx, n=3, tag="r1"), 1)
-        self.db.set_stage(project["id"], "choose")
+        understood = pipe.brain.understand(ctx)
+        self.db.run("UPDATE projects SET understood=?, brief=NULL WHERE id=?", (understood.model_dump_json(), project["id"]))
+        self.db.set_stage(project["id"], "understood")
+
+    def understanding(self, project: dict) -> dict | None:
+        return json.loads(project["understood"]) if project.get("understood") else None
+
+    def confirm_understanding(self, project: dict, form: dict) -> None:
+        """They checked (and corrected) what was understood: that becomes the brief every later step follows, and the
+        stories are pitched from it."""
+        self._guard(project, "understood")
+        u = self.understanding(project) or {}
+
+        def lines(name: str) -> list[str]:
+            return [x.strip(" -•\t")[:200] for x in str(form.get(name, "")).splitlines() if x.strip(" -•\t")][:12]
+
+        answers = []
+        for k, q in enumerate(u.get("questions") or []):
+            a = " ".join(str(form.get(f"q{k}_other") or form.get(f"q{k}") or "").split())[:200]
+            if a:
+                answers.append({"ask": q["ask"], "answer": a})
+        known = {c["short"] for c in u.get("clips") or []}
+        brief = {
+            "story": " ".join(str(form.get("story", "")).split())[:600] or u.get("story", ""),
+            "feel": [w.strip() for w in str(form.get("feel", "")).split(",") if w.strip()][:6],
+            "must": lines("must"), "avoid": lines("avoid"),
+            "music": " ".join(str(form.get("music", "")).split())[:300],
+            "leave_out": [c for c in form.get("leave_out", []) if c in known] if isinstance(form.get("leave_out"), list) else [],
+            "answers": answers,
+        }
+        self.db.run("UPDATE projects SET brief=?, updated=? WHERE id=?", (json.dumps(brief), time.time(), project["id"]))
+        self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
+        self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0 WHERE id=?", (project["id"],))
+        self._enqueue(self.db.project(project["id"]), "pitch", {"first": True})
 
     def _job_pitch(self, job, project, user):
         if project["kind"] != "montage":
             return self._job_looks(job, project, user)
         pipe = self._pipeline(job, project, user)
         ctx = self._context(pipe, project, user)
+        if job["params"].get("first"):  # the first ideas, from the brief they agreed
+            self.db.job_progress(job["id"], 0.1, "Thinking up story ideas from what we agreed")
+            self._save_pitches(project, pipe.pitch(ctx, n=3, tag="r1"), 1)
+            self.db.set_stage(project["id"], "choose")
+            return
         old = [StoryPitch.model_validate(p["pitch"]) for p in self.pitches(project)]
         rnd = project["pitch_round"] + 1
         own = job["params"].get("own", "")

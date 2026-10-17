@@ -5,8 +5,8 @@
 {% block content %}
 {% set busy = p.stage in BUSY %}
 {% if p.kind == 'montage' %}
-  {% set steps = [('setup', 'Clips'), ('preparing', 'Watching'), ('choose', 'Story'), ('review', 'Sample'), ('done', 'Film')] %}
-  {% set at = {'setup': 0, 'preparing': 1, 'pitching': 2, 'choose': 2, 'sampling': 3, 'review': 3, 'rendering': 4, 'revising': 4, 'done': 4} %}
+  {% set steps = [('setup', 'Clips'), ('preparing', 'Watching'), ('understood', 'Understood'), ('choose', 'Story'), ('review', 'Sample'), ('done', 'Film')] %}
+  {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'pitching': 3, 'choose': 3, 'sampling': 4, 'review': 4, 'rendering': 5, 'revising': 5, 'done': 5} %}
 {% elif looks %}
   {% set steps = [('setup', 'Your ' ~ ('recording' if p.kind == 'voice' else 'video')), ('preparing', 'Listening'), ('choose', 'Look'), ('review', 'Sample'), ('done', 'Film')] %}
   {% set at = {'setup': 0, 'preparing': 1, 'pitching': 2, 'choose': 2, 'sampling': 3, 'review': 3, 'rendering': 4, 'revising': 4, 'done': 4} %}
@@ -184,6 +184,62 @@
       <button class="btn" type="submit">Stop it</button></form>
   </details>
 </section>
+
+{# ------------------------------------------------------------------ what I understood: they check and correct it #}
+{% elif p.stage == 'understood' and understood %}
+{% set u = understood %}
+<p class="page-sub rise d2">Before I pitch any stories, here's what I understood from your clips, your music and your note. Fix anything that's off: everything after this follows it.</p>
+<form method="post" action="/p/{{ p.id }}/understood" class="understood gap-top">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="u-grid">
+    <section class="panel rise d2">
+      <h2>The film, as I see it</h2>
+      <label class="field"><span class="muted">Change it in your words</span>
+        <textarea name="story" rows="3" maxlength="600" required>{{ u.story }}</textarea></label>
+      <label class="field"><span>The feel</span><input name="feel" maxlength="120" value="{{ u.feel|join(', ') }}" placeholder="warm, funny"></label>
+    </section>
+    <section class="panel rise d3">
+      <h2>Must have</h2>
+      <label class="field"><span class="muted">One per line</span><textarea name="must" rows="3" maxlength="1200" placeholder="The jump off the pier">{{ u.must|join('\n') }}</textarea></label>
+      <h2>Leave out</h2>
+      <label class="field"><span class="muted">One per line</span><textarea name="avoid" rows="3" maxlength="1200" placeholder="My licence plate">{{ u.avoid|join('\n') }}</textarea></label>
+    </section>
+    <section class="panel rise d3">
+      <h2>The music</h2>
+      <p class="lead-s">{{ u.music or "No music: the cut follows a steady rhythm." }}</p>
+      <label class="field"><span>Anything about the music? <small class="muted">(optional)</small></span>
+        <input name="music" maxlength="300" placeholder="Start at the chorus / keep it quiet until the drop"></label>
+    </section>
+  </div>
+  {% if u.questions %}
+  <section class="panel gap-top rise d3">
+    <h2>{{ 'A question' if u.questions|length == 1 else 'A few questions' }}</h2>
+    {% for q in u.questions %}{% set k = loop.index0 %}
+    <fieldset class="group">
+      <legend>{{ q.ask }}</legend>
+      <div class="choices">
+        {% for o in q.options %}<label class="choice"><input type="radio" name="q{{ k }}" value="{{ o }}"><span>{{ o }}</span></label>{% endfor %}
+      </div>
+      <input class="input gap-top" name="q{{ k }}_other" maxlength="200" placeholder="Or in your words">
+    </fieldset>
+    {% endfor %}
+  </section>
+  {% endif %}
+  {% if u.clips %}
+  <section class="panel gap-top rise d4">
+    <h2>Your clips, as I saw them</h2>
+    <ul class="u-clips">
+      {% for c in u.clips %}
+      <li>
+        <div><b>{{ names.get(c.short) or c.short }}</b><span>{{ c.sees }}</span>{% if c.best %}<small>Best: {{ c.best }}</small>{% endif %}</div>
+        <label class="tick"><input type="checkbox" name="leave_out" value="{{ c.short }}"><span>Leave it out</span></label>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+  <button class="btn-sun wide gap-top" type="submit"><span>That's right: show me story ideas</span></button>
+</form>
 
 {# ------------------------------------------------------------------ choose a look (voice and designed talking videos) #}
 {% elif p.stage == 'choose' and looks %}

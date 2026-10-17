@@ -220,6 +220,13 @@ def _drain(studio: Studio, limit: int = 10) -> None:
             return
 
 
+def _agree(client, csrf, pid, studio) -> None:
+    """They read what was understood and agree as it is: the first story ideas follow."""
+    assert studio.db.project(pid)["stage"] == "understood", studio.db.all("SELECT * FROM events")
+    client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": studio.understanding(studio.db.project(pid))["story"]})
+    _drain(studio)
+
+
 def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
     owner = _owner(studio)
@@ -249,6 +256,19 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     # start: analyse + pitch
     assert client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=False).status_code == 303
     assert client.get(f"/api/p/{pid}/status").json()["busy"]
+    _drain(studio)
+    # before any story: what it understood, which they correct
+    page = client.get(f"/p/{pid}").text
+    assert "Check what I understood" in page and "Your clips, as I saw them" in page, studio.db.all("SELECT * FROM events")
+    u = studio.understanding(studio.db.project(pid))
+    assert u["clips"] and u["music"]
+    client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": "My trip, ending on the boats", "feel": "calm, warm",
+                                              "must": "the boats at the end" + chr(10) + "no faces", "avoid": "", "music": "",
+                                              "leave_out": [u["clips"][0]["short"]]})
+    from vidosuper.studio.service import ask_text
+
+    ask = ask_text(studio.db.project(pid))
+    assert "My trip, ending on the boats" in ask and "the boats at the end" in ask and u["clips"][0]["short"] in ask
     _drain(studio)
     page = client.get(f"/p/{pid}").text
     assert "Make this one" in page, studio.db.all("SELECT * FROM events")
@@ -810,6 +830,7 @@ def test_a_video_needs_no_song_and_the_note_picks_one_shot_per_beat(studio, medi
     status = client.get(f"/api/p/{pid}/status").json()
     assert status["busy"] and status["eta"] > 0
     _drain(studio)
+    _agree(client, csrf, pid, studio)
     page = client.get(f"/p/{pid}").text
     assert "Make this one" in page, studio.db.all("SELECT * FROM events")
     work = studio.s.users_dir / friend["id"] / "projects" / pid
@@ -878,6 +899,7 @@ def test_no_song_asks_for_a_made_beat_or_no_music_and_no_music_means_none_plays(
         _upload(client, csrf, pid, media / "clips" / name, "clip")
     client.post(f"/p/{pid}/start", data={"csrf": csrf})
     _drain(studio)
+    _agree(client, csrf, pid, studio)
     page = client.get(f"/p/{pid}").text
     pitch_id = int(re.search(r'name="pitch" value="(\d+)"', page).group(1))
     client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": pitch_id})

@@ -463,7 +463,8 @@ def create_app(studio: Studio) -> FastAPI:
                     joblog=steps_of(job or (studio.db.one("SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
                                                           (pid,)) if p["stage"] == "failed" else None)),
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
-                    backs=studio.back_targets(p),
+                    backs=studio.back_targets(p), understood=studio.understanding(p),
+                    names=clip_names(p) if p["stage"] == "understood" else {},
                     lengths=studio.lengths_for(user),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
                     note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
@@ -521,6 +522,21 @@ def create_app(studio: Studio) -> FastAPI:
     def another(request: Request, pid: str, csrf: str = Form(""), reason: str = Form(""), own: str = Form(""),
                 base: int = Form(0)):
         return act(request, csrf, pid, lambda u, p: studio.another(p, reason, own, base))
+
+    @app.post("/p/{pid}/understood")
+    async def understood(request: Request, pid: str):
+        form = await request.form()
+        data = {k: form.get(k) for k in form.keys()}
+        data["leave_out"] = form.getlist("leave_out")
+        return act(request, str(form.get("csrf", "")), pid, lambda u, p: studio.confirm_understanding(p, data))
+
+    def clip_names(p: dict) -> dict[str, str]:
+        """c01 -> the file name they uploaded, from the clip log (when it has arrived from the renderer)."""
+        try:
+            cat = json.loads((workdir(s, p["user_id"], p["id"]).root / "catalog.json").read_text(encoding="utf-8"))
+            return {e["short"]: Path(str(e["clip"].get("path") or e["clip"].get("name") or "")).name for e in cat["clips"]}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
 
     @app.post("/p/{pid}/back")
     def go_back(request: Request, pid: str, csrf: str = Form(""), to: str = Form("setup")):

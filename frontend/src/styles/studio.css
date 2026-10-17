@@ -280,3 +280,17 @@ details.danger-zone form { margin-top: 1rem; }
 .working details.stop summary { cursor: pointer; }
 .working details.stop form { display: grid; justify-items: center; gap: .5rem; margin-top: .6rem; }
 .back-zone .choices form { margin: 0; }
+
+/* what I understood: they check and correct it */
+.u-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+.u-grid .panel h2 + .lead-s { margin-top: .2rem; }
+.u-grid .panel h2:not(:first-child) { margin-top: 1rem; }
+.u-clips { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .55rem; }
+.u-clips li { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .7rem .9rem; border: 1px solid var(--line); border-radius: 14px; background: rgba(255, 255, 255, .02); }
+.u-clips li div { display: grid; gap: .15rem; min-width: 0; }
+.u-clips li b { font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-clips li span { color: var(--paper-2); font-size: .9rem; }
+.u-clips li small { color: var(--muted); font-size: .82rem; }
+.u-clips .tick { flex: none; }
+.understood fieldset.group + fieldset.group { margin-top: 1rem; }
+.u-grid > .panel { margin: 0; }

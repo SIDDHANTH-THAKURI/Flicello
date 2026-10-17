@@ -34,6 +34,28 @@ class Pitches(BaseModel):
     pitches: list[StoryPitch]
 
 
+class ClipRead(BaseModel):
+    short: str = Field(..., description="The clip's short name from the log (c01...).")
+    sees: str = Field(..., description="What it shows, in under 15 words.")
+    best: str = Field("", description="Its single best moment with its time ('the jump at 0:12'), or empty.")
+
+
+class Question(BaseModel):
+    ask: str = Field(..., description="A question whose answer would change the film.")
+    options: list[str] = Field(..., description="2-4 short answers they can tap.")
+
+
+class Understanding(BaseModel):
+    """What the editor understood before pitching: shown to the person, who corrects it."""
+    story: str = Field(..., description="What the film is about and what it should make a viewer feel, 1-2 sentences.")
+    feel: list[str] = Field(default_factory=list, description="2-4 words for the tone.")
+    must: list[str] = Field(default_factory=list, description="What they explicitly asked to have.")
+    avoid: list[str] = Field(default_factory=list, description="What to leave out.")
+    music: str = Field("", description="How the music reads and what it means for the cut, with real times.")
+    clips: list[ClipRead] = Field(default_factory=list)
+    questions: list[Question] = Field(default_factory=list, description="0-3 genuinely open questions.")
+
+
 Kind = Literal["hold", "cut", "hit", "ramp", "stutter"]
 TransitionKind = Literal["cut", "dissolve", "fadeblack", "fadewhite", "smoothleft", "smoothright", "zoomin"]
 

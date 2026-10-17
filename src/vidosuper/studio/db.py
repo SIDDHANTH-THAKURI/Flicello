@@ -148,7 +148,9 @@ class DB:
             con.execute("ALTER TABLE projects ADD COLUMN pace TEXT NOT NULL DEFAULT 'balanced'")
         # step 3a: their own words for the cut, how far the AI may go beyond them, and with no music, which sound
         for col, kind in (("cut_note", "TEXT NOT NULL DEFAULT ''"), ("improvise", "INTEGER NOT NULL DEFAULT 35"),
-                          ("sound", "TEXT NOT NULL DEFAULT 'silent'"), ("routed", "TEXT NOT NULL DEFAULT ''")):
+                          ("sound", "TEXT NOT NULL DEFAULT 'silent'"), ("routed", "TEXT NOT NULL DEFAULT ''"),
+                          # step 3c: what the AI understood, and what the person agreed to after correcting it
+                          ("understood", "TEXT"), ("brief", "TEXT")):
             if col not in have:
                 con.execute(f"ALTER TABLE projects ADD COLUMN {col} {kind}")
         if "moved" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:

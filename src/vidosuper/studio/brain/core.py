@@ -30,6 +30,7 @@ from ...explainer.script import VoiceScript
 DESIGNED_TEXT = '# Style: DESIGNED (designer animations)\nThe person picked designer animations. talk: they are cut out of their room and stand in front of a stage; your callouts are drawn BEHIND them, above and around their head.\n- The backbone is `scene` callouts: one designer animation for what is being said right now, about every 3-6 seconds, each starting on the word that brings it. `visual` says in a few concrete words what the animation should show ("two people podcasting at a table", "an email arriving with a notification", "a ghost floating"), `topics` gives 1-3 simple search words for an animation library ("podcast", "email", "ghost"). Think like a motion designer illustrating the story, not a subtitle writer. `text` on a scene is an optional 1-3 word label.\n- `title` for the name of the thing being talked about, once, early (typed on letter by letter).\n- `stack` when a number of things is said ("10 audio clips", "3 reasons"): `count`, a `visual` for one of them ("an audio waveform") and `text` ("10 audio clips"); it flies out of the scene that is up.\n- `stat` for a rating or a figure (value as said). `pill` rarely.\n- `ambient`: one looping animation behind their head for the whole video that suits the subject ("a circular sound visualizer" for audio/music/podcasts, "soft floating particles", "film reel") with `ambient_topics`.\n- Set `punch` on the single strongest moment.\n- voice mode: give every scene a `visual` and `topics` too, so it gets a real animation instead of an emoji.\n'
 from .schemas import Direction, Directions, VisualIdeas, VisualPicks
 from .schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StoryBeat, StoryPitch, StyleRule
+from .schemas import Understanding
 
 SLOWMO_FPS = 47.0  # real slow motion only from 50/60 fps footage
 
@@ -116,6 +117,45 @@ def hero_hits(facts: dict[str, ClipFacts], gap: float = 1.2) -> list[tuple[str, 
             out.append((short, t))
             last = t
     return out
+
+
+def check_understanding(u: Understanding, ctx: StoryContext) -> list[str]:
+    problems = []
+    known = set(ctx.facts)
+    seen = {c.short for c in u.clips}
+    if missing := sorted(known - seen):
+        problems.append(f"`clips` must have one entry per clip in the log; missing: {', '.join(missing)}")
+    if unknown := sorted(seen - known):
+        problems.append(f"`clips` names clips that are not in the log: {', '.join(unknown)}")
+    if len(u.questions) > 3:
+        problems.append("ask at most 3 questions, only what is genuinely unclear")
+    for q in u.questions:
+        if not 2 <= len(q.options) <= 4:
+            problems.append(f"question '{q.ask[:40]}' needs 2-4 options")
+    if len(u.story.split()) < 5:
+        problems.append("`story` must say what the film is about in a real sentence")
+    return problems
+
+
+def _mmss(t: float) -> str:
+    return f"{int(t) // 60}:{int(t) % 60:02d}"
+
+
+def local_understanding(ctx: StoryContext) -> Understanding:
+    from .schemas import ClipRead
+
+    clips = []
+    for e in ctx.catalog["clips"]:
+        a = e.get("analysis") or {}
+        moments = sorted(a.get("moments") or [], key=lambda m: -m.get("strength", 0))
+        best = moments[0] if moments else None
+        clips.append(ClipRead(short=e["short"], sees=" ".join((a.get("summary") or a.get("scene") or "a clip").split()[:14]),
+                              best=f"{best['description'][:60]} at {_mmss(best.get('peak') or best['start'])}" if best else ""))
+    song = ctx.song
+    drop = f", the first drop at {_mmss(song.drops[0])}" if song.drops else ""
+    note = (ctx.intent or "").split("\n")[0].strip()
+    return Understanding(story=note if len(note.split()) >= 5 else f"A film made from your {len(clips)} clips, cut on the beat.",
+                         music=f"About {song.tempo:.0f} beats a minute, {song.duration:.0f} s long{drop}.", clips=clips)
 
 
 def check_analysis(analysis: ClipAnalysis, clip: ClipInfo) -> list[str]:
@@ -509,6 +549,14 @@ class Brain:
         return self._ask(req, check, tag=f"analyse-{clip.clip_id}")
 
     # -- 2 pitch
+    def understand(self, ctx: StoryContext) -> Understanding:
+        """What it understood from the clips, the music and their request, in plain words for them to correct."""
+        parts = [ctx.header(), "# The footage\n" + catalog_text(ctx.catalog),
+                 "Return what you understood as JSON: one `clips` entry per clip in the log."]
+        req = Request("understand", prompt("understand"), "\n\n".join(parts), Understanding, self.models.analyst,
+                      effort="medium", max_tokens=4000)
+        return self._ask(req, lambda u: check_understanding(u, ctx))
+
     def pitch(self, ctx: StoryContext, n: int = 3, rejected: list[StoryPitch] | None = None, reason: str = "",
               own_idea: str = "") -> list[StoryPitch]:
         parts = [ctx.header(), "# The footage\n" + catalog_text(ctx.catalog)]
@@ -706,6 +754,12 @@ class LocalBrain:
             for n, m in enumerate(f.moments):
                 out.append((f"{short}#{n + 1}", m, m["hook"] + m["strength"]))
         return out
+
+    def understand(self, ctx: StoryContext) -> Understanding:
+        """Without an AI: the analyst's own log, said plainly (their note as the story, each clip's summary and best
+        moment, the song's tempo and first drop)."""
+        self._free("understand")
+        return local_understanding(ctx)
 
     def pitch(self, ctx: StoryContext, n: int = 3, rejected=None, reason: str = "", own_idea: str = "") -> list[StoryPitch]:
         self._free("pitch")
