@@ -145,9 +145,12 @@
 <section class="working rise d2" aria-live="polite">
   <div class="reel" aria-hidden="true"><div>{% for _ in range(18) %}<span></span>{% endfor %}</div></div>
   <h2 id="job-label">{% if looks and p.stage == 'pitching' %}Painting another look{% else %}{{ STAGES.get(p.stage) }}{% endif %}</h2>
-  <div class="meter"><span id="bar" data-progress="{{ job.progress if job else 0 }}"></span></div>
+  <div class="meter{% if not job or job.status == 'queued' %} waiting{% endif %}" id="meter"><span id="bar" data-progress="{{ job.progress if job else 0 }}"></span></div>
   <p id="job-msg" class="msg">{% if job and job.status == 'queued' %}{{ queued_note or 'Waiting for its turn…' }}{% else %}{{ job.message if job else '' }}{% endif %}</p>
   <p id="job-eta" class="eta">{% if eta %}{{ eta|eta }} left{% endif %}</p>
+  <ol id="steps" class="steps" aria-label="What it has done so far">
+    {% for st in joblog %}<li class="{{ 'now' if st.now else 'done' }}"><span>{{ st.m }}</span><time>{{ st.s|ago_s }}</time></li>{% endfor %}
+  </ol>
   <p class="help">You can close this page; it keeps going.</p>
 </section>
 
@@ -337,10 +340,23 @@
 <section class="working rise d2">
   <h2>Something went wrong</h2>
   <p class="msg">{{ p.error or "We've been told and are looking at it." }}</p>
+  {% if joblog %}<ol class="steps" aria-label="What it did">{% for st in joblog %}<li class="done"><span>{{ st.m }}</span><time>{{ st.s|ago_s }}</time></li>{% endfor %}</ol>{% endif %}
   <form method="post" action="/p/{{ p.id }}/retry"><input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="btn-sun" type="submit"><span>Try again</span></button></form>
+  <p class="help"><a href="#report">Tell us what happened</a>: it helps us fix it for everyone.</p>
 </section>
 {% endif %}
+
+<details class="report-zone" id="report" {% if p.stage == 'failed' %}open{% endif %}>
+  <summary>Something not right? Report a problem</summary>
+  <form method="post" action="/p/{{ p.id }}/report">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="field"><span>What went wrong, or what did you expect?</span>
+      <textarea name="note" rows="3" maxlength="1500" required placeholder="It's been stuck on the same step for 20 minutes / the music cuts off / the text is hard to read"></textarea></label>
+    <p class="help">We'll see this video's steps and settings with your note, so you don't need to explain those.</p>
+    <button class="btn" type="submit">Send report</button>
+  </form>
+</details>
 
 <details class="danger-zone">
   <summary>Delete this film</summary>

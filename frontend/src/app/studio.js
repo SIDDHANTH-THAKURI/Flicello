@@ -135,45 +135,81 @@ function uploads(pid) {
 function progress(pid) {
   const body = document.body;
   const bar = $('#bar');
-  if (bar && bar.dataset.progress) bar.style.width = `${Math.max(3, Math.round(parseFloat(bar.dataset.progress) * 100))}%`;
+  const meter = $('#meter');
+  const pct = (f) => `${(Math.max(0, Math.min(1, f)) * 100).toFixed(1)}%`;
+  if (bar && bar.dataset.progress) bar.style.width = pct(parseFloat(bar.dataset.progress));
   if (body.dataset.busy !== '1') return;
   const stage = body.dataset.stage;
   const msg = $('#job-msg');
   const eta = $('#job-eta');
+  const list = $('#steps');
   let misses = 0;
-  // What the bar shows: never less than before, and between updates it creeps on slowly (towards where the time
-  // left says the step should be, never more than 6% past the last real value), so a long step never looks frozen.
+  // What the bar shows: never less than before. While a step runs it creeps on slowly between updates (towards where
+  // the time left says it should be, never more than 4% past the last real value), so a long step never looks frozen;
+  // while the video waits for its turn nothing is happening, so nothing creeps and the track shows it is waiting.
   let shown = bar ? parseFloat(bar.dataset.progress || '0') || 0 : 0;
   let real = shown;
+  let waiting = meter ? meter.classList.contains('waiting') : false;
   let left = null; // seconds left as shown, counted down every second
   let lastTick = Date.now();
-  const paint = () => { if (bar) bar.style.width = `${Math.max(3, Math.round(shown * 100))}%`; };
+  const paint = () => {
+    if (bar) bar.style.width = pct(shown);
+    if (meter) meter.classList.toggle('waiting', waiting);
+  };
   const say = () => {
     if (!eta) return;
     eta.textContent = left === null ? '' :
       `${left < 45 ? 'under a minute' : left < 90 ? 'about a minute' : `about ${Math.round(left / 60)} min`} left`;
   };
+  const ago = (n) => (n < 60 ? `${n} s` : n < 3600 ? `${Math.floor(n / 60)} min ${String(n % 60).padStart(2, '0')} s`
+    : `${Math.floor(n / 3600)} h ${Math.floor((n % 3600) / 60)} min`);
+  let steps = [];
+  let stepsAt = Date.now();
+  const drawSteps = () => {
+    if (!list) return;
+    const grow = Math.round((Date.now() - stepsAt) / 1000);
+    list.replaceChildren(...steps.map((st) => {
+      const li = document.createElement('li');
+      li.className = st.now ? 'now' : 'done';
+      const m = document.createElement('span');
+      m.textContent = st.m;
+      const t = document.createElement('time');
+      t.textContent = ago(st.s + (st.now ? grow : 0)); // the running step's time keeps counting between updates
+      li.append(m, t);
+      return li;
+    }));
+  };
   setInterval(() => {
     const dt = (Date.now() - lastTick) / 1000;
     lastTick = Date.now();
     if (left !== null) left = Math.max(20, left - dt);
-    const rate = left ? (1 - shown) / left : 0.002;
-    shown = Math.min(Math.max(shown, real) + rate * dt * 0.6, real + 0.06, 0.985);
+    if (!waiting) {
+      const rate = left ? (1 - shown) / left : 0.002;
+      shown = Math.min(Math.max(shown, real) + rate * dt * 0.5, real + 0.04, 0.985);
+    }
     paint();
     say();
+    drawSteps();
   }, 1000);
   const poll = async () => {
     try {
       const st = await api('GET', `/api/p/${pid}/status`);
       misses = 0;
       if (st.stage !== stage || !st.busy) { window.location.reload(); return; }
-      if (st.progress !== null) { real = Math.max(real, st.progress); shown = Math.max(shown, real); paint(); }
+      const started = waiting && !st.queued; // its turn came (also after a step was started again): from the real value
+      waiting = !!st.queued;
+      if (started) { real = st.progress || 0; shown = real; }
+      else if (st.progress !== null) { real = Math.max(real, st.progress); shown = Math.max(shown, real); }
+      paint();
       if (msg) msg.textContent = st.queued ? (st.queued_note || 'Waiting for its turn…') : (st.message || 'Working…');
       const s = st.eta;
       if (s === null || s === undefined) left = null;
       else if (left === null || Math.abs(s - left) > Math.max(30, 0.35 * left)) left = s; // big news: take it
       else left = 0.8 * left + 0.2 * s; // small news: ease towards it, no jumping
       say();
+      steps = st.steps || [];
+      stepsAt = Date.now();
+      drawSteps();
     } catch (err) {
       misses += 1;
       if (err.status === 401) { window.location.href = '/signin'; return; }

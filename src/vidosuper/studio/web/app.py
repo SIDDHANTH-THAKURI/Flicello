@@ -114,6 +114,7 @@ def create_app(studio: Studio) -> FastAPI:
     templates.env.filters["mmss"] = lambda x: f"{int(x or 0) // 60}:{int(x or 0) % 60:02d}"
     templates.env.filters["shapes"] = lambda x: "9:16 + 16:9" if x == "both" else x
     templates.env.filters["eta"] = eta_text
+    templates.env.filters["ago_s"] = lambda n: f"{int(n)} s" if int(n) < 60 else f"{int(n) // 60} min {int(n) % 60:02d} s" if int(n) < 3600 else f"{int(n) // 3600} h {int(n) % 3600 // 60} min"
     templates.env.filters["span"] = lambda n: f"{int(n)} seconds" if int(n) <= 60 else f"{int(n) / 60:g} min"
     templates.env.filters["noids"] = lambda t: MOMENT_ID.sub("", str(t or "")).strip()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
@@ -446,6 +447,8 @@ def create_app(studio: Studio) -> FastAPI:
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
+                    joblog=steps_of(job or (studio.db.one("SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
+                                                          (pid,)) if p["stage"] == "failed" else None)),
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
                     lengths=studio.lengths_for(user),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
@@ -518,6 +521,24 @@ def create_app(studio: Studio) -> FastAPI:
                         str(form.get("fix", "")))
 
         return await run_in_threadpool(act, request, str(form.get("csrf", "")), pid, go)
+
+    @app.post("/p/{pid}/report")
+    def report(request: Request, pid: str, csrf: str = Form(""), note: str = Form("")):
+        user, sess = need_user(request)
+        check_csrf(sess, csrf)
+        p = owned(user, pid)
+        try:
+            studio.report_problem(user, p, note)
+        except ActionError as exc:
+            return back(f"/p/{pid}", str(exc))
+        return back(f"/p/{pid}", "Thanks, we've got it. We'll look into it and fix it.")
+
+    @app.post("/admin/report")
+    def admin_report(request: Request, csrf: str = Form(""), rid: int = Form(0)):
+        user, sess = need_owner(request)
+        check_csrf(sess, csrf)
+        studio.db.run("UPDATE reports SET resolved=? WHERE id=?", (time.time(), rid))
+        return back("/admin#reports", "Marked as sorted.")
 
     @app.post("/p/{pid}/retry")
     def retry(request: Request, pid: str, csrf: str = Form("")):
@@ -619,7 +640,16 @@ def create_app(studio: Studio) -> FastAPI:
                 "progress": round(job["progress"], 3) if job else None, "message": job["message"] if job else "",
                 "queued": bool(job and job["status"] == "queued"), "version": p["version"], "updated": p["updated"],
                 "queued_note": studio.queued_note(job),
-                "eta": studio.eta(job)}
+                "eta": studio.eta(job), "steps": steps_of(job)}
+
+    def steps_of(job: dict | None) -> list[dict]:
+        """The step log for the page: each step, how long it took (or has taken so far), the last one still going."""
+        if not job:
+            return []
+        rows = studio.db.steps(job["id"])
+        now = time.time()
+        return [{"m": r["message"], "s": int((rows[k + 1]["at"] if k + 1 < len(rows) else now) - r["at"]),
+                 "now": k + 1 == len(rows) and job["status"] == "running"} for k, r in enumerate(rows)]
 
     # ------------------------------------------------------------------ media
     @app.get("/m/{pid}/{kind}/{name}")
@@ -721,12 +751,15 @@ def create_app(studio: Studio) -> FastAPI:
         audit = db.all("SELECT a.at, a.action, a.detail, COALESCE(u.display, u.name) AS who FROM audit a "
                        "LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT 40")
         consents = db.one("SELECT SUM(marketing) AS yes, COUNT(*) AS n FROM users WHERE role != 'owner'") or {}
+        reports = db.all("SELECT r.*, COALESCE(u.display, u.name) AS who, u.email, p.title FROM reports r "
+                         "LEFT JOIN users u ON u.id=r.user_id LEFT JOIN projects p ON p.id=r.project_id "
+                         "WHERE r.resolved IS NULL ORDER BY r.id DESC LIMIT 30")
         requests = [u for u in users if (u.get("access") or "beta") == "requested" and u["role"] != "owner"]
         requests.sort(key=lambda u: (not u.get("request_note"), -(u.get("requested") or u["created"])))
         return page(request, "admin.html", user, sess, health=studio.health(), users=users, jobs=jobs, alerts=alerts,
                     invites=invites, spend=spend, new_link=new_link, default_videos=s.limits.videos_per_user,
                     audit=audit, consents=consents, active="admin", public=s.public_signup, beta=s.beta,
-                    requests=requests, tiers=s.tiers)
+                    requests=requests, tiers=s.tiers, reports=reports)
 
     @app.get("/admin/api/metrics")
     def admin_metrics(request: Request, days: int = 30):

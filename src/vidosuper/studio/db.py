@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Iterable
@@ -77,6 +78,12 @@ CREATE TABLE IF NOT EXISTS spend(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, user_id TEXT, project_id TEXT, job_id INTEGER,
   task TEXT, model TEXT, backend TEXT, tin INTEGER, tout INTEGER, cw INTEGER, cr INTEGER, usd REAL NOT NULL,
   billed INTEGER NOT NULL, seconds REAL);
+CREATE TABLE IF NOT EXISTS steps(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL, at REAL NOT NULL, message TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS steps_job ON steps(job_id);
+CREATE TABLE IF NOT EXISTS reports(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, user_id TEXT, project_id TEXT, job_id INTEGER,
+  note TEXT NOT NULL, context TEXT NOT NULL, resolved REAL);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, project_id TEXT, job_id INTEGER, level TEXT NOT NULL,
   message TEXT NOT NULL);
@@ -143,6 +150,8 @@ class DB:
             con.execute("ALTER TABLE jobs ADD COLUMN moved REAL")
         if "worker" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:  # which renderer lane runs it
             con.execute("ALTER TABLE jobs ADD COLUMN worker TEXT")
+        if "abort" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:  # the watchdog took it back
+            con.execute("ALTER TABLE jobs ADD COLUMN abort REAL")
         if "style" not in {r[1] for r in con.execute("PRAGMA table_info(renders)")}:  # how a voice/talk video was drawn
             con.execute("ALTER TABLE renders ADD COLUMN style TEXT")
         # public sign-up: people are found by email or Google account; `name` stays the unique handle
@@ -211,7 +220,7 @@ class DB:
                 return None
             now = time.time()
             con.execute("UPDATE jobs SET status='running', started=?, moved=?, attempts=attempts+1, progress=0, message='', "
-                        "worker=? WHERE id=?", (now, now, worker, row["id"]))
+                        "worker=?, abort=NULL WHERE id=?", (now, now, worker, row["id"]))
             con.execute("COMMIT")
             job = dict(row)
             job["attempts"] += 1
@@ -234,6 +243,35 @@ class DB:
         # the bar jump back to the start; a job claimed again starts at 0 (see claim)
         self.run("UPDATE jobs SET moved=CASE WHEN ABS(progress - ?) > 1e-6 OR message != ? THEN ? ELSE moved END, "
                  "progress=MAX(progress, ?), message=? WHERE id=?", (p, msg, time.time(), p, msg, job_id))
+        if msg:
+            self.step(job_id, msg)
+
+    def step(self, job_id: int, message: str) -> None:
+        """The job's step log, shown live under the bar: a new line when the step changes; a counter that moves
+        ("Watched 3 of 7 clips") updates its own line instead of adding one."""
+        cache = self.__dict__.setdefault("_steps", {})
+        if cache.get(job_id) == message:
+            return
+        last = self.one("SELECT id, message FROM steps WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,))
+        if last and last["message"] == message:
+            cache[job_id] = message
+            return
+        if last and re.sub(r"\d+", "#", last["message"]) == re.sub(r"\d+", "#", message):
+            self.run("UPDATE steps SET message=? WHERE id=?", (message[:200], last["id"]))
+        else:
+            self.run("INSERT INTO steps(job_id, at, message) VALUES (?,?,?)", (job_id, time.time(), message[:200]))
+        cache[job_id] = message
+
+    def steps(self, job_id: int, n: int = 8) -> list[dict]:
+        rows = self.all("SELECT at, message FROM steps WHERE job_id=? ORDER BY id DESC LIMIT ?", (job_id, n))
+        return rows[::-1]
+
+    def take_back(self, job_id: int, why: str, delay: float = 0.0) -> None:
+        """Put a running job back in the queue and tell whoever runs it to drop it (remote.py checks `abort`)."""
+        self.run("UPDATE jobs SET status='queued', after=?, error=?, abort=? WHERE id=?",
+                 (time.time() + delay, why[:500], time.time(), job_id))
+        self.__dict__.setdefault("_steps", {}).pop(job_id, None)
+        self.run("INSERT INTO steps(job_id, at, message) VALUES (?,?,?)", (job_id, time.time(), why[:200]))
 
     def job_done(self, job_id: int, status: str = "done", error: str | None = None) -> None:
         self.run("UPDATE jobs SET status=?, error=?, finished=?, progress=CASE WHEN ?='done' THEN 1 ELSE progress END "

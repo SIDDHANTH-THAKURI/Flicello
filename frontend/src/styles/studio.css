@@ -158,10 +158,24 @@ fieldset.group legend small { font-weight: 400; color: var(--muted); }
 .reel::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--paper); box-shadow: 0 0 18px 2px rgba(255, 106, 61, .8); }
 @keyframes reel { to { transform: translateX(-50%); } }
 .working h2 { margin: .4rem 0 0; font-size: clamp(1.5rem, 1.1rem + 1.4vw, 2.2rem); letter-spacing: -0.03em; }
-.meter { width: min(460px, 92%); height: 8px; border-radius: 6px; background: rgba(255, 255, 255, .07); overflow: hidden; }
-.meter span { display: block; height: 100%; width: 3%; border-radius: 6px; background: linear-gradient(90deg, var(--amber), var(--rose), var(--violet)); transition: width .8s var(--ease-out); position: relative; }
-.meter span::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .5), transparent); animation: shimmer 1.6s linear infinite; }
-@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+/* The bar: real progress only grows, with a calm glow breathing at its tip (nothing slides back and forth inside it).
+   Waiting for a turn there is no progress to show, so a soft light drifts across the whole track instead. */
+.meter { position: relative; width: min(460px, 92%); height: 8px; border-radius: 6px; background: rgba(255, 255, 255, .07); overflow: hidden; }
+.meter span { position: relative; display: block; height: 100%; width: 0; min-width: 8px; border-radius: 6px; background: linear-gradient(90deg, var(--amber), var(--rose), var(--violet)); transition: width 1s linear; }
+.meter span::after { content: ""; position: absolute; top: -4px; bottom: -4px; right: -6px; width: 16px; border-radius: 50%; background: radial-gradient(closest-side, rgba(255, 255, 255, .85), rgba(255, 106, 61, .35) 60%, transparent); animation: tip 2.4s ease-in-out infinite; }
+@keyframes tip { 0%, 100% { opacity: .35; } 50% { opacity: .95; } }
+.meter.waiting span { opacity: 0; }
+.meter.waiting::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 36%; border-radius: 6px; background: linear-gradient(90deg, transparent, rgba(255, 106, 61, .55), rgba(143, 91, 255, .55), transparent); animation: drift 3.2s ease-in-out infinite alternate; }
+@keyframes drift { from { transform: translateX(-30%); } to { transform: translateX(210%); } }
+@media (prefers-reduced-motion: reduce) { .meter span::after, .meter.waiting::before { animation: none; } .meter.waiting::before { transform: translateX(90%); } }
+/* What it has done so far, live */
+.steps { width: min(460px, 92%); margin: .3rem 0 0; padding: 0; display: grid; gap: .35rem; text-align: left; }
+.steps:empty { display: none; }
+.steps li { list-style: none; display: flex; justify-content: space-between; gap: 1rem; font-size: .86rem; color: var(--muted); }
+.steps li span::before { content: "✓"; display: inline-block; width: 1.3rem; color: var(--keep); }
+.steps li.now { color: var(--paper); }
+.steps li.now span::before { content: "●"; color: var(--rose); animation: tip 1.6s ease-in-out infinite; }
+.steps li time { font-family: var(--f-mono); font-size: .78rem; color: var(--faint); white-space: nowrap; }
 .working .msg { margin: 0; color: var(--paper-2); }
 .working .eta { margin: 0; color: var(--muted); font-size: .88rem; font-family: var(--f-mono); }
 
@@ -230,6 +244,11 @@ input[type="range"].slide::-moz-range-thumb { width: 28px; height: 28px; border-
 .rules li i { color: var(--muted); font-style: normal; font-size: .85rem; }
 .rules li.answer { border-color: rgba(124, 243, 196, .25); }
 
+details.report-zone { margin-top: 2rem; border-radius: var(--r-l); border: 1px solid var(--line-2); padding: 1rem 1.2rem; }
+details.report-zone summary { cursor: pointer; color: var(--paper-2); font-weight: 600; }
+details.report-zone form { margin-top: 1rem; display: grid; gap: .6rem; justify-items: start; }
+details.report-zone .field { width: 100%; }
+details.report-zone + details.danger-zone { margin-top: 1rem; }
 details.danger-zone { margin-top: 2rem; border-radius: var(--r-l); border: 1px solid rgba(255, 93, 108, .22); padding: 1rem 1.2rem; }
 details.danger-zone summary { cursor: pointer; color: #ffb3bb; font-weight: 600; }
 details.danger-zone form { margin-top: 1rem; }

@@ -155,3 +155,92 @@ def test_a_waiting_video_says_what_it_waits_for_and_its_time_counts_the_jobs_ahe
     server.db.heartbeat("renderer-quick", {})
     assert server.queued_note(step) == ""
     assert server.eta(step) == int(alone)
+
+
+def test_the_watchdog_takes_back_a_job_whose_renderer_vanished_or_that_stopped_moving_and_fails_it_in_the_end(server):
+    import time as _t
+
+    from vidosuper.studio.worker import STALL_RETRY, watchdog
+
+    user, p = _project(server)
+    job = server.db.enqueue("prepare", p["id"], user["id"])
+    server.db.set_stage(p["id"], "preparing")
+    server.db.claim("quick", "renderer-quick")
+    server.db.job_progress(job, 0.2, "Watching 3 clips")
+    server.db.heartbeat("renderer-quick", {})
+    assert watchdog(server) == []  # alive and moving: left alone
+    # the renderer lane stops checking in: the job goes back in the queue and the renderer is told to drop it
+    server.db.run("UPDATE heartbeat SET at=? WHERE name='renderer-quick'", (_t.time() - 400,))
+    assert watchdog(server) == [f"took back {job}"]
+    row = server.db.one("SELECT * FROM jobs WHERE id=?", (job,))
+    assert row["status"] == "queued" and row["abort"]
+    assert "offline" in server.db.steps(job)[-1]["message"]
+    # claimed again by a live lane, then it stops moving: taken back again; on the third try it fails in plain words
+    server.db.heartbeat("renderer-quick", {})
+    for _ in range(2):
+        server.db.claim("quick", "renderer-quick")
+        assert server.db.one("SELECT abort FROM jobs WHERE id=?", (job,))["abort"] is None
+        server.db.run("UPDATE jobs SET moved=? WHERE id=?", (_t.time() - STALL_RETRY - 60, job))
+        watchdog(server)
+    assert server.db.one("SELECT status FROM jobs WHERE id=?", (job,))["status"] == "failed"
+    project = server.db.project(p["id"])
+    assert project["stage"] == "failed" and "try again" in project["error"]
+
+
+def test_a_renderer_drops_a_job_the_server_took_back(server, tmp_path):
+    user, p = _project(server)
+    job = server.db.enqueue("prepare", p["id"], user["id"])
+    server.db.claim("all", "renderer")
+    w = _worker(server, tmp_path)
+    dropped = []
+    w.on_abort = lambda: dropped.append(True)
+    w.current = job
+    w.check()
+    assert not dropped
+    server.db.take_back(job, "stuck")
+    w.check()
+    assert dropped
+
+
+def test_the_step_log_adds_a_line_per_step_and_a_counter_updates_its_own_line(server):
+    user, p = _project(server)
+    job = server.db.enqueue("prepare", p["id"], user["id"])
+    server.db.claim()
+    for k in range(1, 4):
+        server.db.job_progress(job, 0.1 * k, f"Watched {k} of 3 clips")
+    server.db.job_progress(job, 0.5, "Planning the cut on the song's beats")
+    server.db.job_progress(job, 0.6, "Planning the cut on the song's beats")
+    assert [s["message"] for s in server.db.steps(job)] == ["Watched 3 of 3 clips", "Planning the cut on the song's beats"]
+    client = TestClient(create_app(server))
+    client.cookies.set("vs_session", accounts.new_session(server.db, server.s, user["id"], "1.2.3.4"))
+    server.db.set_stage(p["id"], "preparing")
+    st = client.get(f"/api/p/{p['id']}/status").json()
+    assert [s["m"] for s in st["steps"]] == ["Watched 3 of 3 clips", "Planning the cut on the song's beats"]
+    assert st["steps"][-1]["now"] and not st["steps"][0]["now"]
+    assert "Planning the cut" in client.get(f"/p/{p['id']}").text
+
+
+def test_a_reported_problem_is_kept_with_what_happened_and_the_owner_is_told(server):
+    import json as _json
+    import re as _re
+
+    server.s.mail_outbox = True
+    user, p = _project(server)
+    server.db.run("UPDATE users SET email='me@example.com' WHERE id=?", (user["id"],))
+    job = server.db.enqueue("prepare", p["id"], user["id"])
+    server.db.claim()
+    server.db.job_progress(job, 0.3, "Watching 2 clips")
+    client = TestClient(create_app(server))
+    client.cookies.set("vs_session", accounts.new_session(server.db, server.s, user["id"], "1.2.3.4"))
+    page = client.get(f"/p/{p['id']}").text
+    assert "Report a problem" in page
+    csrf = _re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    r = client.post(f"/p/{p['id']}/report", data={"csrf": csrf, "note": "stuck for ages"}, follow_redirects=False)
+    assert "we%27ve%20got%20it" in r.headers["location"].lower() or "got it" in r.headers["location"]
+    rep = server.db.one("SELECT * FROM reports")
+    ctx = _json.loads(rep["context"])
+    assert rep["note"] == "stuck for ages" and ctx["job"]["id"] == job and ctx["steps"][-1]["message"] == "Watching 2 clips"
+    from vidosuper.studio import mail
+
+    assert any("stuck for ages" in m["text"] and m["to"] == "me@example.com" for m in mail.outbox(server.s))
+    assert "stuck for ages" in client.get("/admin").text

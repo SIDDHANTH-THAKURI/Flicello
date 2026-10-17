@@ -149,6 +149,48 @@ class Studio:
                 except Exception:  # noqa: BLE001 - they can sign in anyway; the owner sees no email went
                     log.warning("could not email an approval")
 
+    # ------------------------------------------------------------------ problems people report
+    def report_problem(self, user: dict, project: dict, note: str) -> int:
+        """Someone says something is wrong with a video. Kept with everything needed to look into it (the stage, the
+        step and its log, the recent events), and the owner is told at once."""
+        note = " ".join((note or "").split())[:1500]
+        if len(note) < 3:
+            raise ActionError("Tell us in a few words what went wrong.")
+        if self.db.value("SELECT COUNT(*) FROM reports WHERE user_id=? AND at > ?", (user["id"], time.time() - 86400),
+                         0) >= 8:
+            raise ActionError("We've got your reports from today and are on them. Thank you!")
+        job = self.db.active_job(project["id"]) or self.db.one(
+            "SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1", (project["id"],))
+        context = {
+            "stage": project["stage"], "error": project.get("error"), "kind": project["kind"],
+            "style": project.get("style"), "length": project["length"], "shapes": project["shapes"],
+            "job": {k: job.get(k) for k in ("id", "kind", "status", "progress", "message", "attempts", "error",
+                                            "worker", "started", "moved")} if job else None,
+            "steps": self.db.steps(job["id"], 30) if job else [],
+            "events": [{"at": e["at"], "level": e["level"], "message": e["message"][:600]} for e in self.db.all(
+                "SELECT at, level, message FROM events WHERE project_id=? ORDER BY id DESC LIMIT 25", (project["id"],))],
+            "renderer_seen": self.renderer_seen(),
+        }
+        rid = self.db.run("INSERT INTO reports(at, user_id, project_id, job_id, note, context) VALUES (?,?,?,?,?,?)",
+                          (time.time(), user["id"], project["id"], job["id"] if job else None, note,
+                           json.dumps(context, default=str)))
+        who = user.get("display") or user["name"]
+        alert(self.db, self.s, "report", f"{who} reported a problem with a video ({project['stage']}): {note[:200]}")
+        from . import mail
+
+        if mail.available(self.s):
+            site = (self.s.site_url or "").rstrip("/")
+            for owner in self.db.all("SELECT email FROM users WHERE role='owner' AND email IS NOT NULL"):
+                try:
+                    mail.send(self.s, owner["email"], *mail.notice_email(self.s, f"{who} reported a problem", [
+                        f"{who} ({user.get('email') or 'no email'}) says: {note}",
+                        f"The video is at the '{project['stage']}' stage"
+                        + (f"; the last step: {job['message'] or job['kind']} ({job['status']})." if job else "."),
+                        f"Everything about it is on the admin page: {site}/admin#reports"]))
+                except Exception:  # noqa: BLE001 - the report is saved either way
+                    log.warning("could not email the owner about a report")
+        return rid
+
     def videos_left(self, user: dict) -> int | None:
         if self.is_owner(user):
             return None

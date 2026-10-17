@@ -185,6 +185,8 @@ class RemoteWorker:
         self.studio.db = self.db
         self.mirror = Mirror(http, self.studio.s)
         self._last_purge = 0.0
+        self.current: int | None = None  # the job running now (the pulse checks the server still wants it)
+        self.on_abort = lambda: os._exit(3)  # a lane process is started again by its supervisor (run_split)
 
     def _apply(self, settings: dict) -> None:
         """The server decides what costs money; this machine decides how hard it works (render processes)."""
@@ -233,7 +235,11 @@ class RemoteWorker:
             self.db.requeue(job["id"], delay=60.0, error="the renderer couldn't fetch the files")
             raise
         self.db.hold = True
-        self.studio.run_job(job)
+        self.current = job["id"]
+        try:
+            self.studio.run_job(job)
+        finally:
+            self.current = None
         try:
             if uid and pid:
                 sent = self.mirror.up(uid, pid, before)
@@ -246,12 +252,24 @@ class RemoteWorker:
         log.info("job %s finished in %.0fs", job["id"], time.monotonic() - started)
         return True
 
+    def check(self) -> None:
+        """Check in, and drop the running job if the server took it back (its watchdog found it stuck): a stuck step
+        can't be stopped from inside, so the whole lane process ends and its supervisor starts it again."""
+        self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node()})
+        job = self.current
+        if job is None:
+            return
+        row = self.db.one("SELECT abort FROM jobs WHERE id=?", (job,))
+        if row and row["abort"] and self.current == job:
+            log.error("the server took job %s back (stuck): dropping it and starting this lane again", job)
+            self.on_abort()
+
     def _pulse(self, stop) -> None:
         """Check in every 20 s, also in the middle of a long render: the site tells waiting people the renderer is
         offline only when it really is."""
         while not stop.wait(20.0):
             try:
-                self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node()})
+                self.check()
             except Exception:  # noqa: BLE001 - the next pulse tries again
                 pass
 
@@ -307,29 +325,26 @@ def follow_parent(pid: int, every: float = 5.0) -> None:
     threading.Thread(target=watch, name="parent-watch", daemon=True).start()
 
 
-def run_split(server: str, token: str = "", stop: threading.Event | None = None) -> None:
-    """The renderer as two lanes: whole films here, everything short in a second process this one starts, watches
-    and starts again if it stops."""
+def run_split(server: str, token: str = "", stop: threading.Event | None = None, every: float = 5.0) -> None:
+    """The renderer as a supervisor of two lane processes: whole films in one, everything short in the other. Each is
+    started again when it stops (a crash, or dropping a job the server took back) without touching the other's job;
+    both end with this process."""
     stop = stop or threading.Event()
     env = dict(os.environ)
     if token:
         env["VIDO_STUDIO_WORKER_TOKEN"] = token  # never on the command line, where other programs can read it
-    cmd = [sys.executable, "-m", "vidosuper", "studio", "remote-worker", "--server", server, "--lane", "quick",
-           "--parent", str(os.getpid())]
-    child: list[subprocess.Popen] = []
-
-    def keep_quick_lane():
-        while not stop.is_set():
-            if not child or child[0].poll() is not None:
-                if child:
-                    log.warning("the quick lane stopped (code %s): starting it again", child[0].returncode)
-                child[:] = [subprocess.Popen(cmd, env=env)]
-            stop.wait(15.0)
-
-    threading.Thread(target=keep_quick_lane, name="quick-lane", daemon=True).start()
+    lanes: dict[str, subprocess.Popen | None] = {"long": None, "quick": None}
     try:
-        RemoteWorker(server, token, lane="long").run(stop)
+        while not stop.is_set():
+            for lane, proc in lanes.items():
+                if proc is None or proc.poll() is not None:
+                    if proc is not None:
+                        log.warning("the %s lane stopped (code %s): starting it again", lane, proc.returncode)
+                    lanes[lane] = subprocess.Popen(
+                        [sys.executable, "-m", "vidosuper", "studio", "remote-worker", "--server", server,
+                         "--lane", lane, "--parent", str(os.getpid())], env=env)
+            stop.wait(every)
     finally:
-        stop.set()
-        for c in child:
-            c.terminate()
+        for proc in lanes.values():
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
