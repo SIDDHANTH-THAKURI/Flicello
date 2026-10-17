@@ -10,6 +10,10 @@ It only ever calls the server (web/workerapi.py); the server never connects to i
      never shows a finished video whose file has not arrived.
 The pipeline's working files (proxies, measurements, transcripts) stay on this machine between a project's jobs;
 copies of projects the server no longer has (deleted, or past retention) are removed every few minutes.
+
+It works in two lanes (db.LONG_KINDS), each its own process: this one renders whole films, a second one it starts and
+watches does everything short (watching clips, the story, looks, samples). Without that, one hour-long film made
+everybody else's video sit at "Waiting for its turn" for the whole hour.
 """
 
 from __future__ import annotations
@@ -17,6 +21,9 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 
@@ -155,9 +162,12 @@ class Mirror:
         return sent
 
 
+LANE_NAMES = {"all": "renderer", "long": "renderer", "quick": "renderer-quick"}
+
+
 class RemoteWorker:
     def __init__(self, server: str = "", token: str = "", home: Path | None = None, http: httpx.Client | None = None,
-                 name: str = "renderer"):
+                 name: str = "", lane: str = "all"):
         from .service import Studio
 
         s = load_settings(home or default_home())  # also reads the repo's .env (the token)
@@ -169,7 +179,7 @@ class RemoteWorker:
                                 headers={"User-Agent": f"flicello-worker/{platform.node()}"})
         if token:
             http.headers["Authorization"] = f"Bearer {token}"
-        self.http, self.name = http, name
+        self.http, self.lane, self.name = http, lane, name or LANE_NAMES[lane]
         self.studio = Studio(s)
         self.db = RemoteDB(http)
         self.studio.db = self.db
@@ -199,7 +209,7 @@ class RemoteWorker:
         return gone
 
     def recover(self) -> int:
-        return _call(self.http, "POST", PREFIX + "/recover").json()["requeued"]
+        return _call(self.http, "POST", PREFIX + "/recover", json={"worker": self.name}).json()["requeued"]
 
     def tick(self) -> bool:
         """One round: heartbeat, tidy up when due, and at most one job. True if a job ran."""
@@ -209,7 +219,7 @@ class RemoteWorker:
             removed = self.purge()
             if removed:
                 log.info("removed %d project copies the server no longer has", removed)
-        data = _call(self.http, "POST", PREFIX + "/claim").json()
+        data = _call(self.http, "POST", PREFIX + "/claim", json={"lane": self.lane, "worker": self.name}).json()
         job = data["job"]
         if job is None:
             return False
@@ -246,8 +256,6 @@ class RemoteWorker:
                 pass
 
     def run(self, stop=None) -> None:
-        import threading
-
         stop = stop or threading.Event()
         threading.Thread(target=self._pulse, args=(stop,), name="renderer-pulse", daemon=True).start()
         requeued = self.recover()
@@ -265,3 +273,63 @@ class RemoteWorker:
                 busy = False
             if not busy:
                 time.sleep(3.0)
+
+
+def _alive(pid: int) -> bool:
+    """Is process `pid` still running? (Windows: os.kill would end it, so ask the system instead.)"""
+    if os.name == "nt":
+        import ctypes
+
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            return False
+        try:
+            return k32.WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT: not ended
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def follow_parent(pid: int, every: float = 5.0) -> None:
+    """A lane started by another process ends the moment that process does (killed, window closed): a lane left
+    running would keep its job while the next one, under the same name, put that job back in the queue."""
+    def watch():
+        while _alive(pid):
+            time.sleep(every)
+        log.warning("the main renderer stopped: this lane stops too")
+        os._exit(0)
+
+    threading.Thread(target=watch, name="parent-watch", daemon=True).start()
+
+
+def run_split(server: str, token: str = "", stop: threading.Event | None = None) -> None:
+    """The renderer as two lanes: whole films here, everything short in a second process this one starts, watches
+    and starts again if it stops."""
+    stop = stop or threading.Event()
+    env = dict(os.environ)
+    if token:
+        env["VIDO_STUDIO_WORKER_TOKEN"] = token  # never on the command line, where other programs can read it
+    cmd = [sys.executable, "-m", "vidosuper", "studio", "remote-worker", "--server", server, "--lane", "quick",
+           "--parent", str(os.getpid())]
+    child: list[subprocess.Popen] = []
+
+    def keep_quick_lane():
+        while not stop.is_set():
+            if not child or child[0].poll() is not None:
+                if child:
+                    log.warning("the quick lane stopped (code %s): starting it again", child[0].returncode)
+                child[:] = [subprocess.Popen(cmd, env=env)]
+            stop.wait(15.0)
+
+    threading.Thread(target=keep_quick_lane, name="quick-lane", daemon=True).start()
+    try:
+        RemoteWorker(server, token, lane="long").run(stop)
+    finally:
+        stop.set()
+        for c in child:
+            c.terminate()

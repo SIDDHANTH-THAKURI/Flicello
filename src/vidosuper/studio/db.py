@@ -12,6 +12,21 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
+# A renderer works in two lanes, each its own process: whole films (an hour for a long designed talk on a busy PC) in
+# one, everything short (watching clips, the story, looks, a sample) in the other, so one long film never makes
+# everyone else wait for it. "all" is one process doing both (the server's own worker, an older renderer).
+LONG_KINDS = ("render", "revise")
+LANES = ("all", "long", "quick")
+
+
+def lane_of(kind: str) -> str:
+    return "long" if kind in LONG_KINDS else "quick"
+
+
+def _lane_sql(lane: str) -> str:
+    marks = ",".join("?" * len(LONG_KINDS))
+    return {"all": "", "long": f" AND kind IN ({marks})", "quick": f" AND kind NOT IN ({marks})"}[lane]
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, role TEXT NOT NULL, pw TEXT NOT NULL,
@@ -43,7 +58,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, user_id TEXT, kind TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
   error TEXT, priority INTEGER NOT NULL DEFAULT 5, created REAL NOT NULL, started REAL, finished REAL, after REAL,
-  moved REAL);
+  moved REAL, worker TEXT);
 CREATE TABLE IF NOT EXISTS pitches(
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, round INTEGER NOT NULL, data TEXT NOT NULL,
   stills TEXT NOT NULL, created REAL NOT NULL, rejected INTEGER NOT NULL DEFAULT 0);
@@ -126,6 +141,8 @@ class DB:
             con.execute("ALTER TABLE projects ADD COLUMN pace TEXT NOT NULL DEFAULT 'balanced'")
         if "moved" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:
             con.execute("ALTER TABLE jobs ADD COLUMN moved REAL")
+        if "worker" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:  # which renderer lane runs it
+            con.execute("ALTER TABLE jobs ADD COLUMN worker TEXT")
         if "style" not in {r[1] for r in con.execute("PRAGMA table_info(renders)")}:  # how a voice/talk video was drawn
             con.execute("ALTER TABLE renders ADD COLUMN style TEXT")
         # public sign-up: people are found by email or Google account; `name` stays the unique handle
@@ -177,19 +194,23 @@ class DB:
                         "VALUES (?,?,?,?, 'queued', ?, ?)",
                         (project_id, user_id, kind, json.dumps(params or {}), priority, time.time()))
 
-    def claim(self) -> dict | None:
-        """The next queued job (lowest priority number first, then oldest), marked running atomically."""
+    def claim(self, lane: str = "all", worker: str | None = None) -> dict | None:
+        """The next queued job of this lane (lowest priority number first, then oldest), marked running atomically
+        and as `worker`'s (so a worker starting again puts back only its own jobs, not another lane's)."""
+        if lane not in LANES:
+            raise ValueError(f"unknown lane {lane!r}")
         con = self.connect()
         try:
             con.execute("BEGIN IMMEDIATE")
-            row = con.execute("SELECT * FROM jobs WHERE status='queued' AND (after IS NULL OR after <= ?) "
-                              "ORDER BY priority, id LIMIT 1", (time.time(),)).fetchone()
+            row = con.execute("SELECT * FROM jobs WHERE status='queued' AND (after IS NULL OR after <= ?)"
+                              + _lane_sql(lane) + " ORDER BY priority, id LIMIT 1",
+                              (time.time(), *(LONG_KINDS if lane != "all" else ()))).fetchone()
             if row is None:
                 con.execute("COMMIT")
                 return None
             now = time.time()
-            con.execute("UPDATE jobs SET status='running', started=?, moved=?, attempts=attempts+1, progress=0, message='' "
-                        "WHERE id=?", (now, now, row["id"]))
+            con.execute("UPDATE jobs SET status='running', started=?, moved=?, attempts=attempts+1, progress=0, message='', "
+                        "worker=? WHERE id=?", (now, now, worker, row["id"]))
             con.execute("COMMIT")
             job = dict(row)
             job["attempts"] += 1

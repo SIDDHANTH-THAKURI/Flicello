@@ -115,3 +115,43 @@ def test_the_pc_forgets_projects_the_site_deleted_and_the_server_worker_leaves_j
     assert Worker(server).tick() is False  # remote mode: the server's own worker only keeps house
     assert server.db.one("SELECT status FROM jobs")["status"] == "queued"
     assert "renderer" in server.queued_note(server.db.one("SELECT * FROM jobs"))
+
+
+def test_a_long_film_never_makes_a_short_step_wait_and_a_lane_starting_again_keeps_off_the_other_lanes_job(server, tmp_path):
+    user, p = _project(server)
+    other = server.create_project(user, "Second", "9:16", 30, "")
+    film = server.db.enqueue("render", p["id"], user["id"], priority=6)
+    step = server.db.enqueue("prepare", other["id"], user["id"], priority=5)
+    client = TestClient(create_app(server))
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    # the long lane takes the film even though the short step comes first in the queue; the quick lane takes the step
+    assert client.post("/api/worker/claim", headers=auth, json={"lane": "long", "worker": "renderer"}).json()["job"]["id"] == film
+    assert client.post("/api/worker/claim", headers=auth, json={"lane": "quick", "worker": "renderer-quick"}).json()["job"]["id"] == step
+    assert client.post("/api/worker/claim", headers=auth, json={"lane": "long", "worker": "renderer"}).json()["job"] is None
+    # the quick lane starting again puts back only its own job: the film keeps rendering
+    assert client.post("/api/worker/recover", headers=auth, json={"worker": "renderer-quick"}).json()["requeued"] == 1
+    assert server.db.one("SELECT status FROM jobs WHERE id=?", (film,))["status"] == "running"
+    assert server.db.one("SELECT status FROM jobs WHERE id=?", (step,))["status"] == "queued"
+    # an older renderer (no lane given) still takes anything
+    assert client.post("/api/worker/claim", headers=auth).json()["job"]["id"] == step
+
+
+def test_a_waiting_video_says_what_it_waits_for_and_its_time_counts_the_jobs_ahead(server, tmp_path):
+    import time as _t
+
+    user, p = _project(server)
+    other = server.create_project(user, "Second", "9:16", 30, "")
+    film = server.db.enqueue("render", p["id"], user["id"], priority=6)
+    server.db.claim("long", "renderer")
+    server.db.run("UPDATE jobs SET started=? WHERE id=?", (_t.time() - 60, film))
+    step_id = server.db.enqueue("prepare", other["id"], user["id"], priority=5)
+    step = server.db.one("SELECT * FROM jobs WHERE id=?", (step_id,))
+    server.db.heartbeat("renderer", {})
+    # one lane only: the step waits for the film, and says so
+    assert "1 video is being made before yours" in server.queued_note(step)
+    alone = server.expected_seconds(step)
+    assert server.eta(step) > alone + 30
+    # with the quick lane online the step waits for nothing
+    server.db.heartbeat("renderer-quick", {})
+    assert server.queued_note(step) == ""
+    assert server.eta(step) == int(alone)

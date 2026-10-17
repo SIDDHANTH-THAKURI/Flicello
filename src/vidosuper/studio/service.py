@@ -294,11 +294,30 @@ class Studio:
         shapes = len(self.shapes(project)) if project["kind"] == "voice" else 1
         return seconds * rate * shapes + (90.0 if job["kind"] == "revise" else 0.0)
 
+    def ahead(self, job: dict) -> tuple[list[dict], list[dict]]:
+        """The jobs a queued job waits for: those running and those queued before it, in its own lane (with the
+        renderer's quick lane online, a short step never waits for a whole film; see db.LONG_KINDS)."""
+        from .db import lane_of
+
+        quick = self.db.one("SELECT at FROM heartbeat WHERE name='renderer-quick'")
+        split = self.s.jobs == "remote" and quick is not None and time.time() - quick["at"] < 90
+        rows = self.db.all("SELECT * FROM jobs WHERE status IN ('queued','running') AND id != ? AND kind != 'learn'",
+                           (job["id"],))
+        same = [r for r in rows if not split or lane_of(r["kind"]) == lane_of(job["kind"])]
+        running = [r for r in same if r["status"] == "running"]
+        queued = [r for r in same if r["status"] == "queued" and (r["priority"], r["id"]) < (job["priority"], job["id"])]
+        return running, queued
+
     def eta(self, job: dict | None) -> int | None:
-        """Seconds left for the running job: what it should take, corrected by how far it has got."""
+        """Seconds left: for a running job, what it should take corrected by how far it has got; for a queued one,
+        also what is left of every job ahead of it (it said "about 10 min" while an hour-long film ran ahead)."""
         if not job:
             return None
         typical = self.expected_seconds(job)
+        if job["status"] == "queued" and job.get("id"):  # a real one in the queue
+            running, queued = self.ahead(job)
+            return int(typical + sum(self.eta(r) or 0 for r in running)
+                       + sum(self.expected_seconds(r) for r in queued))
         if job["status"] != "running" or not job["started"]:
             return int(typical)
         elapsed = time.time() - job["started"]
@@ -966,18 +985,23 @@ class Studio:
 
     # ------------------------------------------------------------------ remote renderer (see remote.py)
     def renderer_seen(self) -> float | None:
-        """Seconds since a remote worker last checked in, or None if none ever has."""
-        beat = self.db.one("SELECT at FROM heartbeat WHERE name='renderer'")
-        return round(time.time() - beat["at"], 1) if beat else None
+        """Seconds since a remote worker (either lane) last checked in, or None if none ever has."""
+        at = self.db.value("SELECT MAX(at) FROM heartbeat WHERE name IN ('renderer', 'renderer-quick')", (), None)
+        return round(time.time() - at, 1) if at else None
 
     def queued_note(self, job: dict | None) -> str:
         """What a waiting video says while remote rendering is on and no renderer is online."""
         if not job or job["status"] != "queued" or self.s.jobs != "remote":
             return ""
         seen = self.renderer_seen()
-        if seen is not None and seen < 90:
+        if seen is None or seen >= 90:
+            return "Waiting for the video renderer to come online. Your video will start by itself; you can leave this page."
+        running, queued = self.ahead(job)
+        n = len(running) + len(queued)
+        if not n:
             return ""
-        return "Waiting for the video renderer to come online. Your video will start by itself; you can leave this page."
+        return (f"Waiting for its turn: {n} video{'s are' if n > 1 else ' is'} being made before yours. "
+                f"Yours starts by itself right after.")
 
     # ------------------------------------------------------------------ admin
     def health(self) -> dict:

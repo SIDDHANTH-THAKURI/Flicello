@@ -72,17 +72,26 @@ def worker_cmd() -> None:
 
 @studio_app.command("remote-worker")
 def remote_worker_cmd(server: str = typer.Option("https://flicello.com", help="The studio this machine renders for"),
-                      token: str = typer.Option("", help="Defaults to VIDO_STUDIO_WORKER_TOKEN (the repo's .env)")) -> None:
+                      token: str = typer.Option("", help="Defaults to VIDO_STUDIO_WORKER_TOKEN (the repo's .env)"),
+                      lane: str = typer.Option("split", help="split (whole films here + a second process for "
+                                                             "everything short), all, long or quick"),
+                      parent: int = typer.Option(0, hidden=True, help="Stop when this process does")) -> None:
     """Render the site's videos on this machine: claims jobs over HTTPS, mirrors each project's files, runs the job
     and sends the results back (see remote.py). The server never connects here. Stop with Ctrl+C."""
     import logging
 
-    from .remote import RemoteWorker
+    from .remote import RemoteWorker, follow_parent, run_split
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    worker = RemoteWorker(server, token)
-    console.print(f"[green]Rendering for {escape(server)}[/] (files in {escape(str(worker.studio.s.home))})")
-    worker.run()
+    logging.basicConfig(level=logging.INFO, format=f"%(asctime)s %(levelname)s [{lane}] %(name)s: %(message)s")
+    if parent:
+        follow_parent(parent)
+    console.print(f"[green]Rendering for {escape(server)}[/] ({escape(lane)} lane)")
+    if lane == "split":
+        run_split(server, token)
+        return
+    if lane not in ("all", "long", "quick"):
+        raise typer.BadParameter("lane: split, all, long or quick")
+    RemoteWorker(server, token, lane=lane).run()
 
 
 @studio_app.command("invite")

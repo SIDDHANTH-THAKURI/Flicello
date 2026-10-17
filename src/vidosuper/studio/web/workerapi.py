@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
+from ..db import LANES
 from ..storage import user_dir, workdir
 
 PREFIX = "/api/worker"
@@ -64,19 +65,33 @@ def mount(app, studio) -> None:
     def json_response(data) -> Response:
         return Response(json.dumps(data, default=lambda v: None), media_type="application/json")
 
+    async def body(request: Request) -> dict:
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001 - an older renderer sends nothing
+            return {}
+        return data if isinstance(data, dict) else {}
+
     @app.post(PREFIX + "/claim")
-    def claim(request: Request):
+    async def claim(request: Request):
         authorised(request)
-        job = db.claim()
+        data = await body(request)
+        lane = data.get("lane") if data.get("lane") in LANES else "all"
+        job = db.claim(lane, str(data.get("worker") or "")[:40] or None)
         return json_response({"job": job, "settings": {
             "brain": s.brain, "owner_brain": s.owner_brain,  # money decisions stay the server's
             "limits": s.limits.model_dump(), "models": s.models.model_dump()}})
 
     @app.post(PREFIX + "/recover")
-    def recover(request: Request):
-        """A worker starting up puts the jobs it was running back in the queue (their steps are safe to redo)."""
+    async def recover(request: Request):
+        """A worker starting up puts the jobs it was running back in the queue (their steps are safe to redo); only its
+        own, so a lane starting again never takes the other lane's job away mid-render."""
         authorised(request)
-        rows = db.all("SELECT id FROM jobs WHERE status='running'")
+        worker = str((await body(request)).get("worker") or "")[:40]
+        # (the main lane, "renderer", also owns jobs an older renderer claimed without a name)
+        rows = (db.all("SELECT id FROM jobs WHERE status='running' AND (worker=? OR (worker IS NULL AND ?='renderer'))",
+                       (worker, worker)) if worker
+                else db.all("SELECT id FROM jobs WHERE status='running'"))  # an older renderer: all of them
         for row in rows:
             db.requeue(row["id"])
         return json_response({"requeued": len(rows)})
