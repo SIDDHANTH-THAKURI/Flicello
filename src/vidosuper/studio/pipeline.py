@@ -97,6 +97,11 @@ class Workdir:
     def brain(self) -> Path:
         return self.root / "brain"
 
+    @property
+    def beats(self) -> Path:
+        """Tracks made for this film (each try, and the full track made from a taste)."""
+        return self.root / "beats"
+
     def ensure(self) -> "Workdir":
         for p in (self.music, self.out, self.stills, self.brain):
             p.mkdir(parents=True, exist_ok=True)

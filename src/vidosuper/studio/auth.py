@@ -31,7 +31,7 @@ PENDING_MINUTES = 30
 OAUTH_MINUTES = 10
 # requested: signed up, waiting for the owner; beta: approved; special: approved with long videos; declined: not now
 ACCESS = ("requested", "beta", "special", "declined")
-LEGAL_VERSION = "2026-10-17"  # bump when the Terms or the Privacy Policy change materially
+LEGAL_VERSION = "2026-10-18"  # bump when the Terms or the Privacy Policy change materially
 
 EMAIL = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")

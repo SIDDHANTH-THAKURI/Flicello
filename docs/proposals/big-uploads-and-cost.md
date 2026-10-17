@@ -53,4 +53,17 @@ person, which costs roughly $1-3 of AI each.
   regularly pass ~10 minutes; at ~$0.1-0.25 a film it doesn't change pricing much.
 - Revisit option 3 for heavy creators once paid plans exist.
 
-Decisions needed from the owner: the credit sizes and plan prices, and when to open sign-ups beyond approvals.
+## Decided and built (18 Oct 2026)
+
+The owner chose credits per film. Live now, with no payments yet (credits are free during early access):
+
+- a film uses 1 credit per started minute (of the film, or of the recording a voice or talking video is made from),
+  plus 1 when its look is painted; it is shown before anything starts and taken when the film starts (only the
+  difference if it starts again after a change); all of it comes back if the film is deleted before it is finished;
+- each access level gets credits every calendar month (beta 3, special 12); the owner gives anyone extra credits,
+  which never run out; a refund for an earlier month becomes extra credits;
+- the owner changes all four numbers on the admin page (Credits), and gives or takes back extra credits per person;
+- music made for a film (ElevenLabs, $0.15 a minute) is included; tries are capped per film (beta 3, special 6).
+
+Still for the owner: plan prices and top-ups (they need a payment provider: the old list), and when to open sign-ups
+beyond approvals.

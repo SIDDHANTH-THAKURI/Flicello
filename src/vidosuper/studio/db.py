@@ -84,6 +84,17 @@ CREATE INDEX IF NOT EXISTS steps_job ON steps(job_id);
 CREATE TABLE IF NOT EXISTS reports(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, user_id TEXT, project_id TEXT, job_id INTEGER,
   note TEXT NOT NULL, context TEXT NOT NULL, resolved REAL);
+CREATE TABLE IF NOT EXISTS beats(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, created REAL NOT NULL, ask TEXT NOT NULL DEFAULT '',
+  idea TEXT NOT NULL, plan TEXT NOT NULL, file TEXT NOT NULL, song_id TEXT, seconds REAL, whole INTEGER NOT NULL DEFAULT 1,
+  facts TEXT NOT NULL DEFAULT '', full_file TEXT, maker TEXT NOT NULL DEFAULT 'elevenlabs');
+CREATE INDEX IF NOT EXISTS beats_project ON beats(project_id, id);
+CREATE TABLE IF NOT EXISTS credits(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, at REAL NOT NULL, month TEXT NOT NULL,
+  monthly INTEGER NOT NULL DEFAULT 0, extra INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL, project_id TEXT,
+  note TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS credits_user ON credits(user_id, month);
+CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT NOT NULL, at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, project_id TEXT, job_id INTEGER, level TEXT NOT NULL,
   message TEXT NOT NULL);
@@ -150,7 +161,11 @@ class DB:
         for col, kind in (("cut_note", "TEXT NOT NULL DEFAULT ''"), ("improvise", "INTEGER NOT NULL DEFAULT 35"),
                           ("sound", "TEXT NOT NULL DEFAULT 'silent'"), ("routed", "TEXT NOT NULL DEFAULT ''"),
                           # step 3c: what the AI understood, and what the person agreed to after correcting it
-                          ("understood", "TEXT"), ("brief", "TEXT")):
+                          ("understood", "TEXT"), ("brief", "TEXT"),
+                          # the track made for this film that they picked (beats.id)
+                          ("beat", "INTEGER"),
+                          # the credits this film has used (charged when it starts; see Studio.credits)
+                          ("credits", "INTEGER NOT NULL DEFAULT 0")):
             if col not in have:
                 con.execute(f"ALTER TABLE projects ADD COLUMN {col} {kind}")
         if "moved" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:

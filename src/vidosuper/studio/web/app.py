@@ -116,6 +116,8 @@ def create_app(studio: Studio) -> FastAPI:
     templates.env.filters["eta"] = eta_text
     templates.env.filters["ago_s"] = lambda n: f"{int(n)} s" if int(n) < 60 else f"{int(n) // 60} min {int(n) % 60:02d} s" if int(n) < 3600 else f"{int(n) // 3600} h {int(n) % 3600 // 60} min"
     templates.env.filters["span"] = lambda n: f"{int(n)} seconds" if int(n) <= 60 else f"{int(n) / 60:g} min"
+    templates.env.filters["dur"] = lambda n: f"{int(n)} s" if int(n) < 60 else (
+        f"{int(n) // 60} min" + (f" {int(n) % 60} s" if int(n) % 60 else ""))
     from ..service import IMPROVISE
 
     templates.env.globals["IMPROVISE"] = IMPROVISE
@@ -404,17 +406,17 @@ def create_app(studio: Studio) -> FastAPI:
                                   (p["id"], p["chosen"] or 0))
             names = json.loads(still["stills"]) if still else []
             thumbs[p["id"]] = names[0] if names else None
-        return page(request, "home.html", user, sess, projects=projects, thumbs=thumbs, left=studio.videos_left(user),
-                    allowed=user["videos_allowed"] or s.limits.videos_per_user)
+        return page(request, "home.html", user, sess, projects=projects, thumbs=thumbs, credits=studio.credits(user))
 
     def new_ctx(user: dict) -> dict:
         lengths = studio.lengths_for(user)
-        return {"lengths": lengths, "more_lengths": max(lengths) < max(LENGTHS)}
+        return {"lengths": lengths, "more_lengths": max(lengths) < max(LENGTHS), "credits": studio.credits(user),
+                "pricing": studio.pricing()}
 
     @app.get("/new", response_class=HTMLResponse)
     def new_page(request: Request):
         user, sess = need_user(request)
-        return page(request, "new.html", user, sess, left=studio.videos_left(user),
+        return page(request, "new.html", user, sess,
                     default_pace=studio.profile(user).answers.get("pace", "balanced"), **new_ctx(user))
 
     @app.post("/new")
@@ -436,8 +438,7 @@ def create_app(studio: Studio) -> FastAPI:
             project = studio.create_project(user, title, shapes, seconds, intent, pace, kind, style, cut_note,
                                             improvise, describe)
         except ActionError as exc:
-            return page(request, "new.html", user, sess, left=studio.videos_left(user), error=str(exc),
-                        default_pace=pace, **new_ctx(user))
+            return page(request, "new.html", user, sess, error=str(exc), default_pace=pace, **new_ctx(user))
         return back(f"/p/{project['id']}")
 
     def owned(user: dict, pid: str) -> dict:
@@ -464,6 +465,8 @@ def create_app(studio: Studio) -> FastAPI:
                                                           (pid,)) if p["stage"] == "failed" else None)),
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
                     backs=studio.back_targets(p), understood=studio.understanding(p), tier=studio.tier(user),
+                    beats=studio.beats(p), beats_left=studio.beats_left(p), track_seconds=studio.track_seconds(p),
+                    can_compose=studio.can_compose(), cost=studio.film_cost(p), credits=studio.credits(user),
                     names=clip_names(p) if p["stage"] == "understood" else {},
                     lengths=studio.lengths_for(user),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
@@ -497,6 +500,15 @@ def create_app(studio: Studio) -> FastAPI:
     @app.post("/p/{pid}/music")
     def music(request: Request, pid: str, csrf: str = Form(""), choice: str = Form("made")):
         return act(request, csrf, pid, lambda u, p: studio.set_music(p, choice))
+
+    @app.post("/p/{pid}/beat")
+    def beat(request: Request, pid: str, csrf: str = Form(""), ask: str = Form(""), base: int = Form(0),
+             change: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.make_beat(p, ask, base, change))
+
+    @app.post("/p/{pid}/beat/use")
+    def beat_use(request: Request, pid: str, csrf: str = Form(""), beat: int = Form(0)):
+        return act(request, csrf, pid, lambda u, p: studio.use_beat(p, beat))
 
     @app.post("/p/{pid}/sound")
     def sound(request: Request, pid: str, csrf: str = Form(""), sound: str = Form("natural")):
@@ -717,17 +729,18 @@ def create_app(studio: Studio) -> FastAPI:
     def media(request: Request, pid: str, kind: str, name: str, dl: int = 0):
         user, _ = need_user(request, api=True)
         p = owned(user, pid)
-        if kind not in ("out", "stills"):
+        if kind not in ("out", "stills", "beats"):
             raise HTTPException(404, "Not found.")
         folder = getattr(workdir(s, p["user_id"], pid), kind)
         path = safe_child(folder, name)
-        if path is None or path.suffix.lower() not in (".mp4", ".jpg"):
+        types = {".mp4": "video/mp4", ".jpg": "image/jpeg", ".mp3": "audio/mpeg", ".wav": "audio/wav"}
+        if path is None or path.suffix.lower() not in types or (kind == "beats") != (path.suffix.lower() in (".mp3", ".wav")):
             raise HTTPException(404, "Not found.")
-        media_type = "video/mp4" if path.suffix.lower() == ".mp4" else "image/jpeg"
+        media_type = types[path.suffix.lower()]
         headers = {"Cache-Control": "private, max-age=3600"}
         if dl:
             safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in p["title"])[:40].strip() or "video"
-            headers["Content-Disposition"] = f'attachment; filename="{safe_title} {path.stem}.mp4"'
+            headers["Content-Disposition"] = f'attachment; filename="{safe_title} {path.stem}{path.suffix}"'
         return FileResponse(path, media_type=media_type, headers=headers)
 
     # ------------------------------------------------------------------ my style and account
@@ -818,9 +831,22 @@ def create_app(studio: Studio) -> FastAPI:
         requests = [u for u in users if (u.get("access") or "beta") == "requested" and u["role"] != "owner"]
         requests.sort(key=lambda u: (not u.get("request_note"), -(u.get("requested") or u["created"])))
         return page(request, "admin.html", user, sess, health=studio.health(), users=users, jobs=jobs, alerts=alerts,
-                    invites=invites, spend=spend, new_link=new_link, default_videos=s.limits.videos_per_user,
+                    invites=invites, spend=spend, new_link=new_link,
                     audit=audit, consents=consents, active="admin", public=s.public_signup, beta=s.beta,
-                    requests=requests, tiers=s.tiers, reports=reports)
+                    requests=requests, tiers=s.tiers, reports=reports, pricing=studio.pricing(),
+                    tier_credits=studio.tier_credits(),
+                    balances={u["id"]: studio.credits(u) for u in users if u["role"] != "owner"})
+
+    @app.post("/admin/pricing")
+    def admin_pricing(request: Request, csrf: str = Form(""), per_minute: int = Form(1), looks: int = Form(1),
+                      beta: int = Form(3), special: int = Form(12)):
+        user, sess = need_owner(request)
+        check_csrf(sess, csrf)
+        try:
+            studio.set_pricing(per_minute, looks, beta, special)
+        except ActionError as exc:
+            return back("/admin#credits", str(exc))
+        return back("/admin#credits", "Saved: new films use the new numbers; films already started keep theirs.")
 
     @app.get("/admin/api/metrics")
     def admin_metrics(request: Request, days: int = 30):
@@ -843,7 +869,7 @@ def create_app(studio: Studio) -> FastAPI:
 
     @app.post("/admin/user")
     def admin_user(request: Request, csrf: str = Form(""), uid: str = Form(""), action: str = Form(""),
-                   videos: int = Form(0), access: str = Form("")):
+                   access: str = Form(""), credits: int = Form(0), note: str = Form("")):
         user, sess = need_owner(request)
         check_csrf(sess, csrf)
         target = studio.user(uid)
@@ -862,8 +888,13 @@ def create_app(studio: Studio) -> FastAPI:
             studio.db.run("DELETE FROM sessions WHERE user_id=?", (uid,))
         elif action == "enable":
             studio.db.run("UPDATE users SET disabled=0 WHERE id=?", (uid,))
-        elif action == "videos" and 0 <= videos <= 50:
-            studio.db.run("UPDATE users SET videos_allowed=? WHERE id=?", (videos, uid))
+        elif action == "credits":
+            try:
+                studio.grant_credits(target, credits, note)
+            except ActionError as exc:
+                return back("/admin", str(exc))
+            who = target.get("display") or target["name"]
+            return back("/admin", f"{who} got {credits} credits." if credits > 0 else f"Took {-credits} credits back from {who}.")
         return back("/admin", "Saved.")
 
     @app.post("/admin/job")

@@ -133,22 +133,75 @@ def _bare(text: str) -> str:
     return re.sub(r"(?:'s|’s)$", "", re.sub(r"^\W+|\W+$", "", text.strip()).lower())
 
 
+def _put(word: str, new: str, last: str | None = None) -> str:
+    """`new` in place of `word`, keeping the word's leading punctuation and the trailing punctuation and possessive 's
+    of `last` (the phrase's last word; the word itself by default)."""
+    lead = re.match(r"^(\W*)", word.strip()).group(1)
+    tail = re.search(r"((?:'s|’s)?\W*)$", (last if last is not None else word).strip()).group(1)
+    return lead + new + tail
+
+
 def respell_words(words: list[dict], fixes: list[Respell]) -> list[dict]:
-    """The words with misheard names put right (keeping their punctuation and a possessive 's), for the captions."""
-    table = {_bare(f.heard): re.sub(r"(?:'s|’s)$", "", f.written.strip()) for f in fixes  # the 's is kept from the word
-             if _bare(f.heard) and f.written.strip()}
-    if not table:
+    """The words with misheard names put right (keeping their punctuation and a possessive 's), for the captions. A
+    fix may be several words ('Cloud code' -> 'Claude Code'): word for word when the counts match, else the whole
+    name on the first word, which then lasts until the last one ends."""
+    singles: dict[str, str] = {}
+    phrases: list[tuple[list[str], str]] = []
+    for f in fixes:
+        heard = [_bare(t) for t in f.heard.split() if _bare(t)]
+        written = re.sub(r"(?:'s|’s)$", "", f.written.strip())  # the 's is kept from the word
+        if not heard or not written:
+            continue
+        if len(heard) == 1:
+            singles[heard[0]] = written
+        else:
+            phrases.append((heard, written))
+    if not singles and not phrases:
         return words
-    out = []
-    for w in words:
-        text = w["text"]
-        key = _bare(text)
-        if key in table:
-            m = re.match(r"^(\W*)(.*?)((?:'s|’s)?\W*)$", text.strip())
-            text = (m.group(1) + table[key] + m.group(3)) if m else table[key]
-            w = {**w, "text": text}
-        out.append(w)
+    phrases.sort(key=lambda p: -len(p[0]))  # the longest name first
+    keys = [_bare(w["text"]) for w in words]
+    out: list[dict] = []
+    i = 0
+    while i < len(words):
+        for heard, written in phrases:
+            n = len(heard)
+            if keys[i:i + n] == heard:
+                parts = written.split()
+                if len(parts) == n:
+                    out.extend({**w, "text": _put(w["text"], new)} for w, new in zip(words[i:i + n], parts))
+                else:
+                    out.append({**words[i], "text": _put(words[i]["text"], written, words[i + n - 1]["text"]),
+                                "end": words[i + n - 1]["end"]})
+                i += n
+                break
+        else:
+            w = words[i]
+            if keys[i] in singles:
+                w = {**w, "text": _put(w["text"], singles[keys[i]])}
+            out.append(w)
+            i += 1
     return out
+
+
+def respell_text(script: "VoiceScript", spell: list[tuple[str, str]]) -> "VoiceScript":
+    """Every text on screen with the spellings the person corrected (whole words, any case), and those fixes added to
+    the captions' (theirs win over any the AI made for the same word)."""
+    fixes = [(h.strip(), w.strip()) for h, w in spell if h.strip() and w.strip() and h.strip() != w.strip()]
+    if not fixes:
+        return script
+
+    def fix(text: str) -> str:
+        for heard, written in fixes:
+            text = re.sub(r"(?<![\w])" + r"\s+".join(map(re.escape, heard.split())) + r"(?![\w])", written, text,
+                          flags=re.IGNORECASE)
+        return text
+
+    scenes = [s.model_copy(update={"headline": fix(s.headline), "items": [i.model_copy(update={"text": fix(i.text)})
+                                                                          for i in s.items]}) for s in script.scenes]
+    callouts = [c.model_copy(update={"text": fix(c.text)}) for c in script.callouts]
+    theirs = {_bare(h) for h, _ in fixes}
+    respell = [Respell(heard=h, written=w) for h, w in fixes] + [r for r in script.respell if _bare(r.heard) not in theirs]
+    return script.model_copy(update={"scenes": scenes, "callouts": callouts, "respell": respell, "name": fix(script.name)})
 
 
 def _desc(s: Scene) -> str:

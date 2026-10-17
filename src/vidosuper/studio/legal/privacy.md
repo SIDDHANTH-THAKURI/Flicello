@@ -1,6 +1,6 @@
 title: Privacy Policy
 summary: We collect what we need to make your films, keep it safe, never sell it, and never use your footage to train AI. You can download or delete everything at any time.
-updated: 17 October 2026
+updated: 18 October 2026
 
 ## Who we are
 
@@ -79,6 +79,12 @@ To edit your video, we send still frames from your clips, short transcripts of w
 to our AI provider, Anthropic (the maker of Claude). Anthropic analyses them and plans the edit for us. It processes
 this data on our behalf under its commercial terms, does not use it to train its models, and keeps it only for a
 limited time. Speech-to-text, beat detection, person cut-outs and rendering run on our own computers.
+
+Two more providers make parts of some videos, from text only. To paint the look you pick for a voice or talking video,
+we send text descriptions of its scenes (written by our AI from your request and what is said) to Google's Gemini
+image model. To make music for your film, when it uses music made for it, we send a short description of the sound
+(written by our AI from your words about the music and your film) to ElevenLabs. Neither receives your footage or your
+voice.
 
 The AI makes creative choices: which shots, in what order, which story. No decision with legal or similarly
 significant effects on you is made by automated means. You always choose the story, can ask for changes in plain

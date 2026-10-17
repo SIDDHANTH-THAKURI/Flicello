@@ -293,6 +293,37 @@ details.danger-zone form { margin-top: 1rem; }
 .u-clips li small { color: var(--muted); font-size: .82rem; }
 .u-clips .tick { flex: none; }
 .understood fieldset.group + fieldset.group { margin-top: 1rem; }
+.u-terms { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .55rem; }
+.u-terms li { display: grid; align-content: start; gap: .35rem; padding: .7rem .9rem; border: 1px solid var(--line); border-radius: 14px; background: rgba(255, 255, 255, .02); }
+.u-terms label { color: var(--muted); font-size: .84rem; }
+.u-terms label q { color: var(--paper-2); }
+.u-terms small { color: var(--muted); font-size: .8rem; }
 .u-grid > .panel { margin: 0; }
 .improvise-form { margin-top: 1.2rem; display: grid; gap: .7rem; justify-items: start; }
 .improvise-form .slider { width: 100%; }
+
+/* music made for the film: what it understood, the track to listen to, changing it */
+.beat { display: grid; gap: .6rem; padding: .9rem 1rem; border: 1px solid var(--line); border-radius: 16px; background: rgba(255, 255, 255, .025); }
+.beat.picked { border-color: rgba(255, 46, 126, .45); box-shadow: 0 0 24px rgba(255, 46, 126, .08); }
+.beat-head { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.beat-head b { font-size: 1rem; }
+.chip-ok { font-size: .78rem; color: var(--paper); background: rgba(255, 255, 255, .08); border-radius: 999px; padding: .2rem .65rem; }
+.beat audio, .beat-list audio { width: 100%; height: 40px; color-scheme: dark; }
+.beat-reading { margin: 0; color: var(--paper-2); font-size: .92rem; line-height: 1.45; }
+.beat-reading .muted { color: var(--muted); }
+.beat form { margin: 0; }
+.beat-change, .beat-tries { margin-top: .7rem; }
+.beat-list { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .6rem; }
+.beat-list li { display: grid; gap: .45rem; padding: .7rem .9rem; border: 1px solid var(--line); border-radius: 14px; }
+.beat-list li div { display: grid; gap: .1rem; }
+.beat-list small { color: var(--muted); font-size: .82rem; }
+.beat-list form { margin: 0; }
+.beat-ask { display: grid; gap: .6rem; justify-items: start; }
+.beat-ask .field { width: 100%; }
+
+/* credits: what a film uses, before it starts */
+.cost-line { margin: .2rem 0 .9rem; color: var(--paper-2); font-size: .95rem; }
+.cost-note { margin: .7rem 0 0; color: var(--paper-2); font-size: .88rem; text-align: center; }
+.cost-line.short, .cost-note.short { color: #ffb4c8; }
+a.allowance { text-decoration: none; transition: border-color .2s; }
+a.allowance:hover, a.allowance:focus-visible { border-color: var(--paper-2); }

@@ -22,7 +22,7 @@ from vidosuper.studio.brain.core import StoryContext, check_plan
 from vidosuper.studio.brain.schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StyleRule
 from vidosuper.studio.pipeline import slice_template
 from vidosuper.studio.profiles import Profile
-from vidosuper.studio.service import Studio
+from vidosuper.studio.service import Studio, ask_text
 from vidosuper.studio.settings import load_settings
 from vidosuper.studio.storage import safe_child
 from vidosuper.studio.web.app import create_app
@@ -385,6 +385,7 @@ def test_one_active_video_per_friend(studio):
     studio.start(projects[0])
     with pytest.raises(ActionError, match="One video at a time"):
         studio.start(projects[1])
+    assert studio.credits(studio.user(friend["id"]))["total"] == 2  # the film that didn't start took no credit
 
 
 def test_the_api_key_is_read_from_the_dotenv_file(tmp_path, monkeypatch):
@@ -896,7 +897,7 @@ def test_no_song_asks_for_a_made_beat_or_no_music_and_no_music_means_none_plays(
                     follow_redirects=False)
     pid = r.headers["location"].rsplit("/", 1)[1]
     page = client.get(f"/p/{pid}").text
-    assert "A beat made for you" in page and "No music" in page and studio.db.project(pid)["music"] == "made"
+    assert "Made for my film" in page and "No music" in page and studio.db.project(pid)["music"] == "made"
     with pytest.raises(ActionError):
         studio.set_music(studio.db.project(pid), "loud")
     client.post(f"/p/{pid}/music", data={"csrf": csrf, "choice": "none"})
@@ -992,6 +993,21 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     _upload(client, csrf, pid, media / "music.wav", "song")
     assert client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=False).status_code == 303
     _drain(studio)
+    # first it says what it heard, and they correct it: a name spelt their way, a part of their own
+    page = client.get(f"/p/{pid}").text
+    assert "what I heard in your recording" in page and "Names and words on screen" in page, studio.db.all("SELECT * FROM events")
+    assert "show me looks" in page and not studio.pitches(studio.db.project(pid))
+    u = studio.understanding(studio.db.project(pid))
+    assert u["parts"] and u["parts"][0]["at"] < 1.0 and u["story"]
+    client.post(f"/p/{pid}/understood", data={
+        "csrf": csrf, "story": "Why sleep is the cheapest memory upgrade",
+        "parts": "0:00 Sleep is the secret\n0:03 Eight hours, forty percent more\nEnd on: study, then sleep",
+        "terms_more": "memory = MEMORY"})
+    brief = json.loads(studio.db.project(pid)["brief"])
+    assert brief["parts"][1] == {"at": 3.0, "what": "Eight hours, forty percent more"} and brief["parts"][2]["at"] is None
+    assert {"heard": "memory", "written": "MEMORY"} in brief["terms"]
+    assert "'memory' is 'MEMORY'" in ask_text(studio.db.project(pid))
+    _drain(studio)
     page = client.get(f"/p/{pid}").text
     assert "Pick a look" in page and "Make it in this look" in page, studio.db.all("SELECT * FROM events")
     looks = studio.pitches(studio.db.project(pid))
@@ -1005,6 +1021,10 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     assert "Looks right" in page and "Back to the looks" in page, studio.db.all("SELECT * FROM events")
     plan = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
     assert all(sc["backdrop"] for sc in plan["scenes"]) and plan["look"].startswith(looks[0]["pitch"]["title"])
+    # their spelling, on screen and in the captions
+    assert {"heard": "memory", "written": "MEMORY"} in plan["respell"]
+    shown = " ".join([sc["headline"] for sc in plan["scenes"]] + [i["text"] for sc in plan["scenes"] for i in sc["items"]])
+    assert "memory" not in shown.replace("MEMORY", "")
     taste = studio.profile(friend).taste  # their looks are remembered: the next video's looks start from them
     assert [t["what"] for t in taste].count("picked") == 1 and [t["what"] for t in taste].count("passed") == 3
     assert any(t["what"] == "changed" and t["note"] == "warmer colours" for t in taste)
@@ -1045,6 +1065,9 @@ def test_a_talking_video_gets_callouts_and_keeps_its_own_sound(studio, media, mo
     assert studio.db.project(pid)["shapes"] == "9:16"
     _upload(client, csrf, pid, media / "clips" / "a_stable.mp4", "clip")
     client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    _drain(studio)
+    assert "what I heard in your video" in client.get(f"/p/{pid}").text, studio.db.all("SELECT * FROM events")
+    client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": "Why sleep matters for memory, simply"})
     _drain(studio)
     assert "Pick a look" in client.get(f"/p/{pid}").text, studio.db.all("SELECT * FROM events")
     client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": studio.pitches(studio.db.project(pid))[0]["id"]})
@@ -1220,3 +1243,295 @@ def test_a_recording_longer_than_their_access_allows_is_refused_with_their_own_l
                           "('c1', ?, 'me.mp4', 'c1.mp4', 1, 400, 0)", (p["id"],))
         with pytest.raises(ActionError, match="up to 3"):
             studio.start(studio.db.project(p["id"]))
+
+
+def test_a_talk_with_clean_labels_checks_what_was_heard_then_makes_a_sample_and_can_go_back(studio, media, monkeypatch):
+    from vidosuper.perceive import prep as prep_mod
+
+    monkeypatch.setattr(prep_mod, "transcribe", _fake_speech)
+    _friend(studio, "Lu")
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": "Lu", "password": "a long password 2"})
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
+    r = client.post("/new", data={"csrf": csrf, "title": "Labels", "shapes": "9:16", "length": 30, "kind": "talk",
+                                  "style": "labels", "intent": "simple labels for my points"}, follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    _upload(client, csrf, pid, media / "clips" / "a_stable.mp4", "clip")
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "make a sample" in page and "Understood" in page, studio.db.all("SELECT * FROM events")
+    client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": "Sleep is the secret to a strong memory",
+                                              "terms_more": "secret = Secret\nPeople"})
+    terms = json.loads(studio.db.project(pid)["brief"])["terms"]
+    assert {"heard": "secret", "written": "Secret"} in terms and {"heard": "People", "written": "People"} in terms
+    _drain(studio)
+    p = studio.db.project(pid)
+    assert p["stage"] == "review", studio.db.all("SELECT * FROM events")
+    script = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
+    assert {"heard": "secret", "written": "Secret"} in script["respell"]
+    # back to what was understood, to change it: a new script and sample follow from the new brief
+    assert "understood" in studio.back_targets(p)
+    client.post(f"/p/{pid}/back", data={"csrf": csrf, "to": "understood"})
+    assert studio.db.project(pid)["stage"] == "understood"
+    client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": "Sleep helps memory, in three short points"})
+    _drain(studio)
+    assert studio.db.project(pid)["stage"] == "review"
+
+
+def test_what_was_heard_must_name_words_from_the_transcript_and_parts_in_order():
+    from vidosuper.studio.brain.core import check_talk_understanding
+    from vidosuper.studio.brain.schemas import TalkPart, TalkUnderstanding, Term
+
+    utts = [{"start": 0.5, "end": 3.0, "text": "I use Cloud code every day."},
+            {"start": 3.2, "end": 6.0, "text": "It writes my tests."}]
+    good = TalkUnderstanding(story="How they use an AI coding tool daily", parts=[TalkPart(at=0.5, what="Daily use")],
+                             terms=[Term(heard="Cloud code", written="Claude Code", why="the AI coding tool")])
+    assert check_talk_understanding(good, utts, 6.0) == []
+    bad = good.model_copy(update={"parts": [TalkPart(at=4, what="b"), TalkPart(at=1, what="a")],
+                                  "terms": [Term(heard="Claude Code", written="Claude Code")]})
+    problems = " ".join(check_talk_understanding(bad, utts, 6.0))
+    assert "in the order" in problems and "not in the transcript" in problems
+
+
+def _fake_composer(monkeypatch, calls: list, fail: bool = False) -> None:
+    """ElevenLabs Music stand-in: every plan becomes our own beat of the plan's length (no network, no money)."""
+    import os
+
+    from vidosuper.music import compose as compose_mod
+    from vidosuper.music.house import make_beat
+
+    def fake(plan, out_path, *, model="music_v2_5", store=False, seed=None, timeout=600.0):
+        calls.append({"plan": plan, "store": store})
+        if fail:
+            raise compose_mod.ComposeError("the music service is down")
+        seconds = sum(c.get("duration_ms", 0) for c in plan["chunks"]) / 1000
+        tmp = Path(out_path).with_suffix(".tmp.wav")
+        make_beat(tmp, seconds, "balanced")
+        os.replace(tmp, out_path)
+        return {"path": Path(out_path), "song_id": f"song{len(calls)}" if store else "", "seconds": seconds}
+
+    monkeypatch.setattr(compose_mod, "available", lambda: True)
+    monkeypatch.setattr(compose_mod, "compose_plan", fake)
+
+
+def _signed_in(studio, name: str):
+    client = TestClient(create_app(studio))
+    client.post("/login", data={"name": name, "password": "a long password 2"})
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
+    return client, csrf
+
+
+def test_music_made_for_the_film_is_read_heard_changed_and_picked_before_anything_is_cut(studio, media, monkeypatch):
+    calls: list = []
+    _fake_composer(monkeypatch, calls)
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    friend = _friend(studio, "Mo")
+    client, csrf = _signed_in(studio, "Mo")
+    r = client.post("/new", data={"csrf": csrf, "title": "Beach", "shapes": "9:16", "length": 15,
+                                  "intent": "a sunny day at the beach"}, follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    page = client.get(f"/p/{pid}").text
+    assert "What should it sound like?" in page and "Made for my film" in page
+    # asked for, then stopped before it was made: back where they were, nothing used up
+    client.post(f"/p/{pid}/beat", data={"csrf": csrf, "ask": "warm lo-fi with piano"})
+    assert studio.db.project(pid)["stage"] == "composing"
+    client.post(f"/p/{pid}/stop", data={"csrf": csrf})
+    assert studio.db.project(pid)["stage"] == "setup" and studio.beats_left(studio.db.project(pid)) == 3
+    client.post(f"/p/{pid}/beat", data={"csrf": csrf, "ask": "warm lo-fi with piano"})
+    _drain(studio)
+    p = studio.db.project(pid)
+    beats = studio.beats(p)
+    assert p["stage"] == "setup" and p["beat"] == beats[0]["id"], studio.db.all("SELECT * FROM events")
+    assert len(beats) == 1 and beats[0]["whole"] and "lo-fi" in beats[0]["idea"]["reading"].lower()
+    assert "beats a minute" in beats[0]["facts"]
+    plan = calls[0]["plan"]
+    assert abs(sum(c["duration_ms"] for c in plan["chunks"]) / 1000 - 17) < 3 and not calls[0]["store"]
+    assert all("vocals" in c["negative_styles"] for c in plan["chunks"])
+    assert plan["chunks"][-1]["text"].startswith("[Ending]")
+    work = studio.s.users_dir / friend["id"] / "projects" / pid
+    assert [f.name for f in (work / "music").glob("song.*")] == ["song.mp3"]  # where an uploaded song would be
+    page = client.get(f"/p/{pid}").text
+    assert "How I read it" in page and "Your film's music" in page and f"/m/{pid}/beats/" in page
+    audio = client.get(f"/m/{pid}/beats/{beats[0]['file']}")
+    assert audio.status_code == 200 and audio.headers["content-type"].startswith("audio/")
+    assert client.get(f"/m/{pid}/beats/../studio.db").status_code == 404
+    # a change, heard, then back to the first one
+    client.post(f"/p/{pid}/beat", data={"csrf": csrf, "base": beats[0]["id"], "change": "slower and darker"})
+    _drain(studio)
+    beats = studio.beats(studio.db.project(pid))
+    assert len(beats) == 2 and studio.db.project(pid)["beat"] == beats[0]["id"] and "slower and darker" in beats[0]["ask"]
+    client.post(f"/p/{pid}/beat/use", data={"csrf": csrf, "beat": beats[1]["id"]})
+    assert studio.db.project(pid)["beat"] == beats[1]["id"]
+    assert studio.beats_left(studio.db.project(pid)) == 1
+    spent = studio.db.all("SELECT * FROM spend WHERE task='beat' AND backend='elevenlabs'")
+    assert len(spent) == 2 and all(x["usd"] > 0 and x["backend"] == "elevenlabs" for x in spent)
+    # no music takes it away; music made for the film brings the picked one back
+    client.post(f"/p/{pid}/music", data={"csrf": csrf, "choice": "none"})
+    assert not list((work / "music").glob("song.*"))
+    client.post(f"/p/{pid}/music", data={"csrf": csrf, "choice": "made"})
+    assert [f.name for f in (work / "music").glob("song.*")] == ["song.mp3"]
+    # the film is cut on it: no beat of our own is made
+    for name in ("a_stable.mp4", "c_pan.mp4"):
+        _upload(client, csrf, pid, media / "clips" / name, "clip")
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    _drain(studio)
+    assert studio.db.project(pid)["stage"] == "understood", studio.db.all("SELECT * FROM events")
+    assert len(calls) == 2 and not (work / "music" / "song.wav").exists()
+    page = client.get(f"/p/{pid}").text
+    assert "Listen to it, or change it" in page and "Your film's music" in page
+    # the last try, at 'what I understood': made, and the music line follows it
+    client.post(f"/p/{pid}/beat", data={"csrf": csrf, "base": beats[1]["id"], "change": "more drums"})
+    _drain(studio)
+    p = studio.db.project(pid)
+    assert p["stage"] == "understood" and studio.understanding(p)["music"].startswith("Your new track")
+    assert studio.beats_left(p) == 0
+    r = client.post(f"/p/{pid}/beat", data={"csrf": csrf, "base": beats[1]["id"], "change": "again"}, follow_redirects=True)
+    assert "all the tracks this film can have" in r.text
+
+
+def test_a_long_film_hears_a_taste_first_and_its_full_track_is_made_from_it(studio, media, monkeypatch):
+    calls: list = []
+    _fake_composer(monkeypatch, calls)
+    owner = _owner(studio)
+    p = studio.create_project(owner, "Road trip", "9:16", 240, "a long road trip")
+    studio.make_beat(p, "epic cinematic drums")
+    _drain(studio)
+    p = studio.db.project(p["id"])
+    row = studio.beats(p)[0]
+    assert not row["whole"] and row["song_id"] == "song1" and calls[0]["store"] and "taste" in row["facts"]
+    work = studio.s.users_dir / owner["id"] / "projects" / p["id"]
+    assert not list((work / "music").glob("song.*"))  # a taste is not the film's music yet
+    job = {"id": studio.db.enqueue("prepare", p["id"], owner["id"], {}, 5)}
+    path = studio._ensure_track(job, p, owner, None)
+    first = calls[-1]["plan"]["chunks"][0]
+    assert path.name.endswith("-full.mp3") and first["conditioning_ref"]["song_id"] == "song1"
+    assert first["conditioning_ref"]["range"]["end_ms"] - first["conditioning_ref"]["range"]["start_ms"] <= 30000
+    assert abs(sum(c["duration_ms"] for c in calls[-1]["plan"]["chunks"]) / 1000 - 242) < 4
+    assert all(c["duration_ms"] <= 120000 for c in calls[-1]["plan"]["chunks"])
+    assert [f.name for f in (work / "music").glob("song.*")] == ["song.mp3"]
+    assert studio.beats(studio.db.project(p["id"]))[0]["full_file"] == path.name
+
+
+def test_when_the_music_service_fails_our_own_beat_stands_in_and_they_are_told(studio, media, monkeypatch):
+    calls: list = []
+    _fake_composer(monkeypatch, calls, fail=True)
+    friend = _friend(studio, "Ro")
+    p = studio.create_project(friend, "Park", "9:16", 30, "a walk in the park")
+    studio.make_beat(p, "jazzy")
+    _drain(studio)
+    p = studio.db.project(p["id"])
+    row = studio.beats(p)[0]
+    assert row["maker"] == "house" and "our own simple beat" in row["facts"] and p["stage"] == "setup"
+    assert studio.beats_left(p) == 3  # it didn't use up a try
+    assert not studio.db.all("SELECT * FROM spend WHERE task='beat' AND backend='elevenlabs'")
+
+
+def test_a_voice_video_gets_the_music_made_for_it_under_the_voice(studio, media, monkeypatch):
+    from vidosuper.explainer import make as explainer_make
+
+    calls: list = []
+    _fake_composer(monkeypatch, calls)
+    monkeypatch.setattr(explainer_make, "transcribe", _fake_speech)
+    used: list = []
+    real = explainer_make.render
+
+    def render(*a, **kw):
+        used.append(kw.get("music"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(explainer_make, "render", render)
+    _friend(studio, "Vi")
+    client, csrf = _signed_in(studio, "Vi")
+    r = client.post("/new", data={"csrf": csrf, "title": "Sleep", "shapes": "9:16", "length": 30, "kind": "voice",
+                                  "intent": "explain why sleep helps memory"}, follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    client.post(f"/p/{pid}/music", data={"csrf": csrf, "choice": "made"})
+    assert "Add your recording first" in client.get(f"/p/{pid}").text
+    _upload(client, csrf, pid, media / "music.wav", "song")
+    client.post(f"/p/{pid}/beat", data={"csrf": csrf, "ask": "soft piano, hopeful"})
+    _drain(studio)
+    p = studio.db.project(pid)
+    assert p["beat"] and any("leaves room for a speaking voice" in c["positive_styles"] for c in calls[0]["plan"]["chunks"])
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    _drain(studio)
+    assert "Music under your voice" in client.get(f"/p/{pid}").text
+    client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": "Why sleep helps memory, gently explained"})
+    _drain(studio)
+    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": studio.pitches(studio.db.project(pid))[0]["id"]})
+    _drain(studio)
+    assert used and used[-1] is not None and used[-1].name == studio.beats(studio.db.project(pid))[0]["file"]
+    assert len(calls) == 1  # the sample used the track they picked: nothing else was made
+
+
+
+def test_a_film_uses_credits_by_its_length_shown_before_it_starts_and_given_back_if_never_finished(studio, media, monkeypatch):
+    from vidosuper.studio.service import ActionError
+
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    friend = _friend(studio, "Cy")
+    client, csrf = _signed_in(studio, "Cy")
+    me = lambda: studio.user(friend["id"])  # noqa: E731
+    assert studio.credits(me())["monthly"] == 3 and studio.credits(me())["total"] == 3
+    assert "3 credits" in client.get("/").text and 'id="cost-line"' in client.get("/new").text
+    assert studio.cost_of("montage", 30) == 1 and studio.cost_of("montage", 60.4) == 1 and studio.cost_of("montage", 61.5) == 2
+    assert studio.cost_of("voice", 100) == 3 and studio.cost_of("talk", 100, "labels") == 2 and studio.cost_of("montage", 600) == 10
+
+    def film(title):
+        r = client.post("/new", data={"csrf": csrf, "title": title, "shapes": "9:16", "length": 15, "intent": ""},
+                        follow_redirects=False)
+        pid = r.headers["location"].rsplit("/", 1)[1]
+        for name in ("a_stable.mp4", "c_pan.mp4"):
+            _upload(client, csrf, pid, media / "clips" / name, "clip")
+        return pid
+
+    pid = film("First")
+    assert "Uses 1 credit of your 3" in client.get(f"/p/{pid}").text  # before anything is used
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    assert studio.db.project(pid)["stage"] == "preparing" and studio.credits(me())["total"] == 2
+    _drain(studio)
+    client.post(f"/p/{pid}/back", data={"csrf": csrf, "to": "setup"})  # changed their mind: starting again is free
+    assert "Already counted" in client.get(f"/p/{pid}").text
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    assert studio.credits(me())["total"] == 2
+    _drain(studio)
+    client.post(f"/p/{pid}/delete", data={"csrf": csrf, "sure": "yes"})  # never finished: the credit comes back
+    assert studio.credits(me())["total"] == 3 and studio.credits(me())["monthly_left"] == 3
+    # the owner's numbers: none a month for beta, so a film can't start ...
+    owner = _owner(studio)
+    studio.set_pricing(1, 1, 0, 12)
+    pid = film("Second")
+    r = client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=True)
+    assert "uses 1 credit" in r.text and "you have 0" in r.text and studio.db.project(pid)["stage"] == "setup"
+    assert 'disabled' in re.search(r'<button[^>]*id="start-btn"[^>]*>', client.get(f"/p/{pid}").text).group(0)
+    # ... until they are given extra ones, which don't run out
+    admin = TestClient(create_app(studio))
+    admin.post("/login", data={"name": "owner", "password": "a long password 1"})
+    acsrf = _csrf(admin.get("/admin").text)
+    assert "Credits per minute of film" in admin.get("/admin").text
+    admin.post("/admin/user", data={"csrf": acsrf, "uid": friend["id"], "action": "credits", "credits": 2, "note": "for testing"})
+    assert studio.credits(me()) == {**studio.credits(me()), "monthly": 0, "extra": 2, "total": 2}
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    assert studio.db.project(pid)["stage"] == "preparing" and studio.credits(me())["extra"] == 1
+    history = client.get("/account").text
+    assert "for testing" in history and "+2" in history and "-1" in history
+    with pytest.raises(ActionError):
+        studio.grant_credits(me(), -5)  # only unused extra credits can be taken back
+    assert studio.credits(owner) is None  # the owner is never counted
+
+
+def test_credits_from_an_earlier_month_come_back_as_extra_ones(studio, monkeypatch):
+    from vidosuper.studio.service import Studio as S
+
+    friend = _friend(studio, "Em")
+    p = studio.create_project(friend, "Old", "9:16", 30, "")
+    monkeypatch.setattr(S, "month_key", staticmethod(lambda at=None: "2026-09"))
+    studio._pay_for(studio.db.project(p["id"]))
+    assert studio.credits(studio.user(friend["id"]))["monthly_left"] == 2
+    monkeypatch.setattr(S, "month_key", staticmethod(lambda at=None: "2026-10"))
+    assert studio.credits(studio.user(friend["id"]))["monthly_left"] == 3  # a new month, a new allowance
+    studio.delete_project(studio.db.project(p["id"]))
+    c = studio.credits(studio.user(friend["id"]))
+    assert c["monthly_left"] == 3 and c["extra"] == 1  # September's credit isn't lost

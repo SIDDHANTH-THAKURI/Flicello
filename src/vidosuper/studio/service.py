@@ -21,6 +21,7 @@ import secrets
 import time
 import traceback
 from dataclasses import asdict
+from pathlib import Path
 
 from .alerts import alert
 from .brain import BrainError, BudgetExceeded, Usage, brain_kind_for, make_brain
@@ -45,14 +46,15 @@ STAGES = {
     "rendering": "Making your video",
     "done": "Your video is ready",
     "revising": "Making your changes",
+    "composing": "Making your music",
     "paused": "Paused",
     "failed": "Something went wrong",
 }
-BUSY = {"preparing", "pitching", "sampling", "rendering", "revising"}
+BUSY = {"preparing", "pitching", "sampling", "rendering", "revising", "composing"}
 log = logging.getLogger("vidosuper.studio.service")
 JOB_STAGE = {"prepare": "preparing", "pitch": "pitching", "sample": "sampling", "render": "rendering",
-             "revise": "revising"}
-PRIORITY = {"pitch": 2, "sample": 3, "learn": 4, "prepare": 5, "render": 6, "revise": 6}  # short jobs first
+             "revise": "revising", "beat": "composing"}
+PRIORITY = {"beat": 2, "pitch": 2, "sample": 3, "learn": 4, "prepare": 5, "render": 6, "revise": 6}  # short jobs first
 FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad shots", "shaky", "too short",
                  "too long", "didn't follow my idea", "colour", "sound"]
 LENGTHS = (15, 30, 45, 60, 90, 120, 180, 300, 600)  # who may ask for which: Studio.lengths_for (access levels)
@@ -88,6 +90,14 @@ def ask_text(project: dict) -> str:
         agreed += [f"Leave out: {'; '.join(b['avoid'])}"] if b.get("avoid") else []
         agreed += [f"Do not use these clips at all: {', '.join(b['leave_out'])}"] if b.get("leave_out") else []
         agreed += [f"About the music: {b['music']}"] if b.get("music") else []
+        if b.get("parts"):
+            agreed.append("The parts, in order (each becomes its own scenes): " + "; ".join(
+                (f"{int(x['at']) // 60}:{int(x['at']) % 60:02d} " if x.get("at") is not None else "") + x["what"]
+                for x in b["parts"]))
+        if b.get("terms"):
+            agreed.append("Write these names exactly like this, on screen and in the captions: " + "; ".join(
+                f"'{t['heard']}' is '{t['written']}'" if t["heard"] != t["written"] else f"'{t['written']}'"
+                for t in b["terms"]))
         agreed += [f"Asked '{x['ask']}', they answered: {x['answer']}" for x in b.get("answers") or []]
         if agreed:
             parts.append("# What we agreed with them (they checked and corrected this: it wins over anything above)\n"
@@ -112,7 +122,7 @@ def route_kind(describe: str) -> tuple[str, str]:
                                   "land on their words."}[kind]
     return "montage", "It sounds like it's made from your clips, so they're cut together into a story on the beat."
 STYLES = ("designed", "labels")  # designer animations behind the person; clean labels over the video
-TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180}  # first guesses, until real jobs have run
+TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180, "beat": 45}  # first guesses, until real jobs have run
 DRAW_RATE = {"designed": 20.0, "labels": 3.0}  # first guesses: seconds of drawing per second of a voice or talking video
 
 
@@ -151,7 +161,8 @@ class Studio:
         if self.is_owner(user):
             top = self.s.tiers.get("special") or Tier()
             return Tier(videos=None, max_seconds=max(LENGTHS), max_recording=max(top.max_recording,
-                                                                                 int(self.s.limits.project_seconds)))
+                                                                                 int(self.s.limits.project_seconds)),
+                        beats=99)
         return self.s.tiers.get("special" if user.get("access") == "special" else "beta") or Tier()
 
     def lengths_for(self, user: dict) -> list[int]:
@@ -195,7 +206,11 @@ class Studio:
 
             if mail.available(self.s):
                 site = (self.s.site_url or "").rstrip("/")
+                monthly = self.tier_credits().get(access, 0)
+                p = self.pricing()
                 lines = ["Your Flicello access is approved. You can make your first video now.",
+                         f"You get {monthly} credits every month. A film uses {p['per_minute']} for each minute it "
+                         "lasts (we show it before anything starts), so you can try things freely.",
                          f"Sign in here: {site}/signin"]
                 if access == "special":
                     lines.insert(1, "You also have special access: films up to 10 minutes long.")
@@ -246,16 +261,133 @@ class Studio:
                     log.warning("could not email the owner about a report")
         return rid
 
-    def videos_left(self, user: dict) -> int | None:
+    # ------------------------------------------------------------------ credits: a film uses them by its length
+    # Each access level gives credits every calendar month (UTC); the owner can give anyone extra credits, which
+    # never run out. A film's credits are taken when it starts (this month's first, then extra ones), the difference
+    # when it starts again after a change, and all of them come back if it is deleted before it is finished.
+    def _config(self, key: str, default):
+        row = self.db.one("SELECT value FROM config WHERE key=?", (key,))
+        return json.loads(row["value"]) if row else default
+
+    def _set_config(self, key: str, value) -> None:
+        self.db.run("INSERT INTO config(key, value, at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET "
+                    "value=excluded.value, at=excluded.at", (key, json.dumps(value), time.time()))
+
+    def pricing(self) -> dict:
+        return {**self.s.pricing.model_dump(), **self._config("pricing", {})}
+
+    def tier_credits(self) -> dict[str, int]:
+        return {**{name: t.credits for name, t in self.s.tiers.items()}, **self._config("tier_credits", {})}
+
+    def set_pricing(self, per_minute: int, looks: int, beta: int, special: int) -> None:
+        """The owner's numbers: what a film uses, and what each access level gets a month."""
+        for n in (per_minute, looks, beta, special):
+            if not 0 <= int(n) <= 1000:
+                raise ActionError("Use whole numbers from 0 to 1000.")
+        if int(per_minute) < 1:
+            raise ActionError("A minute of film must use at least 1 credit.")
+        self._set_config("pricing", {"per_minute": int(per_minute), "looks": int(looks)})
+        self._set_config("tier_credits", {"beta": int(beta), "special": int(special)})
+
+    @staticmethod
+    def month_key(at: float | None = None) -> str:
+        return time.strftime("%Y-%m", time.gmtime(at if at is not None else time.time()))
+
+    @staticmethod
+    def next_month_label(at: float | None = None) -> str:
+        t = time.gmtime(at if at is not None else time.time())
+        year, month = (t.tm_year + 1, 1) if t.tm_mon == 12 else (t.tm_year, t.tm_mon + 1)
+        return f"1 {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month - 1]}"
+
+    def credits(self, user: dict) -> dict | None:
+        """What they can spend now: this month's allowance left, and extra credits. None: the owner (no limit)."""
         if self.is_owner(user):
             return None
-        tier_videos = self.tier(user).videos
-        allowed = (user["videos_allowed"] if user["videos_allowed"] is not None
-                   else tier_videos if tier_videos is not None else self.s.limits.videos_per_user)
-        # a video counts once it exists; deleting an unfinished one gives the place back, a finished one doesn't
-        made = self.db.value("SELECT COUNT(*) FROM projects WHERE user_id=? AND (deleted=0 OR version>=1)",
-                             (user["id"],), 0)
-        return max(0, allowed - made)
+        allowance = int(self.tier_credits().get("special" if user.get("access") == "special" else "beta", 0))
+        used = -int(self.db.value("SELECT COALESCE(SUM(monthly), 0) FROM credits WHERE user_id=? AND month=?",
+                                  (user["id"], self.month_key()), 0) or 0)
+        extra = max(0, int(self.db.value("SELECT COALESCE(SUM(extra), 0) FROM credits WHERE user_id=?",
+                                         (user["id"],), 0) or 0))
+        left = max(0, allowance - used)
+        return {"monthly": allowance, "monthly_left": left, "extra": extra, "total": left + extra,
+                "resets": self.next_month_label()}
+
+    def cost_of(self, kind: str, seconds: float, style: str = "designed") -> int:
+        """Credits for a film: per started minute (a few frames over the minute don't count), and painted looks."""
+        import math
+
+        p = self.pricing()
+        minutes = max(1, math.ceil(max(0.0, float(seconds) - 1.0) / 60.0))
+        looks = kind == "voice" or (kind == "talk" and style == "designed")
+        return minutes * int(p["per_minute"]) + (int(p["looks"]) if looks else 0)
+
+    def film_seconds(self, project: dict) -> float | None:
+        """How long the film is, for its credits: the length asked for; a voice or talking video, its recording."""
+        if project["kind"] == "montage":
+            return float(project["length"])
+        if project["kind"] == "voice":
+            return float(project["song_seconds"]) if project.get("song_seconds") else None
+        secs = self.db.value("SELECT SUM(seconds) FROM clips WHERE project_id=?", (project["id"],), None)
+        return float(secs) if secs else None
+
+    def film_cost(self, project: dict) -> int | None:
+        seconds = self.film_seconds(project)
+        return None if seconds is None else self.cost_of(project["kind"], seconds, project.get("style") or "designed")
+
+    def credit_history(self, user: dict, n: int = 20) -> list[dict]:
+        return self.db.all("SELECT c.*, p.title FROM credits c LEFT JOIN projects p ON p.id=c.project_id "
+                           "WHERE c.user_id=? ORDER BY c.id DESC LIMIT ?", (user["id"], n))
+
+    def grant_credits(self, target: dict, n: int, note: str = "") -> None:
+        """The owner gives someone extra credits (they never run out), or takes back unused extra ones."""
+        n = int(n)
+        if not -1000 <= n <= 1000 or n == 0:
+            raise ActionError("Give between 1 and 1000 credits (or take some back with a minus).")
+        have = self.credits(target)
+        if have is not None and n < 0 and -n > have["extra"]:
+            raise ActionError(f"They have {have['extra']} extra credits to take back.")
+        self.db.run("INSERT INTO credits(user_id, at, month, monthly, extra, kind, note) VALUES (?,?,?,?,?,?,?)",
+                    (target["id"], time.time(), self.month_key(), 0, n, "grant", " ".join((note or "").split())[:200]))
+
+    def _pay_for(self, project: dict, check: bool = False) -> None:
+        """Take the credits a film uses as it starts: the difference from what it already used (it may have been
+        started before, then changed). Not enough: nothing starts, and they are told how many they need. `check`:
+        only make sure there are enough (before the step is queued: a step that can't be queued takes nothing)."""
+        user = self.user(project["user_id"])
+        cost = self.film_cost(project)
+        if user is None or cost is None or self.is_owner(user):
+            return
+        need = cost - int(project.get("credits") or 0)
+        if need > 0:
+            have = self.credits(user)
+            if need > have["total"]:
+                raise ActionError(
+                    f"This film uses {cost} credit{'s' if cost != 1 else ''}"
+                    + (f" ({need} more than it has used)" if need != cost else "")
+                    + f"; you have {have['total']}. A shorter film uses fewer"
+                    + (f", and your monthly credits come back on {have['resets']}." if have["monthly"] else "."))
+            if check:
+                return
+            take_m = min(need, have["monthly_left"])
+            self.db.run("INSERT INTO credits(user_id, at, month, monthly, extra, kind, project_id, note) "
+                        "VALUES (?,?,?,?,?,?,?,?)", (user["id"], time.time(), self.month_key(), -take_m,
+                                                    -(need - take_m), "film", project["id"], project["title"][:120]))
+        elif need < 0 and not check:
+            self._refund(user, project, -need, "made shorter")
+        if not check:
+            self.db.run("UPDATE projects SET credits=? WHERE id=?", (cost, project["id"]))
+
+    def _refund(self, user: dict, project: dict, n: int, why: str) -> None:
+        """Credits back: to this month's allowance as far as this film used it this month, the rest as extra ones
+        (credits from an earlier month are never lost)."""
+        if n <= 0:
+            return
+        used_now = -int(self.db.value("SELECT COALESCE(SUM(monthly), 0) FROM credits WHERE project_id=? AND month=?",
+                                      (project["id"], self.month_key()), 0) or 0)
+        back_m = max(0, min(n, used_now))
+        self.db.run("INSERT INTO credits(user_id, at, month, monthly, extra, kind, project_id, note) VALUES "
+                    "(?,?,?,?,?,?,?,?)", (user["id"], time.time(), self.month_key(), back_m, n - back_m, "refund",
+                                          project["id"], f"{project['title'][:100]} ({why})"))
 
     # ------------------------------------------------------------------ projects
     def projects(self, user: dict) -> list[dict]:
@@ -278,8 +410,6 @@ class Studio:
     def create_project(self, user: dict, title: str, shapes: str, length: float, intent: str, pace: str = "balanced",
                        kind: str = "montage", style: str = "designed", cut_note: str = "", improvise: int = 35,
                        describe: str = "") -> dict:
-        if (left := self.videos_left(user)) is not None and left <= 0:
-            raise ActionError("You've used all your videos for this trial. Thank you!")
         if shapes not in ("9:16", "16:9", "both"):
             raise ActionError("Pick a shape.")
         routed = ""
@@ -320,6 +450,10 @@ class Studio:
             raise ActionError("Wait a moment: this video is being worked on. Try again when the step finishes.")
         remove_project_files(workdir(self.s, project["user_id"], project["id"]), self.cfg)
         self.db.run("UPDATE projects SET deleted=1, updated=? WHERE id=?", (time.time(), project["id"]))
+        owner = self.user(project["user_id"])
+        if owner and int(project.get("credits") or 0) > 0 and not project["version"]:  # never finished
+            self._refund(owner, project, int(project["credits"]), "deleted before it was finished")
+            self.db.run("UPDATE projects SET credits=0 WHERE id=?", (project["id"],))
         self.db.run("DELETE FROM clips WHERE project_id=?", (project["id"],))
 
     def delete_everything(self, user: dict) -> None:
@@ -339,12 +473,12 @@ class Studio:
         self.delete_everything(user)
         pids = [r["id"] for r in self.db.all("SELECT id FROM projects WHERE user_id=?", (user["id"],))]
         for pid in pids:
-            for table in ("pitches", "plans", "renders", "feedback", "events", "uploads", "clips", "jobs"):
+            for table in ("pitches", "plans", "renders", "feedback", "events", "uploads", "clips", "jobs", "beats"):
                 self.db.run(f"DELETE FROM {table} WHERE project_id=?", (pid,))
         self.db.run("DELETE FROM projects WHERE user_id=?", (user["id"],))
         self.db.run("UPDATE spend SET user_id=NULL, project_id=NULL WHERE user_id=?", (user["id"],))
         self.db.run("UPDATE audit SET user_id=NULL, ip=NULL, detail='' WHERE user_id=?", (user["id"],))
-        for table in ("sessions", "devices", "passkeys", "challenges", "consents", "jobs"):
+        for table in ("sessions", "devices", "passkeys", "challenges", "consents", "jobs", "credits"):
             self.db.run(f"DELETE FROM {table} WHERE user_id=?", (user["id"],))
         if user.get("email"):
             self.db.run("DELETE FROM login_codes WHERE email=?", (user["email"],))
@@ -381,6 +515,8 @@ class Studio:
             "style_profile": json.loads(prof.read_text(encoding="utf-8")) if prof.exists() else None,
             "projects": projects,
             "ai_spend_usd": round(self.db.value("SELECT SUM(usd) FROM spend WHERE user_id=?", (user["id"],), 0) or 0, 4),
+            "credits": self.db.all("SELECT at, kind, monthly, extra, project_id, note FROM credits WHERE user_id=? "
+                                   "ORDER BY id", (user["id"],)),
             "exported": time.time(),
         }
 
@@ -455,17 +591,12 @@ class Studio:
     def expected_seconds(self, job: dict) -> float:
         """How long this job should take. Drawing a voice or talking video takes its length times how fast such
         videos draw here (a 2-minute designed talk takes far longer than a 30-second montage); everything else, what
-        such jobs usually take."""
-        from ..explainer.make import SAMPLE_SECONDS
-
+        such jobs usually take (watching or listening, ideas, a sample)."""
         typical = self.typical_seconds(job["kind"])
         project = self.db.project(job["project_id"]) if job.get("project_id") else None
-        if project is None or project["kind"] == "montage" or job["kind"] not in ("prepare", "render", "revise"):
+        if project is None or project["kind"] == "montage" or job["kind"] not in ("render", "revise"):
             return typical
         seconds = float(json.loads(project["info"] or "{}").get("seconds") or 0)
-        if job["kind"] == "prepare":  # listening, the script, then a sample
-            rate = self.draw_rate(project["kind"], project["style"], "sample")
-            return typical + (SAMPLE_SECONDS * rate if rate else 0.0)
         rate = self.draw_rate(project["kind"], project["style"])
         if not seconds or rate is None:
             return typical
@@ -511,11 +642,23 @@ class Studio:
         return int(sum(self.typical_seconds(k) for k in steps))
 
     def set_music(self, project: dict, choice: str) -> None:
-        """With no song uploaded: a beat made for the video ('made'), or no music at all ('none')."""
+        """Music made for the film ('made'), or none ('none'). For a film from clips, 'no music' also takes away a
+        song they uploaded (they can upload it again) and a made track (it stays on the list to pick again)."""
         self._guard(project, "setup")
         if choice not in ("made", "none"):
-            raise ActionError("Pick a beat made for you, or no music.")
+            raise ActionError("Pick music made for you, or no music.")
         self.db.run("UPDATE projects SET music=?, updated=? WHERE id=?", (choice, time.time(), project["id"]))
+        if project["kind"] != "montage":
+            return  # a voice video's music/ folder holds the recording itself
+        work = workdir(self.s, project["user_id"], project["id"])
+        if choice == "none" or project.get("song"):
+            for old in work.music.glob("song.*"):
+                old.unlink()
+            self.db.run("UPDATE projects SET song=NULL, song_seconds=NULL WHERE id=?", (project["id"],))
+        if choice == "made" and project.get("beat"):
+            row = self.beat_row(project, project["beat"])
+            if row:
+                self._choose_beat(self.db.project(project["id"]), row)
 
     def set_sound(self, project: dict, sound: str) -> None:
         """With no music: keep the clips' own sound, or a silent film."""
@@ -536,6 +679,314 @@ class Studio:
         self._guard(project, "setup")
         self.length_ok(self.user(project["user_id"]), length)
         self.db.run("UPDATE projects SET length=?, updated=? WHERE id=?", (float(length), time.time(), project["id"]))
+
+    # ------------------------------------------------------------------ music made for the film (music/made.py)
+    def can_compose(self) -> bool:
+        """Tracks can be made: the renderer says it has an ElevenLabs key (or, with local jobs, this machine has)."""
+        if self.s.jobs == "remote":
+            row = self.db.one("SELECT info FROM heartbeat WHERE name IN ('renderer', 'renderer-quick') AND info IS NOT "
+                              "NULL ORDER BY at DESC LIMIT 1")
+            try:
+                return bool(json.loads(row["info"]).get("music")) if row else False
+            except (TypeError, ValueError):
+                return False
+        from ..music.compose import available
+
+        return available()
+
+    def beats(self, project: dict) -> list[dict]:
+        """Every track made for this film, newest first."""
+        rows = self.db.all("SELECT * FROM beats WHERE project_id=? ORDER BY id DESC", (project["id"],))
+        for r in rows:
+            r["idea"] = json.loads(r["idea"])
+        return rows
+
+    def beat_row(self, project: dict, beat_id) -> dict | None:
+        if not beat_id:
+            return None
+        row = self.db.one("SELECT * FROM beats WHERE id=? AND project_id=?", (int(beat_id), project["id"]))
+        if row:
+            row["idea"] = json.loads(row["idea"])
+        return row
+
+    def beats_left(self, project: dict) -> int:
+        """Tracks the music service may still make for this film (their access level's allowance)."""
+        tier = self.tier(self.user(project["user_id"]))
+        made = self.db.value("SELECT COUNT(*) FROM beats WHERE project_id=? AND maker='elevenlabs'", (project["id"],), 0)
+        return max(0, tier.beats - made)
+
+    @staticmethod
+    def track_seconds(project: dict) -> float:
+        """How long the film's own track is: the film and its ending (a cut), or the recording and a breath (a bed)."""
+        if project["kind"] == "voice":
+            return float(project.get("song_seconds") or 60.0) + 4.0
+        return float(project["length"]) + 2.0
+
+    def make_beat(self, project: dict, ask: str = "", base: int = 0, change: str = "") -> None:
+        """They asked for music in their words (or a change to a track they heard). The renderer reads it, makes it
+        (a short film's whole track, or a 30-second taste of a long one) and they listen before going on."""
+        self._guard(project, "setup", "understood")
+        if project["kind"] == "talk":
+            raise ActionError("A talking video keeps its own sound.")
+        if project["kind"] == "voice" and not project.get("song_seconds"):
+            raise ActionError("Add your recording first: the music is made to its length.")
+        if not self.can_compose():
+            raise ActionError("Music can't be made right now. Your film gets our own simple beat instead; you can "
+                              "also upload a song.")
+        if self.beats_left(project) <= 0:
+            raise ActionError("That's all the tracks this film can have made: pick one of them, or upload a song.")
+        ask = " ".join((ask or "").split())[:400]
+        change = " ".join((change or "").split())[:300]
+        if base and not self.beat_row(project, base):
+            raise ActionError("Pick one of the tracks to change.")
+        if base and not change:
+            raise ActionError("Say what to change about it.")
+        if project["kind"] == "montage" and project.get("song"):  # music made for them instead of their song
+            self.set_music(project, "made")
+            project = self.db.project(project["id"])
+        self.db.run("UPDATE projects SET music='made', updated=? WHERE id=?", (time.time(), project["id"]))
+        self._enqueue(project, "beat", {"ask": ask, "base": int(base or 0), "change": change, "back": project["stage"]})
+
+    def use_beat(self, project: dict, beat_id: int) -> None:
+        """An earlier track is the one. At 'what I understood' a film from clips has its music measured again first
+        (the cut follows the song's beats), so that is a short step on the renderer."""
+        self._guard(project, "setup", "understood")
+        row = self.beat_row(project, beat_id)
+        if row is None:
+            raise ActionError("Pick one of the tracks.")
+        if project["stage"] == "understood" and project["kind"] == "montage":
+            self._enqueue(project, "beat", {"use": int(beat_id), "back": "understood"})
+            return
+        self._choose_beat(project, row)
+
+    def _choose_beat(self, project: dict, row: dict) -> None:
+        """This track is the film's music. For a film from clips a whole track (or the full one made from a taste)
+        goes where an uploaded song would; a taste waits until its full track is made (when the film starts)."""
+        import shutil
+
+        self.db.run("UPDATE projects SET beat=?, music='made', song=NULL, song_seconds=NULL, updated=? WHERE id=?"
+                    if project["kind"] == "montage" else "UPDATE projects SET beat=?, music='made', updated=? WHERE id=?",
+                    (row["id"], time.time(), project["id"]))
+        if project["kind"] != "montage":
+            return  # a voice video's music bed is picked up when it is drawn
+        work = workdir(self.s, project["user_id"], project["id"]).ensure()
+        for old in work.music.glob("song.*"):
+            old.unlink()
+        name = row["full_file"] or (row["file"] if row["whole"] else None)
+        if name and (work.beats / name).exists():
+            shutil.copy2(work.beats / name, work.music / f"song{Path(name).suffix}")
+
+    def _music_budget_ok(self, project: dict) -> bool:
+        cap = self.s.limits
+        return (self.db.month_spend() < cap.monthly_usd * 0.98
+                and self.db.project_spend(project["id"]) < cap.video_usd * 0.98)
+
+    def _spend_music(self, project: dict, user: dict, job: dict, seconds: float, took: float) -> None:
+        """What a track cost (ElevenLabs bills by the minute of music), on the same books as the AI."""
+        from ..music import made
+
+        try:
+            self._spender(project, user["id"], job["id"])(Usage("beat", made.MODEL, "elevenlabs",
+                                                                usd=made.cost(seconds), seconds=took))
+        except BudgetExceeded as exc:  # the track is made and paid for: the owner hears about the cap, the film goes on
+            alert(self.db, self.s, "budget", f"Music for a film went over a budget: {exc}.", "warning")
+
+    @staticmethod
+    def _sound(idea: dict, purpose: str):
+        from ..music import made
+
+        return made.Sound(title=str(idea.get("title") or "Your track")[:60], bpm=made.fit_bpm(idea.get("bpm") or 96, purpose),
+                          styles=list(idea.get("styles") or [])[:12], avoid=list(idea.get("avoid") or [])[:8],
+                          parts={"intro": idea.get("intro") or [], "build": idea.get("build") or [],
+                                 "drop": idea.get("drop") or [], "lift": idea.get("drop") or [],
+                                 "breath": idea.get("breath") or [], "ending": idea.get("ending") or []})
+
+    def _beat_facts(self, path: Path, purpose: str, taste_of: float | None = None) -> str:
+        """What the made track really is, measured (the model does not always put the drop where it was asked)."""
+        from ..music import analyze_music
+
+        try:
+            a = analyze_music(path)
+        except Exception:  # noqa: BLE001 - the track is fine to use; we just can't describe it
+            return ""
+        clock = lambda t: f"{int(t) // 60}:{int(t) % 60:02d}"  # noqa: E731
+        words = f"{a.tempo:.0f} beats a minute"
+        if taste_of:
+            return (f"A {a.duration:.0f}-second taste, {words}. The full {clock(taste_of)} track is made in the same "
+                    "sound when your film starts.")
+        words += f", {clock(a.duration)} long"
+        if purpose == "cut" and a.drops:
+            words += f"; the drop lands at {clock(a.drops[0])}"
+        return words + "."
+
+    def _film_for_music(self, project: dict) -> str:
+        """What the music maker is told about the film: everything they asked for, and a picked look's music."""
+        film = ask_text(project)
+        look, _ = self._look(project)
+        if look is not None:
+            film += f"\nThe look they picked: {look.title} ({look.art_style}). Its music: {look.music or 'not said'}."
+        return film
+
+    def _compose(self, job: dict, project: dict, user: dict, pipe, ask: str = "", base: dict | None = None,
+                 change: str = "", span: tuple[float, float] = (0.0, 1.0)) -> dict:
+        """Read what they asked for, lay the track out, make it (whole, or a taste of a long one), measure it and
+        keep it. When the music service can't make it, our own simple beat stands in and they are told. The job's
+        bar moves through `span`."""
+        from ..music import made
+        from ..music.compose import BadPlan, ComposeError, available, compose_plan
+        from ..music.house import make_beat as house_beat
+
+        def prog(f: float, msg: str) -> None:
+            self.db.job_progress(job["id"], span[0] + (span[1] - span[0]) * f, msg)
+
+        purpose = "bed" if project["kind"] == "voice" else "cut"
+        seconds = self.track_seconds(project)
+        work = workdir(self.s, project["user_id"], project["id"]).ensure()
+        work.beats.mkdir(parents=True, exist_ok=True)
+        prog(0.05, "Reading what you asked for" if ask or change else "Choosing a sound for your film")
+        whole = made.whole(seconds)
+        shape = [({"lift": "last drop (the drop's styles again)", "groove": "steady groove"}.get(n, n), t) for n, t in
+                 made.section_times(made.layout(seconds, 96, purpose) if whole else made.taste_layout(), 96)]
+        idea = pipe.brain.beat_idea(ask, self._film_for_music(project), purpose, seconds, project["pace"],
+                                    base["idea"] if base else None, change, shape)
+        name = f"beat-{secrets.token_hex(4)}.mp3"
+        maker, note, song_id, took = "elevenlabs", "", "", 0.0
+        try:
+            if not available():
+                raise ComposeError("no ElevenLabs key on this machine")
+            if not self._music_budget_ok(project):
+                raise ComposeError("the music budget is used up")
+            for attempt in range(2):
+                sound = self._sound(idea.model_dump(), purpose)
+                sections = made.layout(seconds, sound.bpm, purpose) if whole else made.taste_layout()
+                plan = made.plan(sections, sound, purpose)
+                prog(0.2, f"Composing {'your track' if whole else 'a 30-second taste'}: {idea.title}")
+                t0 = time.time()
+                try:
+                    made_now = compose_plan(plan, work.beats / name, store=not whole)
+                except BadPlan as exc:  # a style it refused (a name, usually): described again without it, once
+                    if attempt:
+                        raise
+                    self.db.step(job["id"], "Describing the sound again in other words")
+                    idea = pipe.brain.beat_idea(ask, self._film_for_music(project), purpose, seconds, project["pace"],
+                                                base["idea"] if base else None,
+                                                (change + ". " if change else "") + "The music model refused the last "
+                                                f"styles ({exc.detail[:200]}): describe the sound with no names at all.",
+                                                shape)
+                    continue
+                took = time.time() - t0
+                song_id = made_now["song_id"]
+                self._spend_music(project, user, job, made_now["seconds"], took)
+                break
+        except ComposeError as exc:
+            log.warning("a track could not be made: %s", exc)
+            self.db.event(project["id"], f"music: {exc}; our own beat instead", "warn", job["id"])
+            maker, whole, name = "house", True, name.replace(".mp3", ".wav")
+            note = " The music service couldn't make it just now, so this is our own simple beat."
+            house_beat(work.beats / name, seconds, {"calm": "calm", "fast": "fast", "every": "every"}.get(
+                project["pace"], "balanced") if purpose == "cut" else "calm")
+        prog(0.85, "Listening to it: the tempo and the drop")
+        facts = self._beat_facts(work.beats / name, purpose, None if whole else seconds) + note
+        rid = self.db.run("INSERT INTO beats(project_id, created, ask, idea, plan, file, song_id, seconds, whole, facts, "
+                          "maker) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                          (project["id"], time.time(), " ".join(x for x in (ask, change) if x)[:500],
+                           idea.model_dump_json(), json.dumps(plan if maker == "elevenlabs" else {}), name, song_id,
+                           seconds, 1 if whole else 0, facts.strip(), maker))
+        return self.beat_row(project, rid)
+
+    def _full_from_taste(self, job: dict, project: dict, user: dict, row: dict,
+                         span: tuple[float, float] = (0.0, 1.0)) -> dict:
+        """The full track of a long film, made once they picked its taste: the taste is its reference, so it has
+        the same sound. If the taste can no longer be referred to, the same description without it; if the music
+        service is down, our own simple beat (and they are told)."""
+        from ..music import made
+        from ..music.compose import ComposeError, compose_plan
+        from ..music.house import make_beat as house_beat
+
+        purpose = "bed" if project["kind"] == "voice" else "cut"
+        seconds = self.track_seconds(project)
+        sound = self._sound(row["idea"], purpose)
+        bar = made.bar_seconds(sound.bpm)
+        intro, groove, _ = made.TASTE_BARS
+        ref = {"song_id": row["song_id"], "range": {"start_ms": int(intro * bar * 1000),
+                                                     "end_ms": int(min((intro + groove) * bar, intro * bar + 30) * 1000)}}
+        work = workdir(self.s, project["user_id"], project["id"]).ensure()
+        name = Path(row["file"]).stem + "-full.mp3"
+        self.db.job_progress(job["id"], span[0] + (span[1] - span[0]) * 0.1,
+                             f"Making the full {int(seconds) // 60}:{int(seconds) % 60:02d} track from the taste you picked")
+        note = ""
+        try:
+            if not self._music_budget_ok(project):
+                raise ComposeError("the music budget is used up")
+            t0 = time.time()
+            sections = made.layout(seconds, sound.bpm, purpose)
+            try:
+                done = compose_plan(made.plan(sections, sound, purpose, reference=ref if row["song_id"] else None),
+                                    work.beats / name)
+            except ComposeError:
+                if not row["song_id"]:
+                    raise
+                done = compose_plan(made.plan(sections, sound, purpose), work.beats / name)
+                note = " (made from the same description: the taste itself could no longer be used as a reference)"
+            self._spend_music(project, user, job, done["seconds"], time.time() - t0)
+        except ComposeError as exc:
+            self.db.event(project["id"], f"music: the full track failed ({exc}); our own beat instead", "warn", job["id"])
+            name = Path(row["file"]).stem + "-full.wav"
+            house_beat(work.beats / name, seconds, "calm" if purpose == "bed" else "balanced")
+            note = " The music service couldn't make the full track, so the film uses our own simple beat."
+        self.db.run("UPDATE beats SET full_file=?, facts=? WHERE id=?",
+                    (name, (self._beat_facts(work.beats / name, purpose) + note).strip(), row["id"]))
+        return self.beat_row(project, row["id"])
+
+    def _ensure_track(self, job: dict, project: dict, user: dict, pipe,
+                      span: tuple[float, float] = (0.0, 1.0)) -> Path | None:
+        """The made track a film uses, ready at its full length: the one they picked (its full track made now if it
+        was a taste), else one made from their note when music can be made here. None: our own simple beat (the
+        pipeline's for a film from clips, the bed's for a voice video) or no music."""
+        from ..music.compose import available
+
+        if project["music"] != "made" or project["kind"] == "talk" or (project["kind"] == "montage" and project.get("song")):
+            return None
+        row = self.beat_row(project, project.get("beat"))
+        if row is None:
+            if not available() or self.beats_left(project) <= 0:
+                return None
+            row = self._compose(job, project, user, pipe, span=span)
+        if not row["whole"] and not row["full_file"]:
+            row = self._full_from_taste(job, project, user, row, span)
+        self._choose_beat(self.db.project(project["id"]), row)
+        work = workdir(self.s, project["user_id"], project["id"])
+        return work.beats / (row["full_file"] or row["file"])
+
+    def _job_beat(self, job, project, user) -> None:
+        params = job["params"]
+        back = params.get("back") or "setup"
+        pipe = self._pipeline(job, project, user)
+        if params.get("use"):  # an earlier track, picked at 'what I understood'
+            row = self.beat_row(project, params["use"])
+            if row is not None:
+                self._choose_beat(project, row)
+        else:
+            row = self._compose(job, project, user, pipe, params.get("ask", ""),
+                                self.beat_row(project, params.get("base")), params.get("change", ""))
+            self._choose_beat(project, row)
+        project = self.db.project(project["id"])
+        if back == "understood" and project["kind"] == "montage":  # the cut follows this music now: measure it
+            self._ensure_track(job, project, user, pipe)
+            self._music_line(pipe, self.db.project(project["id"]), job)
+        self.db.set_stage(project["id"], back)
+
+    def _music_line(self, pipe, project: dict, job: dict) -> None:
+        """What 'what I understood' says about the music, after the music changed there (measured, no AI)."""
+        u = self.understanding(project)
+        if not u:
+            return
+        self.db.job_progress(job["id"], 0.9, "Listening to the new music")
+        song = pipe.song()
+        clock = lambda t: f"{int(t) // 60}:{int(t) % 60:02d}"  # noqa: E731
+        u["music"] = (f"Your new track: about {song.tempo:.0f} beats a minute, {clock(song.duration)} long"
+                      + (f", the drop at {clock(song.drops[0])}" if song.drops else "") + ".")
+        self.db.run("UPDATE projects SET understood=? WHERE id=?", (json.dumps(u), project["id"]))
 
     def start(self, project: dict) -> None:
         self._guard(project, "setup")
@@ -563,7 +1014,9 @@ class Studio:
         if footage > self.s.limits.project_seconds:
             raise ActionError(f"That's {footage / 60:.0f} minutes of footage; the most a video can use is "
                               f"{self.s.limits.project_seconds / 60:.0f}. Remove some clips.")
+        self._pay_for(project, check=True)
         self._enqueue(project, "prepare")
+        self._pay_for(project)
 
     def choose(self, project: dict, pitch_id: int) -> None:
         self._guard(project, "choose")
@@ -620,7 +1073,7 @@ class Studio:
         self._enqueue(project, "sample", {"pitch": project["chosen"], "note": note})
 
     # ------------------------------------------------------------------ going back, stopping a step
-    BACK_FROM = {"setup": ("understood", "choose", "review", "failed", "paused"), "understood": ("choose",),
+    BACK_FROM = {"setup": ("understood", "choose", "review", "failed", "paused"), "understood": ("choose", "review"),
                  "choose": ("review",)}
     STOP_TO = {"prepare": "setup", "pitch": "choose", "sample": "choose", "render": "review", "revise": "done"}
 
@@ -664,6 +1117,8 @@ class Studio:
         if job["status"] == "running" and self.s.jobs != "remote":
             raise ActionError("This step is in the middle of its work and can't be stopped right now.")
         to = self.STOP_TO.get(job["kind"], "setup")
+        if job["kind"] == "beat":
+            to = (json.loads(job["params"] or "{}") if isinstance(job["params"], str) else job["params"]).get("back") or "setup"
         if job["kind"] in ("sample", "pitch") and not self.pitches(project):
             to = "understood" if project.get("understood") else "setup"
         self.db.run("UPDATE jobs SET status='cancelled', finished=?, abort=CASE WHEN status='running' THEN ? ELSE abort "
@@ -819,7 +1274,9 @@ class Studio:
                 raise ActionError("Add the one video of you talking.")
             if clips[0]["seconds"] and clips[0]["seconds"] > 600:
                 raise ActionError("A talking video can be up to 10 minutes.")
+        self._pay_for(project, check=True)
         self._enqueue(project, "prepare")
+        self._pay_for(project)
 
     def _save_script(self, project: dict, script, kind: str) -> int:
         return self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
@@ -836,6 +1293,10 @@ class Studio:
         if look is not None:
             update.update(look=f"{look.title}: {look.art_style}", palette=look.palette)
         script = fit(raw.model_copy(update=update), speech)
+        if spell := self.spellings(project):  # the names as they corrected them, on screen and in the captions
+            from ..explainer.script import respell_text
+
+            script = respell_text(script, spell)
         if previous is not None:  # places painted before keep their plates
             script = script.model_copy(update={"stage_file": previous.stage_file})
         if project["style"] == "designed" and look is None:  # with a look, props are painted first (see _paint)
@@ -894,6 +1355,9 @@ class Studio:
         if speech is None:
             raise ActionError("Start again: the recording is missing.")
         pipe = self._pipeline(job, project, user)
+        if job["params"].get("first"):  # the first looks, from the brief they agreed
+            self._make_looks(job, project, user, pipe, speech, 3, 1)
+            return
         old = [Direction.model_validate(p["pitch"]) for p in self.pitches(project)]
         base_id = int(job["params"].get("base") or 0)
         base = next((Direction.model_validate(p["pitch"]) for p in self.pitches(project) if p["id"] == base_id), None)
@@ -990,11 +1454,13 @@ class Studio:
             shapes = ["9:16" if (speech.get("height") or 0) > (speech.get("width") or 0) else "16:9"]
         bed = None
         if project["kind"] == "voice" and project["music"] == "made":
-            from ..music.house import make_beat
+            bed = self._ensure_track(job, project, user, self._pipeline(job, project, user), (lo, lo + 0.03))
+            if bed is None:
+                from ..music.house import make_beat
 
-            bed = work.root / "bed.wav"
-            if not bed.exists():
-                make_beat(bed, speech["duration"] + 4, "calm")
+                bed = work.root / "bed.wav"
+                if not bed.exists():
+                    make_beat(bed, speech["duration"] + 4, "calm")
         version = project["version"] + (0 if sample else 1)
         look, ref = self._look(project)
         if look is not None:  # painting takes the first part of what is left of the bar, drawing the rest
@@ -1046,16 +1512,23 @@ class Studio:
             self.db.run("UPDATE projects SET info=? WHERE id=?",
                         (json.dumps({"notes": [], "song_seconds": speech["duration"], "words": speech["words"],
                                      "seconds": speech["duration"]}), project["id"]))
-            if uses_looks(project):  # first the looks, with a preview each; the script comes once one is picked
-                self._make_looks(job, project, user, pipe, speech, 3, 1)
-                return
-            self.db.job_progress(job["id"], 0.25, "Working out what each part is about")
+            self.db.job_progress(job["id"], 0.6, "Putting what I heard into words")
+            understood = pipe.brain.understand_talk(speech["utterances"], float(speech["duration"]), project["kind"],
+                                                    ask_text(project), rules_for(self.profile(user).rules, project["kind"]))
+            self.db.run("UPDATE projects SET understood=?, brief=NULL WHERE id=?",
+                        (understood.model_dump_json(), project["id"]))
+            self.db.set_stage(project["id"], "understood")
+            return
+        speech = make.load_speech(work.root)
+        if step == "sample" and job["params"].get("first"):  # clean labels: they agreed the brief, so the script now
+            if speech is None:
+                raise ActionError("Start again: the recording is missing.")
+            self.db.job_progress(job["id"], 0.05, "Working out what each part is about")
             script = self._script_for(pipe, project, user, speech)
             plan_id = self._save_script(project, script, "script")
             self._explainer_render(job, project, user, script, plan_id, sample=True,
                                    sample_start=make.busiest(script, float(speech["duration"])))
             return
-        speech = make.load_speech(work.root)
         if step == "sample" and job["params"].get("look"):  # a look was just picked: write the script in it
             if speech is None:
                 raise ActionError("Start again: the recording is missing.")
@@ -1102,6 +1575,9 @@ class Studio:
         if project["kind"] != "montage":
             return self._job_explainer(job, project, user, "prepare")
         pipe = self._pipeline(job, project, user, 0.0, 0.8)
+        if self._ensure_track(job, project, user, pipe, (0.0, 0.06)) is not None:
+            project = self.db.project(project["id"])
+            pipe.no_music = False
         info = pipe.analyse(project["length"], project["pace"])
         self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
         if info["skipped"]:
@@ -1114,6 +1590,30 @@ class Studio:
 
     def understanding(self, project: dict) -> dict | None:
         return json.loads(project["understood"]) if project.get("understood") else None
+
+    @staticmethod
+    def spellings(project: dict) -> list[tuple[str, str]]:
+        """The names they corrected on 'what I understood' (heard -> written), for every text and caption."""
+        brief = json.loads(project["brief"]) if project.get("brief") else {}
+        return [(t["heard"], t["written"]) for t in brief.get("terms") or [] if t["heard"] != t["written"]]
+
+    @staticmethod
+    def _parts_from(text: str) -> list[dict]:
+        """'0:12 Why it works' per line (the time is optional) -> [{"at": 12.0, "what": "Why it works"}]."""
+        import re
+
+        out = []
+        for line in str(text or "").splitlines()[:12]:
+            line = line.strip(" -•\t")
+            if not line:
+                continue
+            m = re.match(r"^(?:(\d{1,2}):(\d{2})|(\d+(?:\.\d+)?)\s*s)\b\s*[-–—:·.]?\s*(.*)$", line)
+            at = None
+            if m and m.group(4).strip():
+                at = float(m.group(3)) if m.group(3) else int(m.group(1)) * 60 + int(m.group(2))
+                line = m.group(4).strip()
+            out.append({"at": at, "what": line[:160]})
+        return out
 
     def confirm_understanding(self, project: dict, form: dict) -> None:
         """They checked (and corrected) what was understood: that becomes the brief every later step follows, and the
@@ -1129,19 +1629,38 @@ class Studio:
             a = " ".join(str(form.get(f"q{k}_other") or form.get(f"q{k}") or "").split())[:200]
             if a:
                 answers.append({"ask": q["ask"], "answer": a})
-        known = {c["short"] for c in u.get("clips") or []}
         brief = {
             "story": " ".join(str(form.get("story", "")).split())[:600] or u.get("story", ""),
             "feel": [w.strip() for w in str(form.get("feel", "")).split(",") if w.strip()][:6],
-            "must": lines("must"), "avoid": lines("avoid"),
-            "music": " ".join(str(form.get("music", "")).split())[:300],
-            "leave_out": [c for c in form.get("leave_out", []) if c in known] if isinstance(form.get("leave_out"), list) else [],
-            "answers": answers,
+            "must": lines("must"), "avoid": lines("avoid"), "answers": answers,
         }
+        if project["kind"] == "montage":
+            known = {c["short"] for c in u.get("clips") or []}
+            brief["music"] = " ".join(str(form.get("music", "")).split())[:300]
+            brief["leave_out"] = [c for c in form.get("leave_out", []) if c in known] \
+                if isinstance(form.get("leave_out"), list) else []
+        else:  # a recording: its parts as they see them, and the names spelt the way they say them
+            brief["parts"] = self._parts_from(form.get("parts", "")) if "parts" in form else [
+                {"at": x["at"], "what": x["what"]} for x in u.get("parts") or []]
+            terms = []
+            for k, t in enumerate(u.get("terms") or []):
+                written = " ".join(str(form.get(f"term{k}", t["written"]) or "").split())[:80] or t["heard"]
+                terms.append({"heard": t["heard"], "written": written})
+            for line in str(form.get("terms_more", "")).splitlines()[:12]:
+                import re
+
+                pair = [x.strip() for x in re.split(r"\s*(?:=|->|→)\s*", line.strip(), maxsplit=1)]
+                if pair and pair[0]:
+                    heard, written = (pair + [pair[0]])[:2] if len(pair) == 1 else pair[:2]
+                    terms.append({"heard": heard[:80], "written": (written or heard)[:80]})
+            brief["terms"] = terms[:24]
         self.db.run("UPDATE projects SET brief=?, updated=? WHERE id=?", (json.dumps(brief), time.time(), project["id"]))
         self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
         self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0 WHERE id=?", (project["id"],))
-        self._enqueue(self.db.project(project["id"]), "pitch", {"first": True})
+        if project["kind"] == "montage" or uses_looks(project):  # stories, or looks to pick from
+            self._enqueue(self.db.project(project["id"]), "pitch", {"first": True})
+        else:  # clean labels: the script and its sample come next
+            self._enqueue(self.db.project(project["id"]), "sample", {"first": True})
 
     def _job_pitch(self, job, project, user):
         if project["kind"] != "montage":

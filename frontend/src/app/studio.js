@@ -300,6 +300,46 @@ function newFilm() {
   });
   form.addEventListener('change', when);
   when();
+  // what the film will use, in credits, as the length and kind change (the same sum as Studio.cost_of)
+  const line = $('#cost-line');
+  if (!line) return;
+  const per = Number(line.dataset.perMinute) || 1;
+  const looks = Number(line.dataset.looks) || 0;
+  const have = Number(line.dataset.have) || 0;
+  const plural = (n) => `${n} credit${n === 1 ? '' : 's'}`;
+  const cost = () => {
+    const kind = (form.querySelector('input[name="kind"]:checked') || {}).value || 'montage';
+    const style = (form.querySelector('input[name="style"]:checked') || {}).value || 'designed';
+    let short = false;
+    let text;
+    if (kind === 'voice' || kind === 'talk') {
+      const painted = kind === 'voice' || style === 'designed';
+      text = `Uses ${plural(per)} for each minute of your ${kind === 'voice' ? 'recording' : 'video'}`
+        + `${painted && looks ? `, plus ${looks} for its painted look` : ''}. You have ${have}.`;
+    } else {
+      const picked = (form.querySelector('input[name="length"]:checked') || {}).value;
+      let secs = Number(picked);
+      if (picked === 'custom') {
+        const v = parseFloat(String((form.querySelector('input[name="length_custom"]') || {}).value || '').replace(',', '.'));
+        const unit = (form.querySelector('select[name="length_unit"]') || {}).value;
+        secs = v > 0 ? v * (unit === 'min' ? 60 : 1) : NaN;
+      }
+      if (!(secs > 0)) {
+        text = `A film uses ${plural(per)} for each minute it lasts. You have ${have}.`;
+      } else {
+        const n = Math.max(1, Math.ceil(Math.max(0, secs - 1) / 60)) * per;
+        const label = secs < 60 ? `${Math.round(secs)}-second` : `${+(secs / 60).toFixed(1)}-minute`;
+        short = n > have;
+        text = `A ${label} film uses ${plural(n)}. You have ${have}.`
+          + (short ? ` Pick a shorter length${line.dataset.resets ? `, or wait until ${line.dataset.resets}` : ''}.` : '');
+      }
+    }
+    line.textContent = text;
+    line.classList.toggle('short', short);
+  };
+  form.addEventListener('change', cost);
+  form.addEventListener('input', cost);
+  cost();
 }
 
 // what an improvise slider means, in words, as it moves (new film, and 'Improvise one' on the ideas)
@@ -330,6 +370,15 @@ function busyForms() {
   }));
 }
 
+// text boxes on 'what I understood' grow with what is in them, so nothing they should check is hidden
+function growText() {
+  $$('.understood textarea').forEach((el) => {
+    const fit = () => { el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; };
+    el.addEventListener('input', fit);
+    fit();
+  });
+}
+
 function swatches() {  // a look's colours (set from script: the page allows no inline styles)
   $$('.sw[data-c]').forEach((el) => {
     if (/^#[0-9a-f]{6}$/i.test(el.dataset.c)) el.style.background = el.dataset.c;
@@ -343,6 +392,7 @@ export function studio() {
   rating();
   newFilm();
   improviseSlider();
+  growText();
   inviteLink();
   busyForms();
 }

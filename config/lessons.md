@@ -139,3 +139,22 @@ merely clean and synced is a 4, not a 7. Be harsh; predict the user's number.
 - The loader that "makes me anxious": a white shine sliding inside a 14-px fill, snapping back every 1.6 s, reads as broken. Waiting = a soft light drifting across the whole track; working = a fill that only grows, glow breathing at its tip.
 - Render speed, measured on the owner's laptop (realistic designed talk, 1080x1920): drawing 670 -> 235 ms/frame with the same picture (PSNR >= 51 dB): matte refinement at half size, the person composited only inside their box, cv2 instead of numpy broadcasts, cached head glow, no person drawn under a full-screen scene, plate pixels without PIL round trips. The MODNet cut-out on the Iris Xe through DirectML: 197 vs 361 ms and the cores stay free. 2 drawing processes are best (4.8 frames/s); 3 fight over the GPU (2.3). Always profile a realistic script, not a bare one: the bare one hid the backdrop and scene costs.
 - Uploads (same day): the owner's line uploads at 19 Mbit/s and downloads at 92; the app added ~1.5% on top. The fix is sending less: clips are re-encoded on the device (WebCodecs/Mediabunny) to the film's size, streamed as fragmented MP4 into the resumable upload. Browsers differ: one encoder honoured the bitrate, another made a 4K file bigger than the original, so the guard judges the outcome (projected size vs the original, finishing time vs sending the original), never the settings. Measuring quality: compare frames by index; ffmpeg's setpts=N counts in each file's own time base and made a good copy look like 20 dB.
+
+## 2026-10-18 · Music made for the film, 'what I understood' for talks, credits
+- ElevenLabs Music (music_v2_5, measured with small real calls): the song id is the `song-id` response header (also on
+  /v1/music with store_for_inpainting). A short standalone chunk (a 6 s "[Intro]") comes out as one hit that decays to
+  silence, and extending it kept that dip: a taste must be a real groove (about 30 s: intro, groove, ending). An
+  audio-reference chunk keeps the stored audio (same loudness, onsets line up) but re-decoded, not bit-identical.
+  `conditioning_ref` on the first chunk (strength high) gave the full track the taste's tempo and harmony (chroma
+  likeness 0.97). A 40 s plan at 96 BPM came back at 95.1 BPM with a clean ending, but the drop at 7.6 s instead of
+  the planned 12.5 s: measure the real drop, never trust the plan (as on 2026-10-07). Price: $0.15 per minute.
+- So the code owns the structure (whole bars, a two-bar ending that rings out so the film ends on it) and the AI owns
+  the sound (styles, tempo 70-120 so the beat tracker reads it). Short tracks are made whole on every try (what they
+  hear is what they get); long ones start as a taste and the full track is made once, from it.
+- A form inside another form is dropped by the HTML parser (its fields join the outer form). To put a section with its
+  own forms between a form's fields and its submit button, close the form and give the button `form="id"`.
+- 'What I understood' for recordings: names must be copied exactly from the transcript (checked), so a correction the
+  person makes ("Cloud" is "Claude") is applied by code to every caption and on-screen text; never pay for an AI retry
+  to fix a spelling. Captions now take multi-word fixes ("get hub" -> "GitHub").
+- Credits: a film uses them by its length, taken at start (the difference if started again), all back if it is
+  deleted unfinished, and a refund for an earlier month becomes extra credits so nothing is lost.

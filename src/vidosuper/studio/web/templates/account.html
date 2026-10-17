@@ -25,6 +25,24 @@
   </div>
 </section>
 
+{% if credits %}
+<section class="panel rise d2" id="credits">
+  <h2>Credits</h2>
+  <p class="lead-s">A film uses {{ pricing.per_minute }} credit{{ '' if pricing.per_minute == 1 else 's' }} for each minute it lasts{% if pricing.looks %}, plus {{ pricing.looks }} when its look is painted{% endif %}. You see how many before anything starts, and you get them back if you delete a film before it's finished. Credits are free during early access and have no cash value.</p>
+  <div class="rows">
+    <div><span class="k">This month</span><span class="v">{{ credits.monthly_left }} of {{ credits.monthly }} left · more on {{ credits.resets }}</span></div>
+    {% if credits.extra %}<div><span class="k">Extra</span><span class="v">{{ credits.extra }} · these don't run out</span></div>{% endif %}
+  </div>
+  {% if credit_history %}
+  <details class="more"><summary>History</summary>
+    <div class="rows">{% for c in credit_history %}
+      <div><span class="k">{{ c.at|ago }} · {% if c.kind == 'grant' %}{{ c.note or 'Given to you by Flicello' }}{% elif c.kind == 'refund' %}Back: {{ c.note }}{% else %}{{ c.title or c.note }}{% endif %}</span><span class="v">{{ '%+d'|format(c.monthly + c.extra) }}</span></div>
+    {% endfor %}</div>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="panel rise d3">
   <h2>Signing in</h2>
   <p class="lead-s">No passwords: Google, a one-time email code, or a passkey on your phone or computer.</p>

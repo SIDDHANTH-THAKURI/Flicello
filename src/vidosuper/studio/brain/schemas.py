@@ -56,6 +56,52 @@ class Understanding(BaseModel):
     questions: list[Question] = Field(default_factory=list, description="0-3 genuinely open questions.")
 
 
+class TalkPart(BaseModel):
+    at: float = Field(..., description="When this part starts, in seconds into the recording (from the transcript).")
+    what: str = Field(..., description="What this part says, in under 12 words ('Why most diets fail').")
+
+
+class Term(BaseModel):
+    heard: str = Field(..., description="A name or word exactly as the transcript spells it ('Cloud').")
+    written: str = Field(..., description="How it should be written on screen and in the captions ('Claude'); the "
+                                          "same as `heard` when the transcript already has it right.")
+    why: str = Field("", description="When `written` differs: a few words on why ('the AI assistant they talk about').")
+
+
+class TalkUnderstanding(BaseModel):
+    """What the motion designer understood from a recording before designing anything: shown to the person, who
+    corrects it (above all the names: speech-to-text mishears them)."""
+    story: str = Field(..., description="What the recording is about and what the video should leave a viewer with, "
+                                        "1-2 sentences.")
+    feel: list[str] = Field(default_factory=list, description="2-4 words for the tone.")
+    parts: list[TalkPart] = Field(default_factory=list, description="The parts of the talk in order (2-8).")
+    terms: list[Term] = Field(default_factory=list, description="Names and special words that will be on screen "
+                                                                "(0-12), above all ones the transcript may have misheard.")
+    must: list[str] = Field(default_factory=list, description="What they explicitly asked to have.")
+    avoid: list[str] = Field(default_factory=list, description="What to leave out.")
+    questions: list[Question] = Field(default_factory=list, description="0-3 genuinely open questions.")
+
+
+class BeatIdea(BaseModel):
+    """An original instrumental for one film, as a producer reads what the person asked for (see music/made.py: the
+    code lays out the parts in whole bars; this says how it sounds)."""
+    reading: str = Field(..., description="For the person: what you will make, in 1-2 plain sentences in their "
+                                          "terms ('A warm lo-fi beat: soft Rhodes chords, dusty drums and vinyl "
+                                          "crackle, growing into a fuller groove').")
+    title: str = Field(..., description="A name for the track, 2-4 words.")
+    bpm: int = Field(..., description="Beats per minute, 70-120 (for faster music, its half-time tempo).")
+    styles: list[str] = Field(..., description="6-10 styles for the whole track, in English: the genre, 2-4 "
+                                               "instruments with how they are played, the mood, the production. "
+                                               "Never a real artist, band, song or label.")
+    avoid: list[str] = Field(default_factory=list, description="0-8 sounds or genres to keep out.")
+    intro: list[str] = Field(default_factory=list, description="1-3 styles only for the intro.")
+    build: list[str] = Field(default_factory=list, description="1-3 styles only for the build.")
+    drop: list[str] = Field(default_factory=list, description="1-3 styles only for the drop (the strongest part).")
+    breath: list[str] = Field(default_factory=list, description="1-3 styles only for the breath before the last drop.")
+    ending: list[str] = Field(default_factory=list, description="1-3 styles only for the ending (a final hit that "
+                                                                "rings out).")
+
+
 Kind = Literal["hold", "cut", "hit", "ramp", "stutter"]
 TransitionKind = Literal["cut", "dissolve", "fadeblack", "fadewhite", "smoothleft", "smoothright", "zoomin"]
 

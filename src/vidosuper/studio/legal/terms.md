@@ -1,6 +1,6 @@
 title: Terms of Service
 summary: You own your footage and the videos you make. Use Flicello fairly, only upload what you have the right to use, and remember AI can make mistakes. Your rights under consumer law always come first.
-updated: 17 October 2026
+updated: 18 October 2026
 
 ## About these terms
 
@@ -60,7 +60,9 @@ comments.
 
 Some videos include materials from others: library music, animations or other media. Each comes under its own licence
 (for example a Creative Commons licence or a library's own terms). We tell you where credits are needed, and you agree
-to follow those licences when you publish. The rights in songs you upload stay with their owners. Platforms such as
+to follow those licences when you publish. Music made for your film by ElevenLabs Music is made under our licence for
+your film: you may publish your film with it, but not use the music on its own or elsewhere. The rights in songs you
+upload stay with their owners. Platforms such as
 Instagram, TikTok and YouTube may mute or remove videos with music you aren't allowed to use.
 
 ## Fair use of Flicello
@@ -79,8 +81,12 @@ If you send us ideas or feedback, we may use them freely, without owing you anyt
 
 ## Fees
 
-Flicello is free during early access. If we introduce paid plans, we'll tell you in advance, and nothing will be
-charged without your clear agreement.
+Flicello is free during early access. Your access level comes with free credits each month, and a film uses credits
+by its length; we show how many before it starts. Credits have no cash value and can't be sold or transferred.
+Monthly credits don't carry over to the next month; extra credits we give you don't run out while your account is
+open. If you delete a film before it's finished, its credits come back.
+
+If we introduce paid plans, we'll tell you in advance, and nothing will be charged without your clear agreement.
 
 ## Suspending or closing accounts
 

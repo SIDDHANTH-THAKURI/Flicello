@@ -1,6 +1,6 @@
 title: AI transparency
 summary: What the AI in Flicello does, what it doesn't, what runs on our own computers, and how you stay in control.
-updated: 17 October 2026
+updated: 18 October 2026
 
 ## What the AI does
 
@@ -12,10 +12,14 @@ Flicello uses AI the way an editor's assistant would:
   ending.
 - **Planning the edit.** It chooses shots, their order and their timing on the beat, the colour look, titles and,
   for talking videos, motion graphics placed on your words.
+- **Making music.** If your film uses music made for it, it turns your words (or, if you say nothing, your film) into
+  a description of the sound, and ElevenLabs Music composes an original instrumental from it. You hear it, and can
+  change it, before anything is cut.
 - **Learning your style.** It turns your ratings and comments into rules for your next videos. You can see and edit
   those rules on your style page.
 
-The planning is done by Anthropic's Claude models, through Anthropic's commercial API.
+The planning is done by Anthropic's Claude models, through Anthropic's commercial API. Looks are painted by Google's
+Gemini image model and music is made by ElevenLabs, both from text descriptions only.
 
 ## What runs on our own computers
 
@@ -40,8 +44,8 @@ publish it, and tell Flicello what to fix.
 
 ## Labelling AI content
 
-Flicello edits footage that you filmed. Some elements can be AI-made: for example, the backdrops and props painted in the look you pick. Where
-we add AI-generated material, we say so in the app.
+Flicello edits footage that you filmed. Some elements can be AI-made: the backdrops and props painted in the look you
+pick, and music made for your film. Where we add AI-generated material, we say so in the app.
 
 If you publish realistic content that was generated or substantially altered by AI, platform rules and some laws
 (such as the EU AI Act, and India's rules on synthetically generated information) may require you to label it. We don't

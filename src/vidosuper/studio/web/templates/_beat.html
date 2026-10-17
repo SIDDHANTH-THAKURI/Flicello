@@ -1,0 +1,57 @@
+{# Music made for the film: what they asked for, what the AI understood, a track to listen to, and changing it. #}
+{% macro beat_block(p, csrf, beats, beats_left, can_compose, track_seconds, voice=False) %}
+{% set chosen = (beats|selectattr('id', 'equalto', p.beat)|first) if p.beat else none %}
+{% set shown = chosen or (beats|first if beats else none) %}
+{% if shown %}
+<div class="beat{% if chosen %} picked{% endif %}">
+  <div class="beat-head">
+    <b>{{ shown.idea.title }}</b>
+    {% if chosen %}<span class="chip-ok">✓ Your film's music</span>{% endif %}
+  </div>
+  <audio controls preload="metadata" src="/m/{{ p.id }}/beats/{{ shown.full_file or shown.file }}"></audio>
+  <p class="beat-reading"><span class="muted">How I read it:</span> {{ shown.idea.reading }}</p>
+  {% if shown.facts %}<p class="help">{{ shown.facts }}</p>{% endif %}
+  {% if not chosen %}
+  <form method="post" action="/p/{{ p.id }}/beat/use"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="beat" value="{{ shown.id }}">
+    <button class="btn-sun" type="submit"><span>Use this one</span></button></form>
+  {% endif %}
+</div>
+{% if can_compose and beats_left > 0 %}
+<details class="more beat-change">
+  <summary>Not quite? Change it</summary>
+  <form method="post" action="/p/{{ p.id }}/beat" class="gap-top">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="base" value="{{ shown.id }}">
+    <label class="field"><span>What should change?</span>
+      <input name="change" maxlength="300" required placeholder="Slower and warmer / more piano, less bass / darker"></label>
+    <button class="btn" type="submit">Make another</button>
+    <p class="help">{{ beats_left }} more {{ 'try' if beats_left == 1 else 'tries' }} for this film. Every track stays here to pick from.</p>
+  </form>
+</details>
+{% endif %}
+{% if beats|length > 1 %}
+<details class="more beat-tries">
+  <summary>All tracks for this film ({{ beats|length }})</summary>
+  <ul class="beat-list">
+    {% for b in beats if b.id != shown.id %}
+    <li>
+      <div><b>{{ b.idea.title }}</b>{% if b.ask %}<small>You said: {{ b.ask }}</small>{% endif %}</div>
+      <audio controls preload="none" src="/m/{{ p.id }}/beats/{{ b.full_file or b.file }}"></audio>
+      <form method="post" action="/p/{{ p.id }}/beat/use"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="beat" value="{{ b.id }}">
+        <button class="btn" type="submit">Use this one</button></form>
+    </li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}
+{% elif can_compose and beats_left > 0 %}
+<form method="post" action="/p/{{ p.id }}/beat" class="beat-ask">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label class="field"><span>What should it sound like? <small class="muted">(optional)</small></span>
+    <textarea name="ask" rows="2" maxlength="400" placeholder="{{ 'Soft piano, calm, a little hopeful' if voice else 'Warm lo-fi with piano / big cinematic drums / upbeat summer house' }}"></textarea></label>
+  <button class="btn" type="submit">Make it and let me listen</button>
+  <p class="help">Original music made for your {{ 'recording' if voice else 'film' }} by ElevenLabs Music, to its length{% if track_seconds > 75 %}: first a 30-second taste to check the sound, then the full {{ track_seconds|dur }} track{% endif %}. You hear it and say what I got wrong before anything is cut. {% if p.stage == 'setup' %}Skip it and I make one from your note when you start.{% elif voice %}Skip it and I make one to suit the look you pick.{% endif %}</p>
+</form>
+{% else %}
+<p class="help">{% if voice %}A soft original beat sits under your voice.{% else %}We make a short original beat to cut on. It's yours to post anywhere.{% endif %}</p>
+{% endif %}
+{% endmacro %}

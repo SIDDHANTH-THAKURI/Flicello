@@ -60,3 +60,79 @@ def compose(plan: dict, out_path: Path, *, model: str = DEFAULT_MODEL, output_fo
     out_path.with_suffix(".plan.json").write_text(json.dumps({"model": model, "plan": plan}, indent=1),
                                                   encoding="utf-8")
     return out_path
+
+
+class ComposeError(RuntimeError):
+    """ElevenLabs could not make the track (no key, refused, down)."""
+
+
+class BadPlan(ComposeError):
+    """The plan was refused (for example a style named a real artist or song); `detail` says what to change."""
+
+    def __init__(self, detail: str):
+        super().__init__(f"the music plan was refused: {detail[:300]}")
+        self.detail = detail
+
+
+def available() -> bool:
+    """A key for ElevenLabs Music is set on this machine."""
+    _load_dotenv()
+    return bool(os.environ.get("ELEVENLABS_API_KEY", "").strip())
+
+
+def compose_plan(plan: dict, out_path: Path, *, model: str = "music_v2_5", store: bool = False,
+                 seed: int | None = None, timeout: float = 600.0) -> dict:
+    """Compose a music_v2 plan (chunks) into `out_path` (mp3). `store`: keep it at ElevenLabs as a reference for a
+    later track (a taste the full track should sound like). Returns {"path", "song_id", "seconds"}. Busy or down:
+    tried three times; a refused plan raises BadPlan, anything else ComposeError."""
+    import time
+
+    import httpx
+
+    _load_dotenv()
+    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        raise ComposeError("ELEVENLABS_API_KEY is not set on this machine")
+    body: dict = {"composition_plan": plan, "model_id": model}
+    if store:
+        body["store_for_inpainting"] = True
+    if seed is not None:
+        body["seed"] = int(seed)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = "mp3_44100_192"
+    last = ""
+    for attempt in range(3):
+        try:
+            r = httpx.post(f"{API}?output_format={fmt}", json=body, timeout=httpx.Timeout(30.0, read=timeout),
+                           headers={"xi-api-key": key, "Content-Type": "application/json"})
+        except httpx.HTTPError as exc:  # never reached them, or the line dropped: try again
+            last = f"{type(exc).__name__}"
+            time.sleep(5.0 * (attempt + 1))
+            continue
+        if r.status_code == 200:
+            part = out_path.with_name(out_path.name + ".part")
+            part.write_bytes(r.content)
+            os.replace(part, out_path)
+            seconds = sum(c.get("duration_ms", 0) for c in plan.get("chunks", [])) / 1000.0
+            try:
+                import soundfile as sf
+
+                seconds = float(sf.info(str(out_path)).duration)
+            except Exception:  # noqa: BLE001 - the plan's length stands
+                pass
+            return {"path": out_path, "song_id": r.headers.get("song-id", ""), "seconds": round(seconds, 2)}
+        detail = r.text[:600]
+        if r.status_code in (400, 403, 422) and "format" in detail.lower() and fmt != "mp3_44100_128":
+            fmt = "mp3_44100_128"  # this plan can't have that format: the standard one
+            continue
+        if "bad_composition_plan" in detail or (r.status_code == 422 and "composition" in detail.lower()):
+            raise BadPlan(detail)
+        if r.status_code in (401, 403):
+            raise ComposeError(f"ElevenLabs refused the key (HTTP {r.status_code}): {detail[:200]}")
+        last = f"HTTP {r.status_code}: {detail[:200]}"
+        if r.status_code in (408, 409, 429) or r.status_code >= 500:
+            time.sleep(5.0 * (attempt + 1))
+            continue
+        break
+    raise ComposeError(f"ElevenLabs Music didn't make the track ({last})")

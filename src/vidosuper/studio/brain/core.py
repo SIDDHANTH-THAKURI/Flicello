@@ -30,7 +30,7 @@ from ...explainer.script import VoiceScript
 DESIGNED_TEXT = '# Style: DESIGNED (designer animations)\nThe person picked designer animations. talk: they are cut out of their room and stand in front of a stage; your callouts are drawn BEHIND them, above and around their head.\n- The backbone is `scene` callouts: one designer animation for what is being said right now, about every 3-6 seconds, each starting on the word that brings it. `visual` says in a few concrete words what the animation should show ("two people podcasting at a table", "an email arriving with a notification", "a ghost floating"), `topics` gives 1-3 simple search words for an animation library ("podcast", "email", "ghost"). Think like a motion designer illustrating the story, not a subtitle writer. `text` on a scene is an optional 1-3 word label.\n- `title` for the name of the thing being talked about, once, early (typed on letter by letter).\n- `stack` when a number of things is said ("10 audio clips", "3 reasons"): `count`, a `visual` for one of them ("an audio waveform") and `text` ("10 audio clips"); it flies out of the scene that is up.\n- `stat` for a rating or a figure (value as said). `pill` rarely.\n- `ambient`: one looping animation behind their head for the whole video that suits the subject ("a circular sound visualizer" for audio/music/podcasts, "soft floating particles", "film reel") with `ambient_topics`.\n- Set `punch` on the single strongest moment.\n- voice mode: give every scene a `visual` and `topics` too, so it gets a real animation instead of an emoji.\n'
 from .schemas import Direction, Directions, VisualIdeas, VisualPicks
 from .schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StoryBeat, StoryPitch, StyleRule
-from .schemas import Understanding
+from .schemas import BeatIdea, TalkPart, TalkUnderstanding, Term, Understanding
 
 SLOWMO_FPS = 47.0  # real slow motion only from 50/60 fps footage
 
@@ -139,6 +139,122 @@ def check_understanding(u: Understanding, ctx: StoryContext) -> list[str]:
 
 def _mmss(t: float) -> str:
     return f"{int(t) // 60}:{int(t) % 60:02d}"
+
+
+def _norm(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def check_talk_understanding(u: TalkUnderstanding, utterances: list[dict], duration: float) -> list[str]:
+    """What is wrong with what was understood from a recording (empty: fine). Names must be copied from the
+    transcript, so a correction the person makes can be found in it and put right in the captions."""
+    problems = []
+    if len(u.story.split()) < 5:
+        problems.append("`story` must say what the recording is about in a real sentence")
+    if not 1 <= len(u.parts) <= 8:
+        problems.append(f"give 1-8 `parts` (the hook, the points, the ending); you gave {len(u.parts)}")
+    times = [p.at for p in u.parts]
+    if times != sorted(times):
+        problems.append("`parts` must be in the order they are spoken")
+    if any(not 0 <= t <= duration + 0.5 for t in times):
+        problems.append(f"every part's `at` must be inside the recording (0-{duration:.0f} s)")
+    if len(u.terms) > 12:
+        problems.append("list at most 12 `terms`: only names and special words that will be on screen")
+    said = " " + _norm(" ".join(x["text"] for x in utterances)) + " "
+    missing = [t.heard for t in u.terms if not _norm(t.heard) or f" {_norm(t.heard)} " not in said]
+    if missing:
+        problems.append("these `terms` are not in the transcript as written: " + ", ".join(f"'{m}'" for m in missing[:6])
+                        + ". Copy `heard` exactly as the transcript spells it (put the real name in `written`)")
+    if len(u.questions) > 3:
+        problems.append("ask at most 3 questions, only what is genuinely unclear")
+    for q in u.questions:
+        if not 2 <= len(q.options) <= 4:
+            problems.append(f"question '{q.ask[:40]}' needs 2-4 options")
+    return problems
+
+
+VOCAL_WORDS = re.compile(r"\b(vocals?|vocalist|sing\w*|singer|lyrics?|rap|rapping|rapper|choir|a ?cappella|humm\w*)\b",
+                         re.IGNORECASE)
+PURPOSE = {"cut": "a film cut on the beat: a clear steady beat, a build, a drop, a breath, a last drop, a final hit",
+           "bed": "music under someone speaking: soft and steady, room for the voice, no drops"}
+
+
+def check_beat_idea(b: BeatIdea) -> list[str]:
+    problems = []
+    if not 4 <= len(b.styles) <= 12:
+        problems.append(f"give 6-10 `styles` for the whole track (you gave {len(b.styles)})")
+    every = [*b.styles, *b.intro, *b.build, *b.drop, *b.breath, *b.ending]
+    vocal = [x for x in every if VOCAL_WORDS.search(x) and not re.search(r"\b(no|without|free|instrumental)\b", x, re.I)]
+    if vocal:
+        problems.append("the track is instrumental: take the voices out of the styles (" + ", ".join(vocal[:3]) + ")")
+    if not 40 <= b.bpm <= 220:
+        problems.append("`bpm` must be a real tempo (70-120)")
+    if len(b.reading.split()) < 5:
+        problems.append("`reading` must say what you will make in a real sentence")
+    return problems
+
+
+LOCAL_SOUNDS = [  # without an AI: their words (or the film's) matched to a sound
+    (r"lo-?fi|chill|study|cozy|cosy|rain", "Lo-fi glow", 88,
+     ["warm lo-fi hip hop", "soft Rhodes piano chords", "dusty boom bap drums", "vinyl crackle", "mellow round bass",
+      "relaxed"]),
+    (r"cinematic|epic|orchestra|trailer|dramatic|adventure", "Wide horizon", 96,
+     ["cinematic orchestral", "big taiko drums", "soaring strings", "brass swells", "epic", "wide reverb"]),
+    (r"house|dance|club|disco|party|techno", "Night drive", 118,
+     ["deep house", "four-on-the-floor kick", "warm analog bass", "crisp claps", "uplifting chords", "club mix"]),
+    (r"rock|guitar|punk|indie|skate", "Open road", 112,
+     ["indie rock", "driving electric guitars", "live drums", "energetic", "bass guitar", "garage"]),
+    (r"acoustic|folk|wedding|gentle|piano|calm|soft", "Quiet morning", 88,
+     ["acoustic folk", "fingerpicked guitar", "soft piano", "light percussion", "warm", "intimate"]),
+    (r"hip ?hop|trap|boom ?bap|street", "Street lights", 90,
+     ["modern hip hop beat", "punchy kick", "crisp snare", "808 bass", "dark keys", "confident"]),
+    (r"summer|happy|upbeat|travel|holiday|beach|sun", "Golden hour", 108,
+     ["upbeat tropical pop", "plucked marimba", "bright synth chords", "claps", "sunny", "feel-good"]),
+]
+
+
+def local_beat_idea(ask: str, film: str, purpose: str, pace: str, before: dict | None = None,
+                    change: str = "") -> BeatIdea:
+    text = " ".join([change, ask, film]).lower()
+    title, bpm, styles = "Bright run", 104, ["upbeat electronic pop", "punchy drums", "bright synth chords",
+                                             "warm bass", "energetic", "modern mix"]
+    for pattern, t, b, st in LOCAL_SOUNDS:
+        if re.search(pattern, text):
+            title, bpm, styles = t, b, st
+            break
+    bpm += {"calm": -8, "fast": 8, "every": 8}.get(pace, 0)
+    if purpose == "bed":
+        bpm = min(bpm, 92)
+        styles = [*styles, "soft", "background"]
+    said = f" from your words ('{ask.strip()[:60]}')" if ask.strip() else " to suit your film"
+    return BeatIdea(reading=f"{title}: {', '.join(styles[:3])}, about {bpm} beats a minute{said}.", title=title,
+                    bpm=bpm, styles=styles, drop=["fuller drums"], ending=["final hit"])
+
+
+def local_talk_understanding(utterances: list[dict], duration: float, intent: str) -> TalkUnderstanding:
+    """Without an AI: their note (or the opening words) as the story, the talk split where it pauses, and the names
+    it mentions (capitalised words inside sentences) as heard."""
+    text = " ".join(u["text"] for u in utterances).strip()
+    note = (intent or "").split("\n")[0].strip()
+    opening = " ".join(text.split()[:24])
+    story = note if len(note.split()) >= 5 else (opening if len(opening.split()) >= 5 else f"A {duration:.0f}-second talk.")
+    groups: list[list[dict]] = []
+    target = max(4.0, duration / 5)
+    for u in utterances:
+        if groups and u["start"] - groups[-1][0]["start"] < target:
+            groups[-1].append(u)
+        else:
+            groups.append([u])
+    parts = [TalkPart(at=round(float(g[0]["start"]), 1),
+                      what=" ".join(" ".join(x["text"] for x in g).split()[:10])) for g in groups[:8]]
+    names, seen = [], set()
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        for w in re.findall(r"[A-Za-z][\w'-]*", sentence)[1:]:
+            if w[0].isupper() and w.lower() not in seen and w not in ("I", "I'm", "I've", "I'll", "I'd"):
+                seen.add(w.lower())
+                names.append(Term(heard=w, written=w))
+    return TalkUnderstanding(story=story, parts=parts, terms=names[:8])
+
 
 
 def local_understanding(ctx: StoryContext) -> Understanding:
@@ -548,6 +664,43 @@ class Brain:
 
         return self._ask(req, check, tag=f"analyse-{clip.clip_id}")
 
+    def understand_talk(self, utterances: list[dict], duration: float, mode: str, intent: str,
+                        rules: list[dict]) -> TalkUnderstanding:
+        """What it understood from a recording (the story, its parts, the names on screen), for them to correct."""
+        lines = [f"[{u['start']:6.1f}-{u['end']:6.1f}] {u['text']}" for u in utterances]
+        what = ("a recording only: the animation is all they see" if mode == "voice" else
+                "a video of them talking: they stay on screen and the graphics land on their words")
+        parts = [f"# Mode\n{mode} ({what}); the recording is {duration:.0f} seconds long.",
+                 "# What the person asked for\n" + (intent.strip() or "(nothing specific)"),
+                 "# This person's style rules\n" + rules_text(rules),
+                 "# The transcript (seconds into the recording)\n" + "\n".join(lines)[:40000],
+                 "Return what you understood as JSON."]
+        req = Request("understand", prompt("understand_talk"), "\n\n".join(parts), TalkUnderstanding,
+                      self.models.analyst, effort="medium", max_tokens=4000)
+        return self._ask(req, lambda u: check_talk_understanding(u, utterances, duration))
+
+    def beat_idea(self, ask: str, film: str, purpose: str, seconds: float, pace: str, before: dict | None = None,
+                  change: str = "", layout: list[tuple[str, float]] | None = None) -> BeatIdea:
+        """How the film's own track should sound, from their words about the music and the film. `layout`: the parts
+        the tool will make and about when each starts, so the reading only promises what will be there."""
+        parts = [f"# What the music is for\n{purpose}: {PURPOSE.get(purpose, purpose)}. About {seconds:.0f} seconds; "
+                 f"the film is cut at a {pace} pace.",
+                 "# What they said about the music\n" + (ask.strip() or "(nothing: pick what suits the film)"),
+                 "# The film\n" + (film.strip() or "(nothing specific)")]
+        if layout:
+            names = list(dict.fromkeys(name for name, _ in layout))
+            parts.append("# The parts this track will have (laid out by the tool)\n"
+                         + ", ".join(f"{n} at about {int(t) // 60}:{int(t) % 60:02d}" for n, t in layout)
+                         + f"\nDescribe only these in `reading`, and leave the style lists of any other part empty "
+                           f"(the parts: {', '.join(names)}).")
+        if before:
+            parts.append("# The track they heard\n" + json.dumps(before, indent=1) + "\n\n# What they want changed\n"
+                         + (change.strip() or "(they want something different: change the sound clearly)"))
+        parts.append("Return the track as JSON.")
+        req = Request("beat", prompt("beat"), "\n\n".join(parts), BeatIdea, self.models.analyst, effort="low",
+                      max_tokens=1500)
+        return self._ask(req, check_beat_idea)
+
     # -- 2 pitch
     def understand(self, ctx: StoryContext) -> Understanding:
         """What it understood from the clips, the music and their request, in plain words for them to correct."""
@@ -760,6 +913,16 @@ class LocalBrain:
         moment, the song's tempo and first drop)."""
         self._free("understand")
         return local_understanding(ctx)
+
+    def understand_talk(self, utterances: list[dict], duration: float, mode: str, intent: str,
+                        rules: list[dict]) -> TalkUnderstanding:
+        self._free("understand")
+        return local_talk_understanding(utterances, duration, intent)
+
+    def beat_idea(self, ask: str, film: str, purpose: str, seconds: float, pace: str, before: dict | None = None,
+                  change: str = "", layout: list[tuple[str, float]] | None = None) -> BeatIdea:
+        self._free("beat")
+        return local_beat_idea(ask, film, purpose, pace, before, change)
 
     def pitch(self, ctx: StoryContext, n: int = 3, rejected=None, reason: str = "", own_idea: str = "") -> list[StoryPitch]:
         self._free("pitch")

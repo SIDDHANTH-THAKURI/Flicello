@@ -29,10 +29,23 @@ class Tier(_Strict):
     videos: int | None = None
     max_seconds: int = Field(60, description="The longest film from clips a person may ask for.")
     max_recording: int = Field(180, description="The longest recording a talking or voice video may use, in seconds.")
+    beats: int = Field(3, description="Tracks ElevenLabs may make for one film (each try costs about $0.15 a minute "
+                                      "of music).")
+    credits: int = Field(3, description="Credits each calendar month; a film uses them by its length (Pricing). The "
+                                        "owner can change this on the admin page.")
 
 
 def _tiers() -> dict[str, Tier]:
-    return {"beta": Tier(), "special": Tier(videos=10, max_seconds=600, max_recording=600)}
+    return {"beta": Tier(), "special": Tier(videos=10, max_seconds=600, max_recording=600, beats=6, credits=12)}
+
+
+class Pricing(_Strict):
+    """What a film uses, in credits (the owner can change it on the admin page). A credit is about a minute of film:
+    the AI's cost grows with the footage and the length, and long films pay their own way."""
+    per_minute: int = Field(1, description="Credits per started minute of the film (or of the recording a voice or "
+                                           "talking video is made from).")
+    looks: int = Field(1, description="Extra credits when the video's look is painted (voice and designed talking "
+                                      "videos: every scene is an AI picture).")
 
 
 class Limits(_Strict):
@@ -109,6 +122,7 @@ class StudioSettings(_Strict):
                                           "people are approved at once.")
     tiers: dict[str, Tier] = Field(default_factory=_tiers, description="What each access level may do: 'beta' (an "
                                                                        "approved person), 'special' (long videos).")
+    pricing: Pricing = Field(default_factory=Pricing)
     site_url: str | None = Field(None, description="The public address (https://flicello.com): Google sign-in's "
                                                    "return address, passkeys' domain, links in emails.")
     allowed_emails: list[str] = Field(default_factory=list, description=(

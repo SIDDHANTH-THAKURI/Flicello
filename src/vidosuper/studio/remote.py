@@ -186,6 +186,9 @@ class RemoteWorker:
         self.mirror = Mirror(http, self.studio.s)
         self._last_purge = 0.0
         self.current: int | None = None  # the job running now (the pulse checks the server still wants it)
+        from ..music.compose import available as music_available
+
+        self.music = music_available()  # this machine can have music made (an ElevenLabs key): the site offers it
         self.on_abort = lambda: os._exit(3)  # a lane process is started again by its supervisor (run_split)
 
     def _apply(self, settings: dict) -> None:
@@ -215,7 +218,7 @@ class RemoteWorker:
 
     def tick(self) -> bool:
         """One round: heartbeat, tidy up when due, and at most one job. True if a job ran."""
-        self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node()})
+        self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node(), "music": self.music})
         if time.time() - self._last_purge > PURGE_EVERY:
             self._last_purge = time.time()
             removed = self.purge()
@@ -255,7 +258,7 @@ class RemoteWorker:
     def check(self) -> None:
         """Check in, and drop the running job if the server took it back (its watchdog found it stuck): a stuck step
         can't be stopped from inside, so the whole lane process ends and its supervisor starts it again."""
-        self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node()})
+        self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node(), "music": self.music})
         job = self.current
         if job is None:
             return

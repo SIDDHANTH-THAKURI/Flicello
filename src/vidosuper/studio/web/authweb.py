@@ -235,7 +235,8 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
         sessions = db.all("SELECT token, created, seen, ip FROM sessions WHERE user_id=? AND expires > strftime('%s','now') "
                           "ORDER BY seen DESC", (user["id"],))
         return h.page(request, "account.html", user, sess, passkeys=keys, sessions=sessions,
-                      this_session=sess["token"], google=auth.google_ready())
+                      this_session=sess["token"], google=auth.google_ready(), credits=studio.credits(user),
+                      credit_history=studio.credit_history(user), pricing=studio.pricing())
 
     @app.post("/account/profile")
     def account_profile(request: Request, csrf: str = Form(""), display: str = Form("")):

@@ -12,9 +12,6 @@
   </div>
 </header>
 {% if error %}<div class="error-box" role="alert">{{ error }}</div>{% endif %}
-{% if left is not none and left <= 0 %}
-<section class="panel"><h2>That's all for early access</h2><p class="lead-s">You've made every film in your early-access allowance. Thank you for trying Flicello!</p></section>
-{% else %}
 <form method="post" action="/new" id="new-form" class="rise d2">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <fieldset class="group">
@@ -97,7 +94,11 @@
   <label class="field"><span>What's it about? <small class="muted">(optional: leave it empty to be surprised)</small></span>
     <textarea name="intent" rows="3" maxlength="600" placeholder="A lazy Sunday at the beach with my dog. Make it feel warm and a bit funny."></textarea></label>
 
+  {% if credits %}
+  <p class="cost-line" id="cost-line" data-per-minute="{{ pricing.per_minute }}" data-looks="{{ pricing.looks }}" data-have="{{ credits.total }}" data-resets="{{ credits.resets if credits.monthly else '' }}">
+    A film uses {{ pricing.per_minute }} credit{{ '' if pricing.per_minute == 1 else 's' }} for each minute it lasts. You have {{ credits.total }}.</p>
+  {% endif %}
   <button class="btn-sun wide" type="submit"><span>Next: add my clips</span></button>
+  <p class="help">Nothing is used yet: credits are taken only when you press start, after you see how many.</p>
 </form>
-{% endif %}
 {% endblock %}
