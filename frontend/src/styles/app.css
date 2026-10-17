@@ -67,8 +67,8 @@
 .btn.quiet { border-color: transparent; background: transparent; color: var(--paper-2); }
 .btn.quiet:hover { color: var(--paper); background: rgba(255, 255, 255, .05); }
 .btn-sun.wide { width: 100%; justify-content: center; height: 54px; border-radius: 14px; font-size: 1rem; }
-.btn-google { background: #fff; color: #1f1f1f; border-color: #fff; font-weight: 650; }
-.btn-google:hover { background: #f1f1f1; border-color: #f1f1f1; }
+.btn-google, .app a.btn-google { background: #fff; color: #1f1f1f; border-color: #fff; font-weight: 650; }
+.btn-google:hover, .app a.btn-google:hover { color: #1f1f1f; background: #f1f1f1; border-color: #f1f1f1; }
 .btn-google svg { width: 18px; height: 18px; }
 .link { background: none; border: 0; padding: 0; color: var(--paper); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; cursor: pointer; font: inherit; }
 .link:hover { text-decoration-color: var(--rose); }
