@@ -72,13 +72,15 @@ def _round(found, lib: Library, picker: Picker, workdir: Path, chosen: dict, log
     """One pass of reuse-or-ask over `found`; returns the needs that got nothing."""
     failed = []
     ask: list[dict] = []
+    used = set(chosen.values())  # one animation appears once per video: a repeat reads as a template
     for where, k, visual, topics in found:
         old = lib.remembered(visual)
-        if old:
+        if old and old not in used:
+            used.add(old)
             chosen[(where, k)] = old
             log.append(f"{visual}: reused {old[:8]}")
             continue
-        cands = lib.candidates(topics)
+        cands = [c for c in lib.candidates(topics, limit=24) if c not in used][:12]
         if not cands:
             log.append(f"{visual}: nothing found for {', '.join(topics)}")
             failed.append((where, k, visual, topics))
@@ -97,7 +99,10 @@ def _round(found, lib: Library, picker: Picker, workdir: Path, chosen: dict, log
             log.append(f"picking failed ({type(exc).__name__})")
             continue
         for a, choice in zip(part, picks):
-            if 0 <= choice < len(a["cands"]):
+            if 0 <= choice < len(a["cands"]) and a["cands"][choice] in set(chosen.values()):
+                log.append(f"{a['visual']}: its pick {a['cands'][choice][:8]} is already in this video")
+                failed.append((*a["key"], a["visual"], []))  # it fitted, so it is not turned down for next time
+            elif 0 <= choice < len(a["cands"]):
                 aid = a["cands"][choice]
                 chosen[a["key"]] = aid
                 lib.remember(aid, a["visual"])

@@ -68,7 +68,7 @@ def prepare(kind: str, root: Path, clips_dir: Path, audio_file: Path | None, cfg
         if duration > MAX_AUDIO_SECONDS:
             raise ExplainerError(f"Recordings can be up to {MAX_AUDIO_SECONDS / 60:.0f} minutes.")
         progress(0.3, "Writing down what you said")
-        tr = transcribe("voice", wav16, cfg.analysis.whisper_model, cfg.models_root / "whisper")
+        tr = transcribe("voice", wav16, cfg.analysis.speech_model, cfg.models_root / "whisper")
         data = {"kind": "voice", "audio": str(wav), "video": None, "wav": str(wav), "duration": round(duration, 3),
                 "utterances": [u.model_dump() for u in tr.utterances], "language": tr.language}  # all of it: a recording is speech
     else:
@@ -81,7 +81,8 @@ def prepare(kind: str, root: Path, clips_dir: Path, audio_file: Path | None, cfg
         if not clip.has_audio:
             raise ExplainerError("That video has no sound, so there is nothing to explain. Add a video where someone speaks.")
         progress(0.3, "Writing down what is said")
-        tr = ensure_transcript(project, clip, cfg)
+        speech_cfg = cfg.model_copy(update={"analysis": cfg.analysis.model_copy(update={"whisper_model": cfg.analysis.speech_model})})
+        tr = ensure_transcript(project, clip, speech_cfg)
         data = {"kind": "talk", "audio": str(clip.path), "video": str(clip.path), "wav": clip.audio_wav16k,
                 "duration": round(clip.duration, 3), "width": clip.width, "height": clip.height,
                 "utterances": [u.model_dump() for u in (tr.utterances if tr else [])],  # a talking video: all of it is speech

@@ -19,7 +19,7 @@ from PIL import Image
 
 from ..ffmpeg import find_tool
 from .draw import PALETTE, background, caption_pages, draw_callout, draw_captions, draw_scene, loudness, smooth
-from .script import VoiceScript
+from .script import VoiceScript, respell_words
 
 FPS = 30
 Progress = Callable[[float], None]
@@ -77,11 +77,12 @@ def render_voice(script: VoiceScript, audio: Path, utterances: list[dict], out: 
 
     _draw.LOTTIE = (lambda aid, t, width: (lot.frame(t + float(lib.item(aid).get("lead", 0.0)), width)
                                            if (lot := lib.lot(aid)) is not None else None)) if lib is not None else None
+    _draw.LOTTIE_ASPECT = (lambda aid: (lot.aspect if (lot := lib.lot(aid)) is not None else None)) if lib is not None else None
     samples, sr = sf.read(str(audio), dtype="float32", always_2d=True)
     total_s = len(samples) / sr
     end = min(total_s, end if end is not None else total_s)
     level = loudness(samples, sr, FPS)
-    pages = caption_pages(_words(utterances), 3 if size[1] > size[0] else 5) if script.captions else []
+    pages = caption_pages(respell_words(_words(utterances), script.respell), 3 if size[1] > size[0] else 5) if script.captions else []
     n = int((end - start) * FPS)
     pal = PALETTE[script.palette]
 
@@ -96,7 +97,7 @@ def render_voice(script: VoiceScript, audio: Path, utterances: list[dict], out: 
                 frame = _scene_frame(script, scene, t, size, lv)
             if pages:
                 draw_captions(frame, pages, t, PALETTE[(scene.palette if scene and scene.palette else script.palette)],
-                              0.8 if size[1] > size[0] else 0.88)
+                              0.8 if size[1] > size[0] else 0.915)
             yield frame.convert("RGB").tobytes()
 
     audio_args = ["-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", str(audio)]
@@ -120,7 +121,7 @@ def render_talk(script: VoiceScript, video: Path, utterances: list[dict], out: P
     if samples_wav is not None and Path(samples_wav).is_file():
         data, sr = sf.read(str(samples_wav), dtype="float32", always_2d=True)
         level = loudness(data, sr, FPS)
-    pages = caption_pages(_words(utterances), 3 if size[1] > size[0] else 5) if script.captions else []
+    pages = caption_pages(respell_words(_words(utterances), script.respell), 3 if size[1] > size[0] else 5) if script.captions else []
     pal = PALETTE[script.palette]
     w, h = size
     src = [find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", *(["-t", f"{seconds:.3f}"] if seconds else []),

@@ -51,7 +51,8 @@ def _model(name: str, download_root: Path):
         if name not in _MODELS:
             from faster_whisper import WhisperModel
 
-            _MODELS[name] = WhisperModel(name, device="cpu", compute_type="int8", download_root=str(download_root))
+            _MODELS.clear()  # one at a time: the long-running renderer would otherwise keep every size in memory
+            _MODELS[name] =WhisperModel(name, device="cpu", compute_type="int8", download_root=str(download_root))
         return _MODELS[name]
 
 

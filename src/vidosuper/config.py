@@ -102,6 +102,9 @@ class MusicCfg(_Strict):
 class AnalysisCfg(_Strict):
     frames_per_second: float = 0.5
     whisper_model: str = "small"
+    # voice and talking videos: the words ARE the video (scene timing, names on screen), so a bigger model. On a CPU
+    # it transcribes 63 s in ~35 s (small: ~11 s) and splits sentences far better.
+    speech_model: str = "large-v3-turbo"
     models_dir: str = "auto"  # where downloaded models live; auto = <workspace>/models (shared by every project)
 
 

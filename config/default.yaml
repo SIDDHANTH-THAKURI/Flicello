@@ -70,3 +70,4 @@ music:
 analysis:
   frames_per_second: 0.5         # contact-sheet sampling (Phase 2)
   whisper_model: small
+  speech_model: large-v3-turbo   # voice/talking videos, where the words are the video

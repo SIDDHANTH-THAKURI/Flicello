@@ -26,7 +26,7 @@ from ..outro.draw import place, text_sprite
 from . import cutout
 from .draw import emoji_sprite, outlined
 from .lottie_lib import Library
-from .script import Callout, VoiceScript
+from .script import Callout, VoiceScript, respell_words
 
 FPS = 30
 Progress = Callable[[float], None]
@@ -197,6 +197,7 @@ class Designer:
         if lib is not None:  # the cutaway scenes draw their main picture with these animations
             _draw.LOTTIE = lambda aid, tt, width: (lot.frame(tt + float(lib.item(aid).get("lead", 0.0)), width)
                                                    if (lot := lib.lot(aid)) is not None else None)
+            _draw.LOTTIE_ASPECT = lambda aid: (lot.aspect if (lot := lib.lot(aid)) is not None else None)
         self.titles = [c for c in script.callouts if c.kind == "title"]
 
     # ---------------------------------------------------------- pieces
@@ -620,7 +621,7 @@ def render_designed(script: VoiceScript, video: Path, utterances: list[dict], ou
 
     end = min(duration or 1e9, end if end is not None else (duration or 1e9))
     seconds = end - start
-    words = [wd for u in utterances for wd in u.get("words", [])]
+    words = respell_words([wd for u in utterances for wd in u.get("words", [])], script.respell)
     levels = voice_levels(wav, start, seconds)
     total = max(1, int(seconds * FPS))
     audio = ["-ss", f"{start:.3f}", "-t", f"{seconds:.3f}", "-i", str(video)]

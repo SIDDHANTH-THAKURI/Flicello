@@ -170,6 +170,28 @@ def _card(size: tuple[int, int], radius: int, fill: tuple[int, ...]) -> Image.Im
 
 
 LOTTIE = None  # set by the renderer: (animation id, seconds into it, width) -> RGBA image, for designer animations
+LOTTIE_ASPECT = None  # set with it: animation id -> height / width of its drawing (None when it can't be drawn)
+
+
+def art_box(frame: Image.Image, s: Scene, cx: float, cy: float, mw: float, mh: float, t: float, t0: float, pal: dict,
+            level: float) -> None:
+    """The scene's picture at the largest size that fits the box (mw x mh, centred on cx, cy): its designer animation
+    when it has one, else its emoji in rings that pulse with the voice. Never spills out of the box onto the text."""
+    if s.lottie and LOTTIE is not None and LOTTIE_ASPECT is not None:
+        aspect = LOTTIE_ASPECT(s.lottie)
+        if aspect:
+            k = pop(t, t0)
+            width = int(max(8, min(mw, mh / max(0.05, aspect))))
+            art = LOTTIE(s.lottie, t - t0, width)
+            if art is not None:
+                place(frame, art, cx, cy + math.sin(t * 2.2) * mh * 0.012, scale=0.6 + 0.4 * clamp(k, 0, 1.1),
+                      alpha=clamp(k * 1.5))
+                return
+    hero(frame, s.emoji, cx, cy, int(min(mw, mh) * 0.42), t, t0, pal, level)
+
+
+def _lerp(a: tuple, b: tuple, k: float) -> tuple:
+    return tuple(x + (y - x) * k for x, y in zip(a, b))
 
 
 def hero(frame: Image.Image, emoji: str, cx: float, cy: float, px: int, t: float, t0: float, pal: dict, level: float,
@@ -208,17 +230,22 @@ def draw_scene(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) 
     ink, accent, soft = pal["ink"], pal["accent"], pal["soft"]
     a = s.start
     maxw = int(w * (0.84 if vertical else 0.7))
+    if s.layout in ("list", "steps", "compare", "flow", "chat") and s.items:
+        _split(frame, s, t, pal, level)
+        return
     if s.layout in ("title", "keyword"):
         big = s.layout == "title"
-        hero(frame, s.emoji, w / 2, h * (0.34 if vertical else 0.4), int(u * (0.34 if big else 0.28)), t, a + 0.05, pal, level,
-             s.lottie)
-        title_text(frame, s.headline.upper() if big else s.headline, w / 2, h * (0.62 if vertical else 0.74), maxw,
-                   int(h * 0.26), int(u * (0.11 if big else 0.13)), ink, t, a + 0.25)
+        if vertical:
+            art_box(frame, s, w / 2, h * 0.34, w * 0.84, h * 0.38, t, a + 0.05, pal, level)
+        else:
+            art_box(frame, s, w / 2, h * 0.37, w * 0.62, h * 0.56, t, a + 0.05, pal, level)
+        title_text(frame, s.headline.upper() if big else s.headline, w / 2, h * (0.62 if vertical else 0.73), maxw,
+                   int(h * (0.26 if vertical else 0.17)), int(u * (0.11 if big else 0.12)), ink, t, a + 0.25)
         bar = pop(t, a + 0.5, 0.6)
         if bar > 0:
             bw = int(u * 0.5 * clamp(bar, 0, 1))
-            ImageDraw.Draw(frame).rounded_rectangle([w / 2 - bw / 2, h * (0.75 if vertical else 0.87), w / 2 + bw / 2,
-                                                     h * (0.75 if vertical else 0.87) + u * 0.014], u * 0.007, fill=(*accent, 255))
+            ImageDraw.Draw(frame).rounded_rectangle([w / 2 - bw / 2, h * (0.75 if vertical else 0.825), w / 2 + bw / 2,
+                                                     h * (0.75 if vertical else 0.825) + u * 0.014], u * 0.007, fill=(*accent, 255))
         cx0, cy0 = w / 2, h * (0.34 if vertical else 0.4)
         base_r = u * (0.34 if big else 0.28) * 0.95
         for k, it in enumerate(s.items[:4] if s.layout == "keyword" else []):
@@ -259,6 +286,12 @@ def draw_scene(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) 
         _chat(frame, s, t, pal, u, maxw)
     elif s.layout == "quote":
         k = pop(t, a + 0.05)
+        if s.lottie and LOTTIE is not None:  # the animation is the picture; the line sits under it
+            art_box(frame, s, w / 2, h * (0.3 if vertical else 0.33), w * 0.7, h * (0.32 if vertical else 0.44), t, a + 0.05, pal,
+                    level)
+            title_text(frame, "“" + s.headline + "”", w / 2, h * (0.62 if vertical else 0.72), maxw, int(h * 0.18),
+                       int(u * 0.095), ink, t, a + 0.3)
+            return
         q = text_sprite("\u201c", "Fraunces-SemiBold", int(u * 0.5), (*accent, 255))
         place(frame, q, w / 2, h * 0.27, scale=0.5 + 0.5 * clamp(k, 0, 1.1), alpha=clamp(k * 1.4))
         title_text(frame, s.headline, w / 2, h * 0.55, maxw, int(h * 0.32), int(u * 0.085), ink, t, a + 0.3)
@@ -266,6 +299,47 @@ def draw_scene(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) 
             sprite = emoji_sprite(s.emoji, int(u * 0.16))
             if sprite is not None:
                 place(frame, sprite, w / 2, h * 0.78, alpha=fade(t, a + 0.7), scale=0.6 + 0.4 * clamp(pop(t, a + 0.7), 0, 1.1))
+
+
+def _split(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) -> None:
+    """A scene with parts that arrive as they are spoken (list, steps, compare, flow, chat). Its picture holds the
+    stage from the first frame, big, so the screen is never empty while the first part is waited for; as the first
+    part arrives the picture glides aside (left in landscape, up in portrait) and the parts build in the space left."""
+    w, h = frame.size
+    u, vertical = min(w, h), h > w
+    a = s.start
+    first = min(it.at for it in s.items)
+    k = smooth((t - (first - 0.45)) / 0.55)
+    if vertical:
+        alone, aside = (w / 2, h * 0.5, w * 0.84, h * 0.5), (w / 2, h * 0.215, w * 0.6, h * 0.15)
+        region = (0, int(h * 0.31), w, h)
+        head_y = h * 0.075
+    else:
+        alone, aside = (w / 2, h * 0.56, w * 0.6, h * 0.64), (w * 0.19, h * 0.57, w * 0.3, h * 0.58)
+        region = (int(w * 0.35), int(h * 0.2), w, h)
+        head_y = h * 0.1
+    title_text(frame, s.headline, w / 2, head_y, int(w * 0.84), int(h * 0.1), int(u * 0.068), pal["accent"], t, a + 0.05, 0.03)
+    art_box(frame, s, *_lerp(alone, aside, k), t, a + 0.05, pal, level)
+    if t < first - 0.05:
+        return
+    x0, y0, x1, y1 = region
+    sub = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+    su, sv = min(sub.size), sub.height > sub.width
+    if s.layout == "list":
+        rows = s.items[:4]
+        gap = su * 0.2
+        mw = int(sub.width * 0.88)
+        for j, it in enumerate(rows):
+            _row(sub, it, sub.width / 2, sub.height * 0.48 - gap * (len(rows) - 1) / 2 + j * gap, su, t, pal, mw)
+    elif s.layout == "steps":
+        _steps(sub, s, t, pal, su, sv)
+    elif s.layout == "compare":
+        _compare(sub, s, t, pal, su, sv)
+    elif s.layout == "flow":
+        _flow(sub, s, t, pal, su, sv)
+    else:
+        _chat(sub, s, t, pal, su, int(sub.width * 0.92))
+    frame.alpha_composite(sub, (x0, y0))
 
 
 def _flow(frame: Image.Image, s: Scene, t: float, pal: dict, u: float, vertical: bool) -> None:

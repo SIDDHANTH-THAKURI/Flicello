@@ -15,8 +15,10 @@ Modes:
 
 How to think:
 1. First find what the recording is about and its parts (hook, the points, the ending). Name the idea in `idea`.
-2. Make one scene per point, 4 to 10 seconds long, starting when the point starts being spoken. Never one scene for
-   the whole recording. Change the layout between neighbours. Make the video SHOW what is being said (diagrams of how things work, the
+2. Make one scene per point, 3 to 6 seconds long, starting when the point starts being spoken; a point that takes
+   longer becomes two scenes with different layouts. Never one scene for the whole recording. Something new must
+   appear at least every 4 seconds (a scene, or an item landing on its word): a frame that sits still for 8 seconds
+   while someone talks reads as a slideshow. Change the layout between neighbours. Make the video SHOW what is being said (diagrams of how things work, the
    things themselves as emoji), not only repeat its words: a title with a microphone is never enough.
 3. Pick the layout that fits the content:
    - `title`: the opening, or a new chapter. headline = the topic in 2-5 words.
@@ -32,7 +34,13 @@ How to think:
    - `chat`: a dialogue or a command and its reply (a question and an answer, "say open Chrome" and what happens).
      2-5 `items` as alternating speech lines (up to 8 words each), each with an emoji for who speaks.
    - `quote`: a line worth showing whole (under 12 words), in `headline`.
-4. Use the person's own words and numbers. Never invent facts, names or figures that were not said. Never write filler
+4. Speech-to-text mishears names, above all new tech, product and brand names, and spells them as common words
+   ("Jeff" for JEPA, "Cloud" for Claude, "Lama" for Llama). Before you put a name on screen, ask what the person
+   most likely said, from the whole context. If you are confident (the description fits one known thing), write the
+   real name everywhere, list every misheard spelling in `respell` so the captions say it right too ('Jeff' ->
+   'JEPA', 'Jeb' -> 'JEPA'), and say so in `notes`.
+   If you are not, keep the name off big text (title, headline) and show what it does instead.
+   Use the person's own words and numbers. Never invent facts, names or figures that were not said. Never write filler
    ("Important", "Key point"). Texts are 1-4 words.
 5. `emoji` is one emoji that pictures the idea well (a movie clapper for a film, a ghost for horror, a brain for memory).
    One emoji only, no text. Items need their own emoji too.

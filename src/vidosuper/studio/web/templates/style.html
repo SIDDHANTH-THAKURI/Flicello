@@ -17,7 +17,7 @@
   {% if profile.rules %}
   <ul class="rules">
     {% for r in profile.rules %}
-    <li class="{{ r.source }}"><span>{{ r.text }}{% if r.why %} <i>· {{ r.why }}</i>{% endif %}</span>
+    <li class="{{ r.source }}"><span>{{ r.text }}{% if r.why %} <i>· {{ r.why }}</i>{% endif %}{% if r.get('for') == 'films' %} <i>· films from footage only</i>{% elif r.get('for') == 'talks' %} <i>· voice and talking videos only</i>{% endif %}</span>
       <form method="post" action="/style/drop" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="rule" value="{{ r.id }}">
         <button class="link" type="submit">Remove</button></form></li>
     {% endfor %}

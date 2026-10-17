@@ -26,7 +26,7 @@ from .db import DB
 from .improve import maybe_start as maybe_start_improve
 from . import requirements
 from .pipeline import Pipeline, UserError, remove_project_files, studio_config
-from .profiles import Profile, owner_seed_rules
+from .profiles import Profile, owner_seed_rules, rules_for, scope_of
 from .settings import StudioSettings
 from .storage import UploadError, user_dir, workdir
 
@@ -457,7 +457,8 @@ class Studio:
         return pipe
 
     def _context(self, pipe: Pipeline, project: dict, user: dict):
-        return pipe.context(self.shapes(project), project["length"], project["intent"], self.profile(user).rules,
+        return pipe.context(self.shapes(project), project["length"], project["intent"],
+                            rules_for(self.profile(user).rules, project["kind"]),
                             project["pace"])
 
     def run_job(self, job: dict) -> None:
@@ -521,7 +522,8 @@ class Studio:
         from ..explainer.make import fit
 
         raw = pipe.brain.script_voice(speech["utterances"], speech["duration"], project["kind"], project["intent"],
-                                      self.profile(user).rules, previous, feedback, style=project["style"])
+                                      rules_for(self.profile(user).rules, project["kind"]), previous, feedback,
+                                      style=project["style"])
         script = fit(raw.model_copy(update={"style": project["style"]}), speech)
         if project["style"] == "designed":
             script = self._animations(pipe, project, script)
@@ -762,10 +764,15 @@ class Studio:
                               + (f"; ticked: {', '.join(tags)}" if tags else "") + (f"; said: \"{f['text']}\"" if f["text"] else ""))
         if not events:
             return
+        what = {"voice": "an animated explainer drawn over their voice recording (no footage: the pictures are designer "
+                         "animations and text; 'bad shots' means the animations and scenes)",
+                "talk": "their talking video with animations and graphics added"}.get(project["kind"],
+                                                                                 "a film edited from their footage to music")
+        events.insert(0, f"The video was {what}. Rules learned here apply only to this kind of video.")
         pipe = self._pipeline(job, project, user)
         profile = self.profile(user)
-        update = pipe.brain.learn(profile.rules, events)
-        entry = profile.apply(update)
+        update = pipe.brain.learn(rules_for(profile.rules, project["kind"]), events)
+        entry = profile.apply(update, scope_of(project["kind"]))
         profile.save()
         self.db.event(project["id"], f"Style profile: {update.summary or 'no change'} "
                                      f"(+{len(entry['added'])}, -{len(entry['dropped'])})")

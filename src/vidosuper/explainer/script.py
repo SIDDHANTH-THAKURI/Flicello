@@ -95,6 +95,11 @@ class Callout(BaseModel):
     lottie: str = Field("", description="Leave empty: filled in by the tool.")
 
 
+class Respell(BaseModel):
+    heard: str = Field(..., description="A word as the transcript has it ('Jeff').")
+    written: str = Field(..., description="What the person really said ('JEPA').")
+
+
 class VoiceScript(BaseModel):
     name: str
     idea: str = Field("", description="The animation's idea in one line.")
@@ -107,7 +112,30 @@ class VoiceScript(BaseModel):
     ambient_lottie: str = Field("", description="Leave empty: filled in by the tool.")
     scenes: list[Scene] = Field(default_factory=list)
     callouts: list[Callout] = Field(default_factory=list)
+    respell: list[Respell] = Field(default_factory=list, description="Names the transcript misheard, so the captions "
+                                   "say them right: one entry per spelling heard ('Jeff' -> 'JEPA', 'Jeb' -> 'JEPA').")
     notes: str = ""
+
+
+def _bare(text: str) -> str:
+    return re.sub(r"(?:'s|’s)$", "", re.sub(r"^\W+|\W+$", "", text.strip()).lower())
+
+
+def respell_words(words: list[dict], fixes: list[Respell]) -> list[dict]:
+    """The words with misheard names put right (keeping their punctuation and a possessive 's), for the captions."""
+    table = {_bare(f.heard): f.written.strip() for f in fixes if _bare(f.heard) and f.written.strip()}
+    if not table:
+        return words
+    out = []
+    for w in words:
+        text = w["text"]
+        key = _bare(text)
+        if key in table:
+            m = re.match(r"^(\W*)(.*?)((?:'s|’s)?\W*)$", text.strip())
+            text = (m.group(1) + table[key] + m.group(3)) if m else table[key]
+            w = {**w, "text": text}
+        out.append(w)
+    return out
 
 
 def _desc(s: Scene) -> str:

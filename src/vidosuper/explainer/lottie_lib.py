@@ -75,12 +75,40 @@ class Lot:
         self.w, self.h = self.anim.lottie_animation_get_size()
         self.cache: OrderedDict[tuple[int, int], Image.Image] = OrderedDict()
         self.bytes = 0
+        self.box = self._content_box()
+
+    def _content_box(self) -> tuple[float, float, float, float]:
+        """Where the drawing really is on its canvas, over the whole animation (fractions: left, top, right, bottom).
+        Many animations sit small in a big empty canvas: drawn by canvas size, a checkmark came out as a dot."""
+        try:
+            boxes = []
+            for k in range(8):
+                f = int((k + 0.5) / 8 * self.n)
+                img = self.anim.render_pillow_frame(frame_num=f, width=160, height=max(8, int(160 * self.h / max(1, self.w))))
+                a = np.asarray(img)[..., 3]
+                ys, xs = np.nonzero(a > 10)
+                if len(xs):
+                    boxes.append((xs.min() / a.shape[1], ys.min() / a.shape[0], (xs.max() + 1) / a.shape[1], (ys.max() + 1) / a.shape[0]))
+            if not boxes:
+                return 0.0, 0.0, 1.0, 1.0
+            l, t = min(b[0] for b in boxes), min(b[1] for b in boxes)
+            r, b = max(b[2] for b in boxes), max(b[3] for b in boxes)
+            pad = 0.04 * max(r - l, b - t)  # a little air, in proportion to the drawing
+            l, t, r, b = max(0.0, l - pad), max(0.0, t - pad), min(1.0, r + pad), min(1.0, b + pad)
+            if r - l < 0.05 or b - t < 0.05:
+                return 0.0, 0.0, 1.0, 1.0
+            return l, t, r, b
+        except Exception:  # noqa: BLE001 - the whole canvas, as before
+            return 0.0, 0.0, 1.0, 1.0
 
     @property
     def aspect(self) -> float:
-        return self.h / max(1, self.w)
+        """Height over width of the drawing (not of its canvas)."""
+        l, t, r, b = self.box
+        return (b - t) * self.h / max(1e-6, (r - l) * self.w)
 
     def frame(self, t: float, width: int, once: bool = False) -> Image.Image:
+        """The drawing at time t, `width` pixels wide, cropped to where it is (see _content_box)."""
         f = int(max(0.0, t) * self.fps)
         f = min(self.n - 1, f) if once else f % self.n
         width = max(8, int(width))
@@ -89,7 +117,13 @@ class Lot:
         if img is not None:
             self.cache.move_to_end(key)
             return img
-        img = self.anim.render_pillow_frame(frame_num=f, width=width, height=max(8, int(width * self.aspect)))
+        l, t_, r, b = self.box
+        full_w = min(3200, int(round(width / max(0.05, r - l))))
+        full_h = max(8, int(full_w * self.h / max(1, self.w)))
+        img = self.anim.render_pillow_frame(frame_num=f, width=full_w, height=full_h)
+        if (l, t_, r, b) != (0.0, 0.0, 1.0, 1.0):  # exactly `width` wide, the drawing's height
+            x0, y0 = min(int(l * full_w), max(0, full_w - width)), int(t_ * full_h)
+            img = img.crop((x0, y0, x0 + width, min(full_h, y0 + max(1, int(round(width * self.aspect))))))
         size = img.width * img.height * 4
         if size <= CACHE_FRAME_MAX:  # small, often repeated frames (tiles, icons); a big main animation is drawn once
             self.cache[key] = img
@@ -279,8 +313,9 @@ class Library:
         return out[:limit]
 
     def rejected(self, need: str, cands: list[str]) -> bool:
-        """True when these same candidates were all turned down for this need before (don't ask again)."""
-        return sorted(self.index.get("none_fit", {}).get(need.lower().strip(), [])) == sorted(cands)
+        """True when all these candidates were turned down for this need before (don't ask again)."""
+        before = set(self.index.get("none_fit", {}).get(need.lower().strip(), []))
+        return bool(before) and set(cands) <= before
 
     def reject(self, need: str, cands: list[str]) -> None:
         self.index.setdefault("none_fit", {})[need.lower().strip()] = list(cands)

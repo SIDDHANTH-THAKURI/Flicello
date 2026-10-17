@@ -344,9 +344,19 @@ def check_voice_script(sc: VoiceScript, utterances: list[dict], duration: float,
 
     problems = []
     fitted = fit_script(sc, duration, mode)
-    if mode == "voice" and len(fitted.scenes) < max(2, int(duration // 14)):
+    if mode == "voice" and len(fitted.scenes) < max(2, int(duration // 7)):
         problems.append(f"only {len(fitted.scenes)} usable scenes for {duration:.0f} s: make one scene per point, "
-                        "4-10 seconds each, inside the audio, not overlapping")
+                        "3-6 seconds each, inside the audio, not overlapping")
+    if mode == "voice":  # nothing new on screen for long stretches while they talk = a slideshow
+        marks = sorted({round(s.start, 2) for s in fitted.scenes} | {round(i.at, 2) for s in fitted.scenes for i in s.items}
+                       | {round(duration, 2)})
+        speech = [(u["start"], u["end"]) for u in utterances]
+        still = [(a, b) for a, b in zip(marks, marks[1:]) if b - a > 6.0
+                 and sum(max(0.0, min(b, e) - max(a, st)) for st, e in speech) > 4.0]
+        if still:
+            problems.append("nothing new appears for too long while they speak: " + ", ".join(
+                f"{a:.0f}-{b:.0f} s" for a, b in still[:4]) + ": split those into shorter scenes, or add items on the "
+                "words, so something new lands at least every 4 s")
     if mode == "talk" and style == "designed":
         drawn = [c for c in fitted.callouts if c.kind == "scene" and c.visual]
         if len(drawn) < max(1, int(duration // 9)):
