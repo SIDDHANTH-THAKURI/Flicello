@@ -100,3 +100,31 @@ class VisualIdea(BaseModel):
 
 class VisualIdeas(BaseModel):
     ideas: list[VisualIdea]
+
+
+class Direction(BaseModel):
+    """A look for a voice or talking video, pitched before anything is drawn: the world behind the words and how it
+    is drawn. The one picked is the brief every scene's backdrop is made from."""
+
+    title: str = Field(..., description="A name for the look in 2-5 words ('Neon server city').")
+    pitch: str = Field(..., description="One line on how the video will feel to watch.")
+    world: str = Field(..., description="The place the story lives in, concretely: what is there, the light, the "
+                                        "time of day, the depth (foreground, middle, far away).")
+    art_style: str = Field(..., description="How it is drawn, as an illustrator would brief it: medium, shapes, "
+                                            "texture, rendering ('flat vector with soft grain and long shadows').")
+    colours: list[str] = Field(..., description="3-5 hex colours of the look, darkest first.")
+    palette: Literal["midnight", "sunrise", "mint", "paper", "berry"] = Field(
+        ..., description="The text and card colours that sit best on it: midnight (dark cool), sunrise (warm), mint "
+                         "(green), paper (neutral), berry (pink/purple).")
+    camera: str = Field(..., description="How the camera moves through it, using only slow push-ins, pull-backs, "
+                                         "sideways drifts, rising moves and still holds ('slow push-ins, a drift "
+                                         "sideways on each new topic').")
+    music: str = Field("", description="The mood of the music bed in a few words.")
+    preview: str = Field(..., description="The key frame that sells this look: one scene of this video, described as "
+                                          "a full image prompt (the subject, where things are, the light). No text "
+                                          "in it.")
+    why: str = Field("", description="One line: why this suits what they said and how they said it.")
+
+
+class Directions(BaseModel):
+    directions: list[Direction]

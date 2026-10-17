@@ -28,7 +28,7 @@ from .context import REUSE_WORDS, BeatMap, ClipFacts, catalog_text, craft_rules,
 from ...explainer.script import VoiceScript
 
 DESIGNED_TEXT = '# Style: DESIGNED (designer animations)\nThe person picked designer animations. talk: they are cut out of their room and stand in front of a stage; your callouts are drawn BEHIND them, above and around their head.\n- The backbone is `scene` callouts: one designer animation for what is being said right now, about every 3-6 seconds, each starting on the word that brings it. `visual` says in a few concrete words what the animation should show ("two people podcasting at a table", "an email arriving with a notification", "a ghost floating"), `topics` gives 1-3 simple search words for an animation library ("podcast", "email", "ghost"). Think like a motion designer illustrating the story, not a subtitle writer. `text` on a scene is an optional 1-3 word label.\n- `title` for the name of the thing being talked about, once, early (typed on letter by letter).\n- `stack` when a number of things is said ("10 audio clips", "3 reasons"): `count`, a `visual` for one of them ("an audio waveform") and `text` ("10 audio clips"); it flies out of the scene that is up.\n- `stat` for a rating or a figure (value as said). `pill` rarely.\n- `ambient`: one looping animation behind their head for the whole video that suits the subject ("a circular sound visualizer" for audio/music/podcasts, "soft floating particles", "film reel") with `ambient_topics`.\n- Set `punch` on the single strongest moment.\n- voice mode: give every scene a `visual` and `topics` too, so it gets a real animation instead of an emoji.\n'
-from .schemas import VisualIdeas, VisualPicks
+from .schemas import Direction, Directions, VisualIdeas, VisualPicks
 from .schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StoryBeat, StoryPitch, StyleRule
 
 SLOWMO_FPS = 47.0  # real slow motion only from 50/60 fps footage
@@ -399,6 +399,46 @@ def check_voice_script(sc: VoiceScript, utterances: list[dict], duration: float,
     return problems
 
 
+LOOK_TEXT = ("# The look they picked\nThe video is drawn in this look: every scene stands in front of a painted "
+             "place in its world. For each scene write `backdrop`: that place as an image prompt in the look's world "
+             "(what is there, where, the light), picturing what is being said (a talk about a model learning from "
+             "video: the observatory's great wall of screens; about how it predicts: a corridor of glowing doorways). "
+             "Neighbouring scenes may stay in one place: give them the SAME backdrop words and the camera moves on "
+             "through it; change place when the topic changes, about every 6-12 seconds. Never text or letters in a "
+             "backdrop. `camera` per scene: push (towards, the default), pull (away, for a reveal or an ending), left "
+             "or right (travel, a new topic), rise (up, for growth or a big idea), still (a quiet beat). Set the "
+             "script's `palette` to the look's palette. talk mode: `stage` is the place behind the person for the "
+             "whole video. The look's world and style are already known to the painter: describe only the place.\n")
+
+
+def check_directions(d: Directions, n: int) -> list[str]:
+    problems = []
+    if len(d.directions) != n:
+        problems.append(f"return exactly {n} look{'s' if n > 1 else ''}, not {len(d.directions)}")
+    titles = [x.title.strip().lower() for x in d.directions]
+    if len(set(titles)) != len(titles):
+        problems.append("every look needs its own title")
+    for x in d.directions:
+        if not 3 <= len(x.colours) <= 5 or not all(re.fullmatch(r"#[0-9a-fA-F]{6}", c.strip()) for c in x.colours):
+            problems.append(f"'{x.title}': colours must be 3-5 hex colours like #1a2b3c")
+        if len(x.preview.split()) < 12:
+            problems.append(f"'{x.title}': the preview must be a full image prompt (at least a sentence or two)")
+    return problems
+
+
+def check_backdrops(sc: VoiceScript, duration: float, mode: str) -> list[str]:
+    if mode == "talk":
+        return [] if sc.stage.strip() else ["talk with a look: write `stage`, the place behind the person"]
+    missing = [s.headline or f"{s.start:.0f}s" for s in sc.scenes if not s.backdrop.strip()]
+    problems = [f"every scene needs a `backdrop` (missing for: {', '.join(missing[:4])})"] if missing else []
+    places = {s.backdrop.strip().lower() for s in sc.scenes if s.backdrop.strip()}
+    most = max(3, min(14, int(duration // 5)))
+    if len(places) > most:
+        problems.append(f"{len(places)} different backdrops for {duration:.0f} s is too many: use at most {most}, "
+                        "keeping neighbouring scenes on one topic in the same place (the same backdrop words)")
+    return problems
+
+
 class Brain:
     kind = "claude"
 
@@ -481,9 +521,38 @@ class Brain:
                  "\n\nChange what they asked for and keep what works; don't rebuild a plan they mostly liked.")
         return self._design(ctx, pitch, extra, "revise")
 
+    # -- 6a the looks of a voice or talking video, pitched before it is drawn
+    def directions(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
+                   shape: str, n: int = 3, rejected: list[Direction] | None = None, reason: str = "",
+                   own_idea: str = "", base: Direction | None = None, change: str = "",
+                   taste: str = "") -> list[Direction]:
+        lines = [f"[{u['start']:6.1f}] {u['text']}" for u in utterances]
+        what = ("a recording only: the animation is all they see" if mode == "voice" else
+                "a video of them talking: they are cut out and stand in front of the world")
+        parts = [f"# Mode\n{mode} ({what}); {duration:.0f} seconds; shape {shape}.",
+                 "# What the person asked for\n" + (intent.strip() or "(nothing specific)"),
+                 "# This person's style rules\n" + rules_text(rules),
+                 "# Their taste in looks so far (newest first)\n" + (taste.strip() or "(their first video: no "
+                                                                      "history yet, so show them a wide range)"),
+                 "# The transcript\n" + "\n".join(lines)[:24000]]
+        if rejected:
+            parts.append("# Looks already shown\n" + "\n".join(f"- {d.title}: {d.art_style}; {d.world[:120]}"
+                                                                for d in rejected)
+                         + (f"\nWhat they said: {reason}" if reason else "") + "\nPitch something clearly different.")
+        if own_idea:
+            parts.append(f"# Their own idea\n{own_idea}\nTurn it into a full look; keep their idea at the centre.")
+        if base is not None:
+            parts.append("# The look to change\n" + json.dumps(base.model_dump(), indent=1) +
+                         f"\n\n# What they want changed\n{change}\nKeep the rest; make the change plain to see.")
+        parts.append(f"Return {n} look{'s' if n > 1 else ''} as JSON.")
+        req = Request("looks", prompt("looks"), "\n\n".join(parts), Directions, self.models.director, effort="medium",
+                      max_tokens=6000)
+        return self._ask(req, lambda d: check_directions(d, n)).directions
+
     # -- 6 the script of a voice (explainer videos)
     def script_voice(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
-                     previous: VoiceScript | None = None, feedback: str = "", style: str = "labels") -> VoiceScript:
+                     previous: VoiceScript | None = None, feedback: str = "", style: str = "labels",
+                     look: Direction | None = None) -> VoiceScript:
         lines = [f"[{u['start']:6.1f}-{u['end']:6.1f}] {u['text']}" for u in utterances]
         parts = [f"# Mode\n{mode}; the audio is {duration:.1f} seconds long.",
                  "# What the person asked for\n" + (intent.strip() or "(nothing specific: do what suits the talk)"),
@@ -495,12 +564,15 @@ class Brain:
                          "\n\nChange what they asked for and keep what works.")
         if style == "designed":
             parts.insert(1, DESIGNED_TEXT)
+        if look is not None:
+            parts.insert(2, LOOK_TEXT + json.dumps(look.model_dump(), indent=1))
         parts.append("Return the script as JSON.")
         req = Request("script", prompt("voice"), "\n\n".join(parts), VoiceScript, self.models.editor, effort="medium",
-                      max_tokens=8000)
+                      max_tokens=10000)
 
         def check(sc: VoiceScript) -> list[str]:
-            return check_voice_script(sc, utterances, duration, mode, style)
+            return check_voice_script(sc, utterances, duration, mode, style) + (
+                check_backdrops(sc, duration, mode) if look is not None else [])
 
         return self._ask(req, check)
 
@@ -733,11 +805,56 @@ class LocalBrain:
                           notes="Laid out by rule (no AI): holds to open, cuts in the build, a hit on the drop.")
 
     def script_voice(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
-                     previous: VoiceScript | None = None, feedback: str = "", style: str = "labels") -> VoiceScript:
+                     previous: VoiceScript | None = None, feedback: str = "", style: str = "labels",
+                     look: Direction | None = None) -> VoiceScript:
         from ...explainer.script import local_script
 
         self._free("script")
-        return local_script(utterances, duration, mode, (intent.strip()[:40] or "Your story"), designed=style == "designed")
+        sc = local_script(utterances, duration, mode, (intent.strip()[:40] or "Your story"), designed=style == "designed")
+        if look is None:
+            return sc
+        cams = ["push", "left", "rise", "right", "pull"]
+        scenes = []
+        for k, s in enumerate(sc.scenes):  # a new place every other scene; the one between stays in it
+            place = f"{look.world}, the part about {s.headline.lower()}" if k % 2 == 0 or not scenes else scenes[-1].backdrop
+            scenes.append(s.model_copy(update={"backdrop": place, "camera": cams[k % len(cams)]}))
+        return sc.model_copy(update={"scenes": scenes, "palette": look.palette, "stage": look.world})
+
+    def directions(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
+                   shape: str, n: int = 3, rejected=None, reason: str = "", own_idea: str = "", base=None,
+                   change: str = "", taste: str = "") -> list[Direction]:
+        from ...explainer.script import keywords
+
+        self._free("looks")
+        topic = " ".join(keywords(" ".join(u["text"] for u in utterances), 3)).lower() or "the idea"
+        pool = [Direction(title="Night observatory", pitch="Calm and cinematic, like a documentary at night.",
+                          world=f"a vast observatory at night whose screens and instruments are about {topic}",
+                          art_style="painterly digital illustration, soft glow, gentle film grain",
+                          colours=["#0b1026", "#1d2a5c", "#5b7cfa", "#ffd36e"], palette="midnight",
+                          camera="slow push-ins", music="soft ambient pads",
+                          preview=f"a wide view of a night observatory full of glowing instruments about {topic}, "
+                                  "one warm lamp, deep blue shadows, stars through a high window"),
+                Direction(title="Paper workshop", pitch="Bright and playful, made by hand.",
+                          world=f"a sunny craft table where paper models of {topic} stand up",
+                          art_style="layered paper cut-out with soft shadows and visible paper texture",
+                          colours=["#2b2b3a", "#f2e6d0", "#ff6b4a", "#2f6fed"], palette="paper",
+                          camera="sideways drifts", music="light plucky beat",
+                          preview=f"paper cut-out models about {topic} standing on a sunny craft table, soft "
+                                  "shadows, warm morning light, layered depth"),
+                Direction(title="Neon grid city", pitch="Fast and bold, a little futuristic.",
+                          world=f"a neon city of light lines at dusk, its towers shaped like {topic}",
+                          art_style="clean neon line art on deep colour, bloom, long reflections",
+                          colours=["#12051f", "#3a0f5c", "#ff2e7e", "#2ee6d6"], palette="berry",
+                          camera="rising moves", music="pulsing synth",
+                          preview=f"a dusk skyline of neon line towers shaped like {topic}, reflections on a wet "
+                                  "street, magenta and cyan light")]
+        if base is not None:
+            return [base.model_copy(update={"title": (base.title + " (changed)")[:60], "pitch": change[:200] or base.pitch})]
+        if own_idea:
+            pool.insert(0, pool[0].model_copy(update={"title": "Your idea", "pitch": own_idea[:200],
+                                                      "world": own_idea[:300], "preview": own_idea[:300]}))
+        taken = {d.title for d in rejected or []}
+        return ([d for d in pool if d.title not in taken] + pool)[:n]
 
     def rethink_visuals(self, needs: list[dict]) -> list[dict]:
         self._free("rethink")

@@ -19,6 +19,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Layout = Literal["title", "keyword", "list", "steps", "stat", "compare", "quote", "flow", "chat"]
+Camera = Literal["push", "pull", "left", "right", "rise", "still"]
 PALETTES = ("midnight", "sunrise", "mint", "paper", "berry")
 CUTAWAY_SHARE = 0.34  # of a talking video's length, at most, may be animation instead of the person
 MIN_SCENE = 1.2
@@ -75,6 +76,11 @@ class Scene(BaseModel):
     topics: list[str] = Field(default_factory=list, description="1-3 simple words to search an animation library for "
                                                                 "it: 'podcast', 'microphone'.")
     lottie: str = Field("", description="Leave empty: filled in by the tool.")
+    backdrop: str = Field("", description="With a look picked: the place behind this scene, as an image prompt in the "
+                                          "look's world (what is there, where, the light). Neighbouring scenes in the "
+                                          "same place use the SAME words, so the camera moves on through one world.")
+    camera: Camera = Field("push", description="How the camera moves over the backdrop during the scene.")
+    backdrop_file: str = Field("", description="Leave empty: filled in by the tool.")
 
 
 class Callout(BaseModel):
@@ -114,6 +120,11 @@ class VoiceScript(BaseModel):
     callouts: list[Callout] = Field(default_factory=list)
     respell: list[Respell] = Field(default_factory=list, description="Names the transcript misheard, so the captions "
                                    "say them right: one entry per spelling heard ('Jeff' -> 'JEPA', 'Jeb' -> 'JEPA').")
+    look: str = Field("", description="Leave empty: filled in by the tool (the look they picked).")
+    stage: str = Field("", description="talk with a look picked: the place behind the person for the whole video, as "
+                                       "an image prompt in the look's world, with calm space in the middle where "
+                                       "they stand.")
+    stage_file: str = Field("", description="Leave empty: filled in by the tool.")
     notes: str = ""
 
 
@@ -123,7 +134,8 @@ def _bare(text: str) -> str:
 
 def respell_words(words: list[dict], fixes: list[Respell]) -> list[dict]:
     """The words with misheard names put right (keeping their punctuation and a possessive 's), for the captions."""
-    table = {_bare(f.heard): f.written.strip() for f in fixes if _bare(f.heard) and f.written.strip()}
+    table = {_bare(f.heard): re.sub(r"(?:'s|’s)$", "", f.written.strip()) for f in fixes  # the 's is kept from the word
+             if _bare(f.heard) and f.written.strip()}
     if not table:
         return words
     out = []

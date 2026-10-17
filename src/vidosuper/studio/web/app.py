@@ -31,7 +31,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import accounts, analytics
 from ..brain.context import read_note
 from ..profiles import QUESTIONS
-from ..service import BUSY, FEEDBACK_TAGS, LENGTHS, STAGES, ActionError, Studio
+from ..service import BUSY, FEEDBACK_TAGS, LENGTHS, STAGES, ActionError, Studio, uses_looks
 from ..storage import UploadError, finish_upload, safe_child, start_upload, workdir, write_chunk
 
 HERE = Path(__file__).parent
@@ -411,7 +411,7 @@ def create_app(studio: Studio) -> FastAPI:
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
-                    pitches=pitches,
+                    pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
                     note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
@@ -457,8 +457,9 @@ def create_app(studio: Studio) -> FastAPI:
         return act(request, csrf, pid, lambda u, p: studio.choose(p, pitch))
 
     @app.post("/p/{pid}/another")
-    def another(request: Request, pid: str, csrf: str = Form(""), reason: str = Form(""), own: str = Form("")):
-        return act(request, csrf, pid, lambda u, p: studio.another(p, reason, own))
+    def another(request: Request, pid: str, csrf: str = Form(""), reason: str = Form(""), own: str = Form(""),
+                base: int = Form(0)):
+        return act(request, csrf, pid, lambda u, p: studio.another(p, reason, own, base))
 
     @app.post("/p/{pid}/sample")
     def sample(request: Request, pid: str, csrf: str = Form(""), verdict: str = Form(""), note: str = Form("")):
@@ -607,6 +608,15 @@ def create_app(studio: Studio) -> FastAPI:
     def style(request: Request):
         user, sess = need_user(request)
         return page(request, "style.html", user, sess, profile=studio.profile(user))
+
+    @app.post("/style/forget-looks")
+    def style_forget_looks(request: Request, csrf: str = Form("")):
+        user, sess = need_user(request)
+        check_csrf(sess, csrf)
+        profile = studio.profile(user)
+        profile.taste = []
+        profile.save()
+        return RedirectResponse("/style", status_code=303)
 
     @app.post("/style/drop")
     def style_drop(request: Request, csrf: str = Form(""), rule: str = Form("")):

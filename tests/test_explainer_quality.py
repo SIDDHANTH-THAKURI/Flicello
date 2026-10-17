@@ -57,6 +57,8 @@ def test_captions_spell_names_as_meant():
     out = respell_words(words, [Respell(heard="Jeff", written="JEPA"), Respell(heard="Jeb", written="JEPA")])
     assert [w["text"] for w in out] == ["JEPA", "JEPA's", "JEPA,", "chef"]
     assert respell_words(words, []) is words
+    both = respell_words(words, [Respell(heard="Jeff", written="JEPA"), Respell(heard="Jeff's", written="JEPA's")])
+    assert [w["text"] for w in both][:2] == ["JEPA", "JEPA's"]  # never JEPA's's
 
 
 def test_slow_voice_scripts_are_sent_back():

@@ -50,6 +50,7 @@ class Models(_Strict):
     director: str = "claude-opus-5-5"  # pitches the stories
     editor: str = "claude-opus-5-5"  # designs and revises the cut
     coach: str = "claude-haiku-4-5-20251001"  # turns feedback into style rules
+    images: str = "gemini-nano-banana-2.1"  # paints the looks' previews and the backdrops (GEMINI_API_KEY)
 
 
 # USD per million tokens: input, output, cache write (5 min), cache read

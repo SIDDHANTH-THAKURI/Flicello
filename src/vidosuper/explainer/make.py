@@ -126,7 +126,8 @@ def cutout_available() -> bool:
 
 
 def render(script: VoiceScript, speech: dict, shape: str, out: Path, *, music: Path | None = None, sample: bool = False,
-          sample_start: float = 0.0, progress: Callable[[float], None] | None = None, workers: int = 1) -> dict:
+          sample_start: float = 0.0, progress: Callable[[float], None] | None = None, workers: int = 1,
+          plates_dir: Path | None = None) -> dict:
     """Draw the video, or a sample of it starting at `sample_start` (the part that changed). Returns
     {"path", "seconds", "render_seconds"}."""
     t0 = time.monotonic()
@@ -138,11 +139,12 @@ def render(script: VoiceScript, speech: dict, shape: str, out: Path, *, music: P
     lib = Library() if script.style == "designed" else None
     if speech["kind"] == "voice":
         render_voice(script, Path(speech["audio"]), speech["utterances"], out, size, music=music, quality=quality,
-                     start=start, end=end, progress=progress, lib=lib)
+                     start=start, end=end, progress=progress, lib=lib, plates_dir=plates_dir)
     elif script.style == "designed":
         render_designed(script, Path(speech["video"]), speech["utterances"], out, size,
                         Path(speech["wav"]) if speech.get("wav") else None, start=start, end=end,
-                        duration=float(speech["duration"]), quality=quality, lib=lib, progress=progress, workers=workers)
+                        duration=float(speech["duration"]), quality=quality, lib=lib, progress=progress, workers=workers,
+                        plates_dir=plates_dir)
     else:
         render_talk(script, Path(speech["video"]), speech["utterances"], out, size, Path(speech["wav"]) if speech.get("wav") else None,
                     quality=quality, start=start, end=end, duration=duration, progress=progress)

@@ -182,9 +182,14 @@ class Designer:
     """Draws one frame of a designed talking video."""
 
     def __init__(self, script: VoiceScript, words: list[dict], size: tuple[int, int], lib: Library | None,
-                 levels: np.ndarray, cut: bool):
+                 levels: np.ndarray, cut: bool, plates_dir: Path | None = None, duration: float = 0.0):
+        from .backdrops import Plates, shots
+
         self.s, self.words, self.size, self.lib, self.levels, self.cut = script, join_numbers(words), size, lib, levels, cut
         self.w, self.h = size
+        self.plates = Plates(plates_dir, size, "9:16" if self.h > self.w else "16:9") if plates_dir else None
+        self.shots = shots(script)
+        self.duration = max(1.0, duration)
         pal = STAGES.get(script.palette, STAGES["midnight"])
         self.rim, self.accent, self.ink, self.chip_fill = pal[3], pal[4], pal[5], pal[6]
         self.stage = Stage(size, script.palette)
@@ -201,6 +206,15 @@ class Designer:
         self.titles = [c for c in script.callouts if c.kind == "title"]
 
     # ---------------------------------------------------------- pieces
+    def backdrop(self, t: float, level: float) -> np.ndarray:
+        """What stands behind the person: the look's painted place (out of focus, the camera creeping in over the
+        whole video), else the drawn stage."""
+        if self.plates is not None and self.plates.has(self.s.stage_file):
+            img = self.plates.frame(self.s.stage_file, "push", t / self.duration, t, soft=True)
+            if img is not None:
+                return np.asarray(img.convert("RGB"), np.float32)
+        return self.stage.frame(t, level)
+
     def lottie(self, aid: str, t: float, width: int, once: bool = False) -> Image.Image | None:
         if not aid or self.lib is None:
             return None
@@ -425,7 +439,7 @@ class Designer:
         self.zones.update(m)
         behind = self.behind(t, level)
         if m is not None:
-            base = blend(self.stage.frame(t, level), behind)
+            base = blend(self.backdrop(t, level), behind)
             person = cutout.decontaminate(rgb, m)
             cv2.multiply(person, 1.06, dst=person)
             cv2.subtract(person, 11.7, dst=person)  # (p - 128) * 1.06 + 124: a touch more contrast
@@ -444,12 +458,10 @@ class Designer:
             img = blend(np.ascontiguousarray(img, dtype=np.float32), behind)
         cut = next((s for s in self.s.scenes if s.start - 0.25 <= t <= s.end + 0.25), None)
         if cut is not None:  # a full-screen animated scene, cross-faded in and out over the person
-            from .draw import PALETTE, background, draw_scene
+            from .compose import _scene_frame
 
             k = ease((t - cut.start + 0.25) / 0.25) * (1 - ease((t - cut.end) / 0.25))
-            pal = cut.palette or self.s.palette
-            scene = background(self.size, pal if pal in PALETTE else "midnight", t, level)
-            draw_scene(scene, cut, t, PALETTE[pal if pal in PALETTE else "midnight"], level)
+            scene = _scene_frame(self.s, cut, t, self.size, level, self.plates, self.shots)
             img = cv2.addWeighted(np.ascontiguousarray(img, dtype=np.float32), 1 - k,
                                   np.asarray(scene.convert("RGB"), np.float32), k, 0.0)
         front = Image.new("RGBA", self.size, (0, 0, 0, 0))
@@ -519,11 +531,12 @@ def voice_levels(wav: Path | None, start: float, seconds: float) -> np.ndarray:
 
 
 def _draw_frames(script: VoiceScript, video: Path, words: list[dict], size: tuple[int, int], levels: np.ndarray,
-                 start: float, frames: int, first: int, write, lib: Library | None, progress: Progress | None) -> int:
+                 start: float, frames: int, first: int, write, lib: Library | None, progress: Progress | None,
+                 plates_dir: Path | None = None, duration: float = 0.0) -> int:
     """Draw `frames` frames of the video from `start` and hand each to write(bytes). Returns how many were drawn."""
     w, h = size
     use_cut = cutout.available()
-    designer = Designer(script, words, size, lib, levels, use_cut)
+    designer = Designer(script, words, size, lib, levels, use_cut, plates_dir, duration)
     ff = find_tool("ffmpeg")
     dec = subprocess.Popen([ff, "-hide_banner", "-loglevel", "error", "-threads", "2", "-ss", f"{start:.3f}", "-i", str(video),
                             "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps={FPS}",
@@ -600,7 +613,8 @@ def _chunk(job: dict) -> str:
             pass
 
     _draw_frames(script, Path(job["video"]), job["words"], tuple(job["size"]), np.array(job["levels"], np.float32),
-                 job["start"], job["frames"], job["first"], enc.stdin.write, lib, tell)
+                 job["start"], job["frames"], job["first"], enc.stdin.write, lib, tell,
+                 Path(job["plates"]) if job.get("plates") else None, job.get("duration", 0.0))
     enc.stdin.close()
     if enc.wait() != 0:
         raise RuntimeError("the video encoder stopped: " + enc.stderr.read().decode("utf-8", "replace")[-300:])
@@ -611,7 +625,7 @@ def _chunk(job: dict) -> str:
 def render_designed(script: VoiceScript, video: Path, utterances: list[dict], out: Path, size: tuple[int, int],
                     wav: Path | None, *, start: float = 0.0, end: float | None = None, duration: float | None = None,
                     quality: str = "final", lib: Library | None = None, progress: Progress | None = None,
-                    workers: int = 1) -> Path:
+                    workers: int = 1, plates_dir: Path | None = None) -> Path:
     """The person's video, designed: their own sound exactly as it was. With workers > 1 the video is drawn in that
     many parts at once (separate processes) and joined; the sound is laid in once, from the original."""
     import os
@@ -631,7 +645,8 @@ def render_designed(script: VoiceScript, video: Path, utterances: list[dict], ou
         enc = _encoder(size, out, quality, audio, threads=4)
         err: list[bytes] = []
         threading.Thread(target=lambda: err.append(enc.stderr.read()), daemon=True).start()
-        _draw_frames(script, video, words, size, levels, start, total, 0, enc.stdin.write, lib, progress)
+        _draw_frames(script, video, words, size, levels, start, total, 0, enc.stdin.write, lib, progress, plates_dir,
+                     duration or 0.0)
         enc.stdin.close()
         if enc.wait() != 0:
             raise RuntimeError("the video encoder stopped: " + b"".join(err).decode("utf-8", "replace")[-300:])
@@ -642,7 +657,8 @@ def render_designed(script: VoiceScript, video: Path, utterances: list[dict], ou
     jobs = [{"script": script.model_dump_json(), "lib": str(lib.root) if lib else "", "video": str(video), "words": words,
              "size": list(size), "levels": levels[bounds[k]:bounds[k + 1]].tolist() if len(levels) > 1 else [0.0],
              "start": start + bounds[k] / FPS, "frames": bounds[k + 1] - bounds[k], "first": 0, "quality": quality,
-             "out": str(tmp / f"part{k}.mp4"), "threads": threads} for k in range(workers)]
+             "out": str(tmp / f"part{k}.mp4"), "threads": threads, "plates": str(plates_dir) if plates_dir else "",
+             "duration": duration or 0.0} for k in range(workers)]
     with ProcessPoolExecutor(workers) as ex:
         futs = [ex.submit(_chunk, j) for j in jobs]
         best = 0.0

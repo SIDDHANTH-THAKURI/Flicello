@@ -6,6 +6,9 @@ A video moves through stages:
     setup -> preparing -> choose -> sampling -> review -> rendering -> done (-> revising -> done)
     choose -> pitching -> choose (another idea, or their own);  review -> sampling (with their note)
 
+Footage films pitch stories at `choose`; voice and designed talking videos pitch LOOKS there (the world behind the
+words, with a painted preview each), and the one picked paints every scene's backdrop (see explainer/backdrops.py).
+
 and `paused` (an AI budget is used up: the owner is told) or `failed` (they can try again). Each busy
 stage is one job in the queue; the worker runs them one at a time.
 """
@@ -21,7 +24,7 @@ from dataclasses import asdict
 from .alerts import alert
 from .brain import BrainError, BudgetExceeded, Usage, brain_kind_for, make_brain
 from .brain.context import look_from_note, pace_from_note
-from .brain.schemas import DesignPlan, StoryPitch
+from .brain.schemas import DesignPlan, Direction, StoryPitch
 from .db import DB
 from .improve import maybe_start as maybe_start_improve
 from . import requirements
@@ -307,7 +310,7 @@ class Studio:
 
     def total_estimate(self, kind: str = "montage") -> int:
         """Start to a finished video, in seconds, for the page that asks to start."""
-        steps = ("prepare", "pitch", "sample", "render") if kind == "montage" else ("prepare", "render")
+        steps = ("prepare", "pitch", "sample", "render") if kind == "montage" else ("prepare", "sample", "render")
         return int(sum(self.typical_seconds(k) for k in steps))
 
     def set_music(self, project: dict, choice: str) -> None:
@@ -351,13 +354,32 @@ class Studio:
         if not row:
             raise ActionError("Pick one of the ideas.")
         self.db.run("UPDATE projects SET chosen=?, sample_tries=0 WHERE id=?", (pitch_id, project["id"]))
-        self._enqueue(project, "sample", {"pitch": pitch_id})
+        self._enqueue(project, "sample", {"pitch": pitch_id, "look": uses_looks(project)})
+        if uses_looks(project):  # their taste in looks: what they picked, and what they passed over for it
+            prof = self.profile(self.user(project["user_id"]))
+            for p in self.pitches(project):
+                if not p["rejected"]:
+                    prof.note_look("picked" if p["id"] == pitch_id else "passed", p["pitch"])
+            prof.save()
 
-    def another(self, project: dict, reason: str = "", own_idea: str = "") -> None:
+    def another(self, project: dict, reason: str = "", own_idea: str = "", base: int = 0) -> None:
+        """One more idea: something different (with why), their own idea shaped up, or (looks only) the look `base`
+        with the change in `reason`."""
         self._guard(project, "choose")
-        if self.db.value("SELECT COUNT(*) FROM pitches WHERE project_id=?", (project["id"],), 0) >= 9:
+        cap = 12 if uses_looks(project) else 9
+        if self.db.value("SELECT COUNT(*) FROM pitches WHERE project_id=?", (project["id"],), 0) >= cap:
             raise ActionError("That's plenty of ideas: pick one, or write your own.")
-        self._enqueue(project, "pitch", {"reason": " ".join(reason.split())[:300], "own": " ".join(own_idea.split())[:600]})
+        if base and not self.db.one("SELECT id FROM pitches WHERE id=? AND project_id=?", (base, project["id"])):
+            raise ActionError("Pick one of the looks to change.")
+        if base and not reason.strip():
+            raise ActionError("Say what to change about it.")
+        if uses_looks(project) and (base or own_idea.strip()):
+            prof = self.profile(self.user(project["user_id"]))
+            look = next((p["pitch"] for p in self.pitches(project) if p["id"] == base), {})
+            prof.note_look("changed" if base else "own", look, reason if base else own_idea)
+            prof.save()
+        self._enqueue(project, "pitch", {"reason": " ".join(reason.split())[:300], "own": " ".join(own_idea.split())[:600],
+                                         "base": int(base or 0)})
 
     def sample_verdict(self, user: dict, project: dict, ok: bool, note: str = "") -> None:
         self._guard(project, "review")
@@ -378,8 +400,8 @@ class Studio:
 
     def back_to_ideas(self, project: dict) -> None:
         self._guard(project, "review")
-        if project["kind"] != "montage":
-            raise ActionError("There are no story ideas for this kind of video.")
+        if project["kind"] != "montage" and not self.pitches(project):
+            raise ActionError("There are no ideas to go back to for this video.")
         self.db.set_stage(project["id"], "choose")
 
     def rate(self, user: dict, project: dict, match: int, liked: int, tags: list[str], text: str, fix: str) -> None:
@@ -390,6 +412,12 @@ class Studio:
                                                    max(1, min(5, match)), max(1, min(10, liked)), json.dumps(tags),
                                                    " ".join(text.split())[:1000], time.time()))
         self.db.enqueue("learn", project["id"], user["id"], {}, PRIORITY["learn"])
+        look, _ = self._look(project)
+        if look is not None:  # how the look turned out as a whole video
+            prof = self.profile(user)
+            prof.note_look("rated", look.model_dump(), f"{max(1, min(10, liked))}/10"
+                           + (f", ticked {', '.join(tags)}" if tags else "") + (f": {text[:120]}" if text.strip() else ""))
+            prof.save()
         maybe_start_improve(self)  # after every 5th rating the improvement routine looks at what people said
         fix = " ".join(fix.split())[:1000]
         if fix:
@@ -518,15 +546,114 @@ class Studio:
         return self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
                            (project["id"], kind, None, script.model_dump_json(), time.time()))
 
-    def _script_for(self, pipe, project: dict, user: dict, speech: dict, previous=None, feedback: str = ""):
+    def _script_for(self, pipe, project: dict, user: dict, speech: dict, previous=None, feedback: str = "",
+                    look: Direction | None = None):
         from ..explainer.make import fit
 
         raw = pipe.brain.script_voice(speech["utterances"], speech["duration"], project["kind"], project["intent"],
                                       rules_for(self.profile(user).rules, project["kind"]), previous, feedback,
-                                      style=project["style"])
-        script = fit(raw.model_copy(update={"style": project["style"]}), speech)
+                                      style=project["style"], look=look)
+        update = {"style": project["style"]}
+        if look is not None:
+            update.update(look=f"{look.title}: {look.art_style}", palette=look.palette)
+        script = fit(raw.model_copy(update=update), speech)
+        if previous is not None:  # places painted before keep their plates
+            script = script.model_copy(update={"stage_file": previous.stage_file})
         if project["style"] == "designed":
             script = self._animations(pipe, project, script)
+        return script
+
+    # ------------------------------------------------------------------ looks (voice and designed talking videos)
+    def _image_maker(self, project: dict, user: dict, job: dict):
+        from ..explainer.backdrops import ImageMaker
+        from .brain import Usage
+
+        spend = self._spender(project, user["id"], job["id"])
+        return ImageMaker(model=self.s.models.images,
+                          spend=lambda task, model, usd, secs: spend(Usage(task, model, "gemini", usd=usd, seconds=secs)))
+
+    def _make_looks(self, job, project, user, pipe, speech: dict, n: int, rnd: int, rejected=None, reason: str = "",
+                    own: str = "", base: Direction | None = None) -> None:
+        """Pitch `n` looks, paint a preview of each, and save them as this round's ideas."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from ..explainer.backdrops import make_preview
+
+        shape = self.shapes(project)[0] if project["kind"] == "voice" else (
+            "9:16" if (speech.get("height") or 0) > (speech.get("width") or 0) else "16:9")
+        self.db.job_progress(job["id"], 0.3, "Imagining how it could look")
+        profile = self.profile(user)
+        looks = pipe.brain.directions(speech["utterances"], float(speech["duration"]), project["kind"], project["intent"],
+                                      rules_for(profile.rules, project["kind"]), shape, n=n,
+                                      rejected=rejected, reason=reason, own_idea=own, base=base, change=reason,
+                                      taste=profile.taste_text())
+        self.db.job_progress(job["id"], 0.6, "Painting a preview of each look")
+        work = workdir(self.s, project["user_id"], project["id"]).ensure()
+        maker = self._image_maker(project, user, job)
+        names = [f"look-r{rnd}-{k + 1}-{secrets.token_hex(3)}.jpg" for k in range(len(looks))]
+        if maker.available:
+            notes: list[str] = []
+            with ThreadPoolExecutor(3) as ex:
+                made = list(ex.map(lambda a: make_preview(a[0].model_dump(), maker, shape, work.stills / a[1], notes.append),
+                                   zip(looks, names)))
+            if notes:
+                self.db.event(project["id"], "looks: " + "; ".join(sorted(set(notes)))[:600], "warn")
+                if not any(made):
+                    alert(self.db, self.s, "images", f"Look previews failed: {notes[0][:200]}", "warning")
+        else:
+            made = [None] * len(looks)
+            self.db.event(project["id"], "looks: no image key, so no previews or painted backdrops", "warn")
+        self._save_pitches(project, [{"pitch": d.model_dump(), "stills": [nm] if m else []}
+                                     for d, nm, m in zip(looks, names, made)], rnd)
+        self.db.set_stage(project["id"], "choose")
+
+    def _job_looks(self, job, project, user) -> None:
+        from ..explainer import make
+
+        work = workdir(self.s, project["user_id"], project["id"])
+        speech = make.load_speech(work.root)
+        if speech is None:
+            raise ActionError("Start again: the recording is missing.")
+        pipe = self._pipeline(job, project, user)
+        old = [Direction.model_validate(p["pitch"]) for p in self.pitches(project)]
+        base_id = int(job["params"].get("base") or 0)
+        base = next((Direction.model_validate(p["pitch"]) for p in self.pitches(project) if p["id"] == base_id), None)
+        self._make_looks(job, project, user, pipe, speech, 1, project["pitch_round"] + 1, rejected=None if base else old,
+                         reason=job["params"].get("reason", ""), own=job["params"].get("own", ""), base=base)
+
+    def _look(self, project: dict) -> tuple[Direction | None, "Path | None"]:
+        """The look picked for this video and its preview, or (None, None)."""
+        if not project.get("chosen") or not uses_looks(project):
+            return None, None
+        row = self.db.one("SELECT * FROM pitches WHERE id=? AND project_id=?", (project["chosen"], project["id"]))
+        if row is None:
+            return None, None
+        try:
+            look = Direction.model_validate(json.loads(row["data"]))
+        except ValueError:
+            return None, None
+        stills = json.loads(row["stills"] or "[]")
+        ref = workdir(self.s, project["user_id"], project["id"]).stills / stills[0] if stills else None
+        return look, ref if ref is not None and ref.exists() else None
+
+    def _paint(self, job, project, user, script, look: Direction | None, ref, shapes: list[str],
+               window: tuple[float, float] | None = None):
+        """Every place of the script painted for each shape (only those inside `window` for a sample)."""
+        from ..explainer.backdrops import make_plates
+
+        if look is None:
+            return script
+        maker = self._image_maker(project, user, job)
+        if not maker.available:
+            return script
+        work = workdir(self.s, project["user_id"], project["id"])
+        notes: list[str] = []
+        for k, shape in enumerate(shapes):
+            self.db.job_progress(job["id"], 0.3 + 0.1 * k / max(1, len(shapes)), "Painting the backdrops")
+            script = make_plates(script, look.model_dump(), maker, shape, work.root / "backdrops", ref, window,
+                                 notes.append, project["kind"])
+        if notes:
+            self.db.event(project["id"], "backdrops: " + "; ".join(notes)[:900], "warn")
         return script
 
     def _animations(self, pipe, project: dict, script):
@@ -565,12 +692,18 @@ class Studio:
             if not bed.exists():
                 make_beat(bed, speech["duration"] + 4, "calm")
         version = project["version"] + (0 if sample else 1)
+        look, ref = self._look(project)
+        if look is not None:
+            window = (sample_start, sample_start + make.SAMPLE_SECONDS) if sample else None
+            script = self._paint(job, project, user, script, look, ref, shapes[:1] if sample else shapes, window)
+            self.db.run("UPDATE plans SET data=? WHERE id=?", (script.model_dump_json(), plan_id))
         for shape in (shapes[:1] if sample else shapes):
             name = f"sample-{plan_id}" if sample else f"v{version}-{shape.replace(':', 'x')}"
             out = work.out / f"{name}.mp4"
             info = make.render(script, speech, shape, out, music=bed, sample=sample, sample_start=sample_start,
                                progress=lambda f: self.db.job_progress(job["id"], lo + (0.98 - lo) * f, "Drawing your video"),
-                               workers=1 if sample else self.s.render_processes)
+                               workers=1 if sample else self.s.render_processes,
+                               plates_dir=work.root / "backdrops" if look is not None else None)
             rows = requirements.explainer(
                 project, scenes=len(script.scenes), callouts=len(script.callouts),
                 cutaways=len(script.scenes) if project["kind"] == "talk" else 0, captions=script.captions,
@@ -601,6 +734,9 @@ class Studio:
             self.db.run("UPDATE projects SET info=? WHERE id=?",
                         (json.dumps({"notes": [], "song_seconds": speech["duration"], "words": speech["words"],
                                      "seconds": speech["duration"]}), project["id"]))
+            if uses_looks(project):  # first the looks, with a preview each; the script comes once one is picked
+                self._make_looks(job, project, user, pipe, speech, 3, 1)
+                return
             self.db.job_progress(job["id"], 0.25, "Working out what each part is about")
             script = self._script_for(pipe, project, user, speech)
             plan_id = self._save_script(project, script, "script")
@@ -608,6 +744,16 @@ class Studio:
                                    sample_start=make.busiest(script, float(speech["duration"])))
             return
         speech = make.load_speech(work.root)
+        if step == "sample" and job["params"].get("look"):  # a look was just picked: write the script in it
+            if speech is None:
+                raise ActionError("Start again: the recording is missing.")
+            look, _ = self._look(project)
+            self.db.job_progress(job["id"], 0.05, "Writing the scenes in your look")
+            script = self._script_for(pipe, project, user, speech, look=look)
+            plan_id = self._save_script(project, script, "script")
+            self._explainer_render(job, project, user, script, plan_id, sample=True,
+                                   sample_start=make.busiest(script, float(speech["duration"])))
+            return
         row = self.latest_plan(project)
         if speech is None or row is None:
             raise ActionError("There is nothing to render yet.")
@@ -622,12 +768,13 @@ class Studio:
 
             self.db.job_progress(job["id"], 0.2, "Working your changes in")
             old = script
-            script = self._script_for(pipe, project, user, speech, old, feedback)
+            look, _ = self._look(project)
+            script = self._script_for(pipe, project, user, speech, old, feedback, look=look)
             first, lines = changes_between(old, script)
             if not lines:  # the AI handed back the same thing: say so and ask once more, firmly
                 script = self._script_for(pipe, project, user, speech, old, feedback +
                                           "\nYour last answer changed NOTHING visible. Change what they asked, in the scenes "
-                                          "it applies to, and use a different layout or picture there.")
+                                          "it applies to, and use a different layout or picture there.", look=look)
                 first, lines = changes_between(old, script)
             plan_id = self._save_script(project, script, "revise")
             if first is not None:
@@ -653,6 +800,8 @@ class Studio:
         self.db.set_stage(project["id"], "choose")
 
     def _job_pitch(self, job, project, user):
+        if project["kind"] != "montage":
+            return self._job_looks(job, project, user)
         pipe = self._pipeline(job, project, user)
         ctx = self._context(pipe, project, user)
         old = [StoryPitch.model_validate(p["pitch"]) for p in self.pitches(project)]
@@ -752,8 +901,13 @@ class Studio:
     def _job_learn(self, job, project, user):
         events = []
         for p in self.pitches(project):
-            if p["id"] == project["chosen"]:
+            if p["id"] == project["chosen"] and project["kind"] == "montage":
                 events.append(f"Picked the story '{p['pitch']['title']}': {p['pitch']['logline']}")
+            elif p["id"] == project["chosen"]:
+                d = p["pitch"]
+                shown = [x["pitch"]["title"] for x in self.pitches(project) if x["id"] != p["id"]]
+                events.append(f"Picked the look '{d.get('title')}' ({d.get('art_style')}; {d.get('world', '')[:140]})"
+                              + (f" over: {', '.join(shown[:5])}" if shown else ""))
         for f in self.db.all("SELECT * FROM feedback WHERE project_id=? ORDER BY id", (project["id"],)):
             if f["stage"] == "sample":
                 events.append(("Approved the sample" if f["liked"] else "Rejected the sample") +
@@ -815,6 +969,11 @@ class Studio:
 
 def stage_label(stage: str) -> str:
     return STAGES.get(stage, stage)
+
+
+def uses_looks(project: dict) -> bool:
+    """Voice videos and designed talking videos are pitched as looks, painted by an image model."""
+    return project["kind"] == "voice" or (project["kind"] == "talk" and project.get("style") == "designed")
 
 
 def usage_dict(u: Usage) -> dict:

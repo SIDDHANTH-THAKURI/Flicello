@@ -20,6 +20,7 @@ from .brain.schemas import ProfileUpdate
 
 SEED = REPO_ROOT / "config" / "studio" / "owner_rules.yaml"
 MAX_RULES = 24
+MAX_TASTE = 40  # look choices remembered (picked, passed over, changes asked, how the video was rated)
 SCOPES = ("all", "films", "talks")  # a rule learned on a travel film ("no on-screen text") must not shape an explainer
 SCOPE_LABEL = {"films": "films from footage", "talks": "voice and talking videos"}
 
@@ -67,6 +68,7 @@ class Profile:
     rules: list[dict] = field(default_factory=list)
     answers: dict = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
+    taste: list[dict] = field(default_factory=list)  # their looks: what they picked, passed over, changed, rated
 
     @classmethod
     def load(cls, path: Path) -> "Profile":
@@ -77,14 +79,14 @@ class Profile:
             for r in rules:  # made before rules had a scope: the owner's seeded film rules are about films
                 if "for" not in r and r.get("source") == "owner" and r.get("text") in seeds:
                     r["for"] = seeds[r["text"]]
-            return cls(path, rules, data.get("answers", {}), data.get("history", []))
+            return cls(path, rules, data.get("answers", {}), data.get("history", []), data.get("taste", []))
         return cls(path)
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"rules": self.rules, "answers": self.answers, "history": self.history[-100:]},
-                                  indent=1), encoding="utf-8")
+        tmp.write_text(json.dumps({"rules": self.rules, "answers": self.answers, "history": self.history[-100:],
+                                   "taste": self.taste[-MAX_TASTE:]}, indent=1), encoding="utf-8")
         tmp.replace(self.path)
 
     @property
@@ -103,6 +105,26 @@ class Profile:
             if learned:
                 self.rules.remove(learned[0])
         return rid
+
+    def note_look(self, what: str, look: dict, note: str = "") -> None:
+        """Remember a look choice: 'picked', 'passed' (shown, not picked), 'changed' (with what they asked), 'own'
+        (their own idea) or 'rated' (with how the video made in it was rated)."""
+        self.taste.append({"at": date.today().isoformat(), "what": what, "note": " ".join(str(note).split())[:200],
+                           "look": {k: str(look.get(k, ""))[:200] for k in ("title", "art_style", "world", "palette")}
+                                   | {"colours": list(look.get("colours") or [])[:5]}})
+        self.taste = self.taste[-MAX_TASTE:]
+
+    def taste_text(self) -> str:
+        """Their looks so far, for the art director: newest first."""
+        lines = []
+        for t in reversed(self.taste[-MAX_TASTE:]):
+            lk = t["look"]
+            desc = f"'{lk.get('title')}' ({lk.get('art_style', '')[:90]}; {lk.get('world', '')[:90]})"
+            lines.append({"picked": f"- picked {desc}", "passed": f"- passed over {desc}",
+                          "changed": f"- asked to change {desc}: \"{t['note']}\"",
+                          "own": f"- described their own look: \"{t['note']}\"",
+                          "rated": f"- the video made in {desc} was rated {t['note']}"}.get(t["what"], f"- {desc}"))
+        return "\n".join(lines[:24])
 
     def drop(self, rid: str) -> bool:
         before = len(self.rules)

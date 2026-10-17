@@ -196,9 +196,16 @@ function busyForms() {
   }));
 }
 
+function swatches() {  // a look's colours (set from script: the page allows no inline styles)
+  $$('.sw[data-c]').forEach((el) => {
+    if (/^#[0-9a-f]{6}$/i.test(el.dataset.c)) el.style.background = el.dataset.c;
+  });
+}
+
 export function studio() {
   const pid = document.body.dataset.project;
   if (pid) { uploads(pid); progress(pid); }
+  swatches();
   rating();
   newFilm();
   inviteLink();

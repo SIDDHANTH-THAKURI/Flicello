@@ -124,3 +124,10 @@ merely clean and synced is a 4, not a 7. Be harsh; predict the user's number.
 - **2026-10-16 Undertone talk, Lottie sample** — "better but not best"; face cut on the left. Lessons: designer
   animations (Lottie) landing on the words read as real motion graphics (the emoji/glitch version was "worst"); a cut-out
   must come from a real portrait-matting model, never a fixed head area; one hero visual at a time, top zone, on the word.
+
+## 2026-10-17 · Looks + painted backdrops (voice explainers)
+- The user: "same standard background" made every video read as one slide; "everything is based on how well your prompts are", and most people can't write one. So voice and designed talk videos now start with LOOKS: the art director (Opus) writes 3 very different worlds from the recording, each with a painted preview (gemini-nano-banana-2.1, $0.034 at 1K, about 25 s). People pick, "Repaint it" with a note, or describe their own. The pick paints a plate per place (2K, $0.05; JEPA 63 s = 7 places), with the preview as the style reference, and the camera moves through it.
+- The looks are personal: every pick, pass, change and rating goes into profile.taste; look 1 is built from that taste in a new world, look 2 is a step away, look 3 is a surprise.
+- First paper render: a 45% wash to white for dark ink killed the painting (it looked faded). Lift the paper palette only about 14-26%, most in the middle. Split-scene headlines in small accent red were unreadable over a painting: draw them in ink, bigger. Respell "Jeff's" -> "JEPA's" doubled the 's.
+- The look's `camera` line must only promise moves the renderer does (push, pull, drift, rise, still, dissolve); the first looks promised whip-pans.
+- Still weak: LottieFiles stickers (flat vector) clash with the painted world. Next: paint the props in the look too (image model + cut-out), so the objects match the world.

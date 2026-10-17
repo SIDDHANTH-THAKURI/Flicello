@@ -45,6 +45,20 @@
   </form>
 </section>
 
+{% if profile.taste %}
+<section class="panel rise d3">
+  <h2>Your looks</h2>
+  <p class="lead-s">The looks you picked, passed over and changed for your voice and talking videos. Your next video's first look is made from them; the others still try something new.</p>
+  <div class="rows">
+    {% for t in profile.taste|reverse %}{% if loop.index <= 12 %}<div><span class="k">{{ {'picked': 'Picked', 'passed': 'Passed over', 'changed': 'Changed', 'own': 'Your own idea', 'rated': 'Rated'}.get(t.what, t.what) }} · {{ t.look.title or t.note }}</span><span class="v">{% if t.what in ('changed', 'rated') %}{{ t.note }}{% else %}{{ t.at }}{% endif %}</span></div>{% endif %}{% endfor %}
+  </div>
+  <form method="post" action="/style/forget-looks" class="gap-top">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn" type="submit">Forget my looks</button>
+  </form>
+</section>
+{% endif %}
+
 {% if profile.history %}
 <section class="panel rise d3">
   <h2>What it learned</h2>

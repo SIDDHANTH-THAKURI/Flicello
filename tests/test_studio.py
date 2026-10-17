@@ -948,7 +948,23 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     assert client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=False).status_code == 303
     _drain(studio)
     page = client.get(f"/p/{pid}").text
-    assert "Looks right" in page and "Back to the story ideas" not in page, studio.db.all("SELECT * FROM events")
+    assert "Pick a look" in page and "Make it in this look" in page, studio.db.all("SELECT * FROM events")
+    looks = studio.pitches(studio.db.project(pid))
+    assert len(looks) == 3 and len({x["pitch"]["title"] for x in looks}) == 3
+    client.post(f"/p/{pid}/another", data={"csrf": csrf, "base": looks[1]["id"], "reason": "warmer colours"})
+    _drain(studio)
+    assert len(studio.pitches(studio.db.project(pid))) == 4
+    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": looks[0]["id"]})
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "Looks right" in page and "Back to the looks" in page, studio.db.all("SELECT * FROM events")
+    plan = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
+    assert all(sc["backdrop"] for sc in plan["scenes"]) and plan["look"].startswith(looks[0]["pitch"]["title"])
+    taste = studio.profile(friend).taste  # their looks are remembered: the next video's looks start from them
+    assert [t["what"] for t in taste].count("picked") == 1 and [t["what"] for t in taste].count("passed") == 3
+    assert any(t["what"] == "changed" and t["note"] == "warmer colours" for t in taste)
+    assert "picked '" + looks[0]["pitch"]["title"] in studio.profile(friend).taste_text()
+    assert "Your looks" in client.get("/style").text
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "no", "note": "make it brighter, sunrise colours"})
     _drain(studio)
     page = client.get(f"/p/{pid}").text
@@ -984,6 +1000,9 @@ def test_a_talking_video_gets_callouts_and_keeps_its_own_sound(studio, media, mo
     assert studio.db.project(pid)["shapes"] == "9:16"
     _upload(client, csrf, pid, media / "clips" / "a_stable.mp4", "clip")
     client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    _drain(studio)
+    assert "Pick a look" in client.get(f"/p/{pid}").text, studio.db.all("SELECT * FROM events")
+    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": studio.pitches(studio.db.project(pid))[0]["id"]})
     _drain(studio)
     assert "Looks right" in client.get(f"/p/{pid}").text, studio.db.all("SELECT * FROM events")
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})

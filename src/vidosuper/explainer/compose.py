@@ -33,11 +33,69 @@ def _words(utterances: list[dict]) -> list[dict]:
     return [w for u in utterances for w in u.get("words", [])]
 
 
-def _scene_frame(script: VoiceScript, scene, t: float, size: tuple[int, int], level: float) -> Image.Image:
+FADE = 0.4  # seconds a new backdrop takes to dissolve in over the last one
+
+
+def frost(plate: Image.Image, layer: Image.Image, ink: tuple[int, int, int]) -> Image.Image:
+    """The plate with a frosted backing behind everything drawn on `layer`: there the painting is blurred and pushed
+    to the opposite of the ink (light behind dark text, dark behind light text), fading out softly around it, so text
+    and graphics read on any part of any painting while the painting still shows around them. Only the area around
+    what is drawn is touched (whole-frame float maths made a video 4x slower to draw)."""
+    import cv2
+
+    w, h = plate.size
+    bbox = layer.getbbox()
+    if bbox is None:
+        return plate
+    pad = max(8, min(w, h) // 12)
+    x0, y0 = max(0, bbox[0] - pad) // 4 * 4, max(0, bbox[1] - pad) // 4 * 4
+    x1, y1 = min(w, bbox[2] + pad), min(h, bbox[3] + pad)
+    cw, ch = x1 - x0, y1 - y0
+    sw, sh = max(1, cw // 4), max(1, ch // 4)
+    a = cv2.resize(np.asarray(layer.getchannel("A").crop((x0, y0, x1, y1)), np.float32) / 255.0, (sw, sh),
+                   interpolation=cv2.INTER_AREA)
+    r = max(2, min(w, h) // 160)
+    a = cv2.dilate(a, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+    m = np.clip(cv2.GaussianBlur(a, (0, 0), r * 1.6) * 1.5, 0, 0.92)
+    base = np.asarray(plate.crop((x0, y0, x1, y1)).convert("RGB"))
+    soft = cv2.GaussianBlur(cv2.resize(base, (sw, sh), interpolation=cv2.INTER_AREA).astype(np.float32), (0, 0), r * 1.2)
+    target = np.array((246, 242, 234) if sum(ink) / 3 < 128 else (14, 14, 22), np.float32)
+    soft = soft * 0.32 + target * 0.68
+    mf = np.ascontiguousarray(cv2.resize(m, (cw, ch), interpolation=cv2.INTER_LINEAR))
+    soft = np.ascontiguousarray(cv2.resize(soft, (cw, ch), interpolation=cv2.INTER_LINEAR))
+    out = cv2.convertScaleAbs(cv2.blendLinear(base.astype(np.float32), soft, 1.0 - mf, mf))
+    plate = plate.copy()
+    plate.paste(Image.fromarray(out).convert("RGBA"), (x0, y0))
+    return plate
+
+
+def _plate(script: VoiceScript, k: int, t: float, plates, shots) -> Image.Image | None:
+    s = script.scenes[k]
+    if plates is None or not plates.has(s.backdrop_file):
+        return None
+    a, b, cam = shots[k]
+    return plates.frame(s.backdrop_file, cam, (t - a) / max(0.1, b - a), t, light=(s.palette or script.palette) == "paper")
+
+
+def _scene_frame(script: VoiceScript, scene, t: float, size: tuple[int, int], level: float, plates=None,
+                 shots=None) -> Image.Image:
     pal_name = scene.palette or script.palette
-    frame = background(size, pal_name, t, level)
-    draw_scene(frame, scene, t, PALETTE[pal_name], level)
-    return frame
+    k = script.scenes.index(scene) if plates is not None and scene in script.scenes else -1
+    plate = _plate(script, k, t, plates, shots) if k >= 0 else None
+    if plate is None:
+        frame = background(size, pal_name, t, level)
+        draw_scene(frame, scene, t, PALETTE[pal_name], level)
+        return frame
+    a = shots[k][0]
+    if k > 0 and t - a < FADE and shots[k - 1][0] != a:  # a new place: dissolve from the last one
+        prev = script.scenes[k - 1]
+        before = _plate(script, k - 1, t, plates, shots) or background(size, prev.palette or script.palette, t, level)
+        plate = Image.blend(before, plate, float(smooth((t - a) / FADE)))
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw_scene(layer, scene, t, PALETTE[pal_name], level)
+    plate = frost(plate, layer, PALETTE[pal_name]["ink"])
+    plate.alpha_composite(layer)
+    return plate
 
 
 def _encode_cmd(size: tuple[int, int], out: Path, audio_args: list[str], filter_complex: str | None, quality: str) -> list[str]:
@@ -71,9 +129,11 @@ def _run(cmd: list[str], frames, total: int, progress: Progress | None) -> None:
 
 def render_voice(script: VoiceScript, audio: Path, utterances: list[dict], out: Path, size: tuple[int, int],
                  music: Path | None = None, quality: str = "final", start: float = 0.0, end: float | None = None,
-                 progress: Progress | None = None, lib=None) -> Path:
-    """An animated video for a recording alone. `start`/`end` cut a sample (seconds of the recording)."""
+                 progress: Progress | None = None, lib=None, plates_dir: Path | None = None) -> Path:
+    """An animated video for a recording alone. `start`/`end` cut a sample (seconds of the recording). With
+    `plates_dir`, scenes that have a backdrop are drawn over it (see backdrops.py)."""
     from . import draw as _draw
+    from .backdrops import Plates, shots as shots_of
 
     _draw.LOTTIE = (lambda aid, t, width: (lot.frame(t + float(lib.item(aid).get("lead", 0.0)), width)
                                            if (lot := lib.lot(aid)) is not None else None)) if lib is not None else None
@@ -85,6 +145,8 @@ def render_voice(script: VoiceScript, audio: Path, utterances: list[dict], out: 
     pages = caption_pages(respell_words(_words(utterances), script.respell), 3 if size[1] > size[0] else 5) if script.captions else []
     n = int((end - start) * FPS)
     pal = PALETTE[script.palette]
+    plates = Plates(plates_dir, size, "9:16" if size[1] > size[0] else "16:9") if plates_dir else None
+    shots = shots_of(script)
 
     def frames():
         for i in range(n):
@@ -94,10 +156,17 @@ def render_voice(script: VoiceScript, audio: Path, utterances: list[dict], out: 
             if scene is None:
                 frame = background(size, script.palette, t, lv)
             else:
-                frame = _scene_frame(script, scene, t, size, lv)
+                frame = _scene_frame(script, scene, t, size, lv, plates, shots)
             if pages:
-                draw_captions(frame, pages, t, PALETTE[(scene.palette if scene and scene.palette else script.palette)],
-                              0.8 if size[1] > size[0] else 0.915)
+                cap_pal = PALETTE[(scene.palette if scene and scene.palette else script.palette)]
+                y = 0.8 if size[1] > size[0] else 0.915
+                if plates is not None and scene is not None and plates.has(scene.backdrop_file):
+                    cap = Image.new("RGBA", size, (0, 0, 0, 0))
+                    draw_captions(cap, pages, t, cap_pal, y)
+                    frame = frost(frame, cap, (255, 255, 255))  # captions are white with an outline: a dark backing
+                    frame.alpha_composite(cap)
+                else:
+                    draw_captions(frame, pages, t, cap_pal, y)
             yield frame.convert("RGB").tobytes()
 
     audio_args = ["-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", str(audio)]

@@ -318,7 +318,7 @@ def _split(frame: Image.Image, s: Scene, t: float, pal: dict, level: float) -> N
         alone, aside = (w / 2, h * 0.56, w * 0.6, h * 0.64), (w * 0.19, h * 0.57, w * 0.3, h * 0.58)
         region = (int(w * 0.35), int(h * 0.2), w, h)
         head_y = h * 0.1
-    title_text(frame, s.headline, w / 2, head_y, int(w * 0.84), int(h * 0.1), int(u * 0.068), pal["accent"], t, a + 0.05, 0.03)
+    title_text(frame, s.headline, w / 2, head_y, int(w * 0.84), int(h * 0.11), int(u * 0.082), pal["ink"], t, a + 0.05, 0.03)
     art_box(frame, s, *_lerp(alone, aside, k), t, a + 0.05, pal, level)
     if t < first - 0.05:
         return
