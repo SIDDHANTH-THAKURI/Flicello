@@ -72,13 +72,15 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
         token = request.cookies.get(INVITE)
         if token and open_invite(db, token):
             return True
+        if s.beta:  # anyone may make an account; it waits for the owner's approval
+            return True
         if s.allowed_emails:  # an allow-list: only those on it may join on their own
             return auth.on_list(s, email)
         return s.public_signup
 
     def signin_page(request: Request, mode: str = "signin", **ctx) -> HTMLResponse:
         return h.page(request, "signin.html", None, None, mode=mode, google=auth.google_ready(),
-                      email_ok=mail.available(s), public=s.public_signup,
+                      email_ok=mail.available(s), public=s.public_signup or s.beta, beta=s.beta,
                       next=safe_next(request.query_params.get("next")), **ctx)
 
     # ------------------------------------------------------------------ pages
@@ -228,7 +230,7 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
     # ------------------------------------------------------------------ the account page
     @app.get("/account", response_class=HTMLResponse)
     def account(request: Request):
-        user, sess = h.need_user(request)
+        user, sess = h.need_user(request, gate=False)
         keys = db.all("SELECT id, name, created, last_used FROM passkeys WHERE user_id=? ORDER BY created", (user["id"],))
         sessions = db.all("SELECT token, created, seen, ip FROM sessions WHERE user_id=? AND expires > strftime('%s','now') "
                           "ORDER BY seen DESC", (user["id"],))
@@ -237,7 +239,7 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
 
     @app.post("/account/profile")
     def account_profile(request: Request, csrf: str = Form(""), display: str = Form("")):
-        user, sess = h.need_user(request)
+        user, sess = h.need_user(request, gate=False)
         h.check_csrf(sess, csrf)
         display = " ".join(display.split())[:40]
         if len(display) < 2:
@@ -248,7 +250,7 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
     @app.post("/account/email", response_class=HTMLResponse)
     def account_email(request: Request, csrf: str = Form(""), email: str = Form("")):
         """Someone who joined with a name and password adds an email, proven with a code, so codes and Google work."""
-        user, sess = h.need_user(request)
+        user, sess = h.need_user(request, gate=False)
         h.check_csrf(sess, csrf)
         try:
             address = auth.normal_email(email)
@@ -263,7 +265,7 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
 
     @app.post("/account/email/verify", response_class=HTMLResponse)
     def account_email_verify(request: Request, csrf: str = Form(""), email: str = Form(""), code: str = Form("")):
-        user, sess = h.need_user(request)
+        user, sess = h.need_user(request, gate=False)
         h.check_csrf(sess, csrf)
         try:
             address = auth.check_code(db, s, email, code)
@@ -279,14 +281,14 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
 
     @app.post("/account/marketing")
     def account_marketing(request: Request, csrf: str = Form(""), on: str = Form("")):
-        user, sess = h.need_user(request)
+        user, sess = h.need_user(request, gate=False)
         h.check_csrf(sess, csrf)
         auth.set_marketing(db, s, user["id"], on == "yes", h.client_ip(request))
         return h.back("/account", "Saved: " + ("you'll get the occasional update." if on == "yes" else "no product emails."))
 
     @app.post("/account/passkeys/options")
     def account_passkey_options(request: Request):
-        user, sess = h.need_user(request, api=True)
+        user, sess = h.need_user(request, api=True, gate=False)
         h.check_csrf(sess, request.headers.get("x-csrf"))
         options, token = auth.passkey_register_options(db, site(request), user)
         resp = Response(options, media_type="application/json")
@@ -295,7 +297,7 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
 
     @app.post("/account/passkeys/add")
     async def account_passkey_add(request: Request):
-        user, sess = h.need_user(request, api=True)
+        user, sess = h.need_user(request, api=True, gate=False)
         h.check_csrf(sess, request.headers.get("x-csrf"))
         body = await request.json()
         try:
@@ -310,21 +312,21 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
 
     @app.post("/account/passkeys/{kid}/delete")
     def account_passkey_delete(request: Request, kid: str, csrf: str = Form("")):
-        user, sess = h.need_user(request)
+        user, sess = h.need_user(request, gate=False)
         h.check_csrf(sess, csrf)
         db.run("DELETE FROM passkeys WHERE id=? AND user_id=?", (kid[:600], user["id"]))
         return h.back("/account", "Passkey removed.")
 
     @app.post("/account/sessions/others")
     def account_sign_out_others(request: Request, csrf: str = Form("")):
-        user, sess = h.need_user(request)
+        user, sess = h.need_user(request, gate=False)
         h.check_csrf(sess, csrf)
         db.run("DELETE FROM sessions WHERE user_id=? AND token != ?", (user["id"], sess["token"]))
         return h.back("/account", "Signed out everywhere else.")
 
     @app.get("/account/export")
     def account_export(request: Request):
-        user, _ = h.need_user(request)
+        user, _ = h.need_user(request, gate=False)
         data = json.dumps(studio.export(user), indent=2, default=str)
         auth.audit(db, user["id"], "export", "", auth.ip_tag(s, h.client_ip(request)))
         return Response(data, media_type="application/json",
@@ -333,7 +335,7 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
 
     @app.post("/account/delete")
     def account_delete(request: Request, csrf: str = Form(""), sure: str = Form("")):
-        user, sess = h.need_user(request)
+        user, sess = h.need_user(request, gate=False)
         h.check_csrf(sess, csrf)
         if sure.strip().upper() != "DELETE":
             return h.back("/account", "Type DELETE to confirm.")

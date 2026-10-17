@@ -337,3 +337,71 @@ def test_with_an_allow_list_only_those_emails_may_join_or_sign_in(studio):
         auth.sign_in(studio.db, studio.s, ava, "email", "1.2.3.4")
     owner = {**ava, "role": "owner"}  # the owner and invited people always may
     assert auth.may_use(studio.s, owner) and auth.may_use(studio.s, {**ava, "joined_by": "invite"})
+
+
+def _owner_client(studio, email="boss@example.com"):
+    studio.db.run("INSERT INTO users(id, name, role, pw, created, email, display, onboarded) VALUES (?,?,?,?,?,?,?,1)",
+                  ("u" + "0" * 12, "boss", "owner", "", time.time(), email, "Boss"))
+    client = TestClient(create_app(studio))
+    client.cookies.set("vs_session", accounts.new_session(studio.db, studio.s, "u" + "0" * 12, "1.2.3.4"))
+    return client
+
+
+def _csrf(client, path="/admin"):
+    return re.search(r'name="csrf" value="([^"]+)"', client.get(path).text).group(1)
+
+
+def test_in_the_beta_a_stranger_asks_for_access_and_can_only_make_videos_once_the_owner_approves(studio):
+    studio.s.public_signup = False
+    studio.s.beta = True
+    studio.s.allowed_emails = ["ava@example.com"]
+    boss = _owner_client(studio)
+    # someone on the list is in at once
+    signup(TestClient(create_app(studio)), studio)
+    assert studio.db.one("SELECT access FROM users WHERE email='ava@example.com'")["access"] == "beta"
+    # a stranger may make an account, but it waits
+    eve = TestClient(create_app(studio))
+    r = signup(eve, studio, "eve@example.com", "Eve")
+    assert r.status_code == 303
+    row = studio.db.one("SELECT * FROM users WHERE email='eve@example.com'")
+    assert row["access"] == "requested" and row["requested"]
+    for path in ("/", "/new", "/welcome", "/style"):
+        r = eve.get(path, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/access", path
+    assert eve.get("/api/p/pnope/status").status_code == 403
+    assert eve.get("/account").status_code == 200  # their account (export, delete) works while waiting
+    page = eve.get("/access").text
+    assert "invite-only" in page
+    # asking tells the owner once, by email
+    before = len(mail.outbox(studio.s))
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    eve.post("/access", data={"csrf": csrf, "note": "Reels from my trips"})
+    sent = mail.outbox(studio.s)[before:]
+    assert [m["to"] for m in sent] == ["boss@example.com"] and "Reels from my trips" in sent[0]["text"]
+    assert "on the list" in eve.get("/access").text
+    # the owner sees the request and approves it as special: Eve is told, and may make long films
+    admin = boss.get("/admin").text
+    assert "Asking for access" in admin and "Reels from my trips" in admin
+    boss.post("/admin/user", data={"csrf": _csrf(boss), "uid": row["id"], "action": "access", "access": "special"})
+    assert studio.db.one("SELECT access FROM users WHERE id=?", (row["id"],))["access"] == "special"
+    assert mail.outbox(studio.s)[-1]["to"] == "eve@example.com" and "10 minutes" in mail.outbox(studio.s)[-1]["text"]
+    assert eve.get("/access", follow_redirects=False).headers["location"] == "/"
+    new = eve.get("/new").text
+    assert 'value="600"' in new and "10 min" in new
+    # a beta person can't ask for a long film, and sees that special access has them
+    ava = studio.db.one("SELECT * FROM users WHERE email='ava@example.com'")
+    assert studio.lengths_for(ava)[-1] == 60
+    with pytest.raises(Exception, match="length"):
+        studio.create_project(ava, "x", "9:16", 600, "")
+    assert studio.create_project({**row, "access": "special", "videos_allowed": None}, "x", "9:16", 600, "")
+
+
+def test_a_declined_person_is_told_kindly_and_still_cant_make_videos(studio):
+    studio.s.beta = True
+    boss = _owner_client(studio)
+    eve = TestClient(create_app(studio))
+    signup(eve, studio, "eve@example.com", "Eve")
+    uid = studio.db.one("SELECT id FROM users WHERE email='eve@example.com'")["id"]
+    boss.post("/admin/user", data={"csrf": _csrf(boss), "uid": uid, "action": "access", "access": "declined"})
+    assert "Not this time" in eve.get("/access").text
+    assert eve.get("/new", follow_redirects=False).headers["location"] == "/access"

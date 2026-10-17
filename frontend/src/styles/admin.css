@@ -148,3 +148,4 @@
 .kpi.hero .spark { margin-top: auto; }
 .kpi.hero { align-content: stretch; grid-template-rows: auto auto auto 1fr; }
 .kpi .spark svg { display: block; width: 100%; }
+.people .num.pick { width: auto; padding: 0 .4rem; }

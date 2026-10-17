@@ -1,0 +1,36 @@
+{% extends "shell.html" %}
+{% block title %}Your access · {{ app_name }}{% endblock %}
+{% block main_class %}page narrow{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    {% if state == 'declined' %}
+    <p class="eyebrow-s rise">Closed beta</p>
+    <h1 class="page-title rise d1">Not this time, <em class="sun-text">sorry.</em></h1>
+    <p class="page-sub rise d2">Flicello is open to a small group while it's in beta, and we couldn't fit you in yet.
+      Your account stays; if a place opens up, we'll email you. You can delete your account any time from
+      <a href="/account">your account page</a>.</p>
+    {% elif note %}
+    <p class="eyebrow-s rise">Closed beta</p>
+    <h1 class="page-title rise d1">You're on the list{% if user.display %}, {{ user.display }}{% endif %}. <em class="sun-text">Thanks!</em></h1>
+    <p class="page-sub rise d2">We'll email {{ user.email or 'you' }} as soon as you're in. Nothing else to do for now.</p>
+    {% else %}
+    <p class="eyebrow-s rise">Closed beta</p>
+    <h1 class="page-title rise d1">Flicello is invite-only <em class="sun-text">for now.</em></h1>
+    <p class="page-sub rise d2">Your account is made. Tell us what you'd like to make, and we'll let you in as soon as there's a place.</p>
+    {% endif %}
+  </div>
+</header>
+
+{% if state != 'declined' %}
+<section class="panel rise d2">
+  {% if error %}<div class="error-box" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/access">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="field"><span>{{ 'Change what you told us' if note else "What would you like to make?" }}</span>
+      <textarea name="note" rows="3" maxlength="600" required placeholder="Travel reels from my trips / explainer videos for my channel / my band's gigs">{{ note }}</textarea></label>
+    <button class="btn-sun wide" type="submit"><span>{{ 'Save' if note else 'Ask for access' }}</span></button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

@@ -28,7 +28,7 @@ from markupsafe import Markup, escape
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .. import accounts, analytics
+from .. import accounts, analytics, auth
 from ..brain.context import read_note
 from ..profiles import QUESTIONS
 from ..service import BUSY, FEEDBACK_TAGS, LENGTHS, STAGES, ActionError, Studio, uses_looks
@@ -114,6 +114,7 @@ def create_app(studio: Studio) -> FastAPI:
     templates.env.filters["mmss"] = lambda x: f"{int(x or 0) // 60}:{int(x or 0) % 60:02d}"
     templates.env.filters["shapes"] = lambda x: "9:16 + 16:9" if x == "both" else x
     templates.env.filters["eta"] = eta_text
+    templates.env.filters["span"] = lambda n: f"{int(n)} seconds" if int(n) <= 60 else f"{int(n) / 60:g} min"
     templates.env.filters["noids"] = lambda t: MOMENT_ID.sub("", str(t or "")).strip()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     analytics.ensure(studio.db)
@@ -202,7 +203,9 @@ def create_app(studio: Studio) -> FastAPI:
             request.state.renew = token  # the middleware sends the cookie again with a fresh lifetime
         return found
 
-    def need_user(request: Request, api: bool = False) -> tuple[dict, dict]:
+    def need_user(request: Request, api: bool = False, gate: bool = True) -> tuple[dict, dict]:
+        """The signed-in person; with `gate`, only one who may make videos (in the beta, someone still waiting for
+        approval is sent to the request page instead)."""
         found = current(request)
         if found is None:
             if api:
@@ -211,6 +214,10 @@ def create_app(studio: Studio) -> FastAPI:
 
             path = request.url.path if request.method == "GET" else "/"
             raise Redirect("/signin" + (f"?next={quote(path)}" if path not in ("/", "") else ""))
+        if gate and not auth.approved(found[0]):
+            if api:
+                raise HTTPException(403, "Your access is waiting for approval.")
+            raise Redirect("/access")
         return found
 
     def need_owner(request: Request) -> tuple[dict, dict]:
@@ -328,6 +335,29 @@ def create_app(studio: Studio) -> FastAPI:
         remember_device(request, resp, user["id"])
         return resp
 
+    # ------------------------------------------------------------------ the closed beta: asking for access
+    @app.get("/access", response_class=HTMLResponse)
+    def access_page(request: Request):
+        user, sess = need_user(request, gate=False)
+        if auth.approved(user):
+            return back("/")
+        return page(request, "access.html", user, sess, state=user.get("access") or "requested",
+                    note=user.get("request_note") or "")
+
+    @app.post("/access")
+    def access_post(request: Request, csrf: str = Form(""), note: str = Form("")):
+        user, sess = need_user(request, gate=False)
+        check_csrf(sess, csrf)
+        if auth.approved(user):
+            return back("/")
+        if (user.get("access") or "") == "declined":
+            return back("/access")
+        try:
+            studio.request_access(user, note)
+        except ActionError as exc:
+            return page(request, "access.html", user, sess, state="requested", note=note[:600], error=str(exc))
+        return back("/access", "Thanks! We'll email you when you're in.")
+
     @app.get("/welcome", response_class=HTMLResponse)
     def welcome(request: Request):
         user, sess = need_user(request)
@@ -349,7 +379,8 @@ def create_app(studio: Studio) -> FastAPI:
     # ------------------------------------------------------------------ home and projects
     def landing(request: Request) -> HTMLResponse:
         site = f"{request.url.scheme}://{request.url.netloc}"
-        return templates.TemplateResponse(request, "landing.html", {"site_url": site, "year": time.gmtime().tm_year})
+        return templates.TemplateResponse(request, "landing.html", {"site_url": site, "year": time.gmtime().tm_year,
+                                                                    "beta": s.beta})
 
     @app.get("/tour", response_class=HTMLResponse)
     def tour(request: Request):
@@ -372,11 +403,15 @@ def create_app(studio: Studio) -> FastAPI:
         return page(request, "home.html", user, sess, projects=projects, thumbs=thumbs, left=studio.videos_left(user),
                     allowed=user["videos_allowed"] or s.limits.videos_per_user)
 
+    def new_ctx(user: dict) -> dict:
+        lengths = studio.lengths_for(user)
+        return {"lengths": lengths, "more_lengths": max(lengths) < max(LENGTHS)}
+
     @app.get("/new", response_class=HTMLResponse)
     def new_page(request: Request):
         user, sess = need_user(request)
         return page(request, "new.html", user, sess, left=studio.videos_left(user),
-                    default_pace=studio.profile(user).answers.get("pace", "balanced"))
+                    default_pace=studio.profile(user).answers.get("pace", "balanced"), **new_ctx(user))
 
     @app.post("/new")
     def new_post(request: Request, csrf: str = Form(""), title: str = Form(""), shapes: str = Form("9:16"),
@@ -388,7 +423,7 @@ def create_app(studio: Studio) -> FastAPI:
             project = studio.create_project(user, title, shapes, length, intent, pace, kind, style)
         except ActionError as exc:
             return page(request, "new.html", user, sess, left=studio.videos_left(user), error=str(exc),
-                        default_pace=pace)
+                        default_pace=pace, **new_ctx(user))
         return back(f"/p/{project['id']}")
 
     def owned(user: dict, pid: str) -> dict:
@@ -412,6 +447,7 @@ def create_app(studio: Studio) -> FastAPI:
                                  (pid, p["version"]))
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
+                    lengths=studio.lengths_for(user),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
                     note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
@@ -673,7 +709,7 @@ def create_app(studio: Studio) -> FastAPI:
         users = db.all("SELECT u.*, (SELECT COUNT(*) FROM projects p WHERE p.user_id=u.id AND p.deleted=0) AS projects, "
                        "(SELECT COUNT(DISTINCT r.project_id) FROM renders r JOIN projects p ON p.id=r.project_id "
                        " WHERE p.user_id=u.id AND r.kind='final') AS films, "
-                       "(SELECT COUNT(*) FROM passkeys k WHERE k.user_id=u.id) AS keys, "
+                       "(SELECT COUNT(*) FROM passkeys k WHERE k.user_id=u.id) AS passkeys, "
                        "(SELECT COALESCE(SUM(usd),0) FROM spend sp WHERE sp.user_id=u.id AND sp.billed=1) AS usd "
                        "FROM users u ORDER BY created DESC")
         jobs = db.all("SELECT j.*, p.title, u.name FROM jobs j LEFT JOIN projects p ON p.id=j.project_id "
@@ -685,9 +721,12 @@ def create_app(studio: Studio) -> FastAPI:
         audit = db.all("SELECT a.at, a.action, a.detail, COALESCE(u.display, u.name) AS who FROM audit a "
                        "LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT 40")
         consents = db.one("SELECT SUM(marketing) AS yes, COUNT(*) AS n FROM users WHERE role != 'owner'") or {}
+        requests = [u for u in users if (u.get("access") or "beta") == "requested" and u["role"] != "owner"]
+        requests.sort(key=lambda u: (not u.get("request_note"), -(u.get("requested") or u["created"])))
         return page(request, "admin.html", user, sess, health=studio.health(), users=users, jobs=jobs, alerts=alerts,
                     invites=invites, spend=spend, new_link=new_link, default_videos=s.limits.videos_per_user,
-                    audit=audit, consents=consents, active="admin", public=s.public_signup)
+                    audit=audit, consents=consents, active="admin", public=s.public_signup, beta=s.beta,
+                    requests=requests, tiers=s.tiers)
 
     @app.get("/admin/api/metrics")
     def admin_metrics(request: Request, days: int = 30):
@@ -710,12 +749,20 @@ def create_app(studio: Studio) -> FastAPI:
 
     @app.post("/admin/user")
     def admin_user(request: Request, csrf: str = Form(""), uid: str = Form(""), action: str = Form(""),
-                   videos: int = Form(0)):
+                   videos: int = Form(0), access: str = Form("")):
         user, sess = need_owner(request)
         check_csrf(sess, csrf)
         target = studio.user(uid)
         if not target or target["role"] == "owner":
             return back("/admin", "Not changed.")
+        if action == "access":
+            try:
+                studio.decide_access(target, access)
+            except ActionError as exc:
+                return back("/admin", str(exc))
+            who = target.get("display") or target["name"]
+            return back("/admin", {"beta": f"{who} is in.", "special": f"{who} is in, with special access.",
+                                   "declined": f"{who} was declined.", "requested": f"{who} is waiting again."}[access])
         if action == "disable":
             studio.db.run("UPDATE users SET disabled=1 WHERE id=?", (uid,))
             studio.db.run("DELETE FROM sessions WHERE user_id=?", (uid,))

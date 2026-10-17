@@ -29,6 +29,8 @@ CODE_MINUTES = 10
 CODE_TRIES = 5
 PENDING_MINUTES = 30
 OAUTH_MINUTES = 10
+# requested: signed up, waiting for the owner; beta: approved; special: approved with long videos; declined: not now
+ACCESS = ("requested", "beta", "special", "declined")
 LEGAL_VERSION = "2026-10-17"  # bump when the Terms or the Privacy Policy change materially
 
 EMAIL = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -171,10 +173,12 @@ def finish_signup(db: DB, s: StudioSettings, token: str, display: str, adult: bo
     if not agree:
         raise AuthError("Please accept the Terms and the Privacy Policy to continue.")
     listed = bool(s.allowed_emails) and on_list(s, pending["email"])
-    if not s.public_signup and invited is None and not listed:
+    if not (s.public_signup or s.beta) and invited is None and not listed:
         raise AuthError("New accounts are by invitation for now.")
-    if s.allowed_emails and invited is None and not listed:
+    if s.allowed_emails and not s.beta and invited is None and not listed:
         raise AuthError("Flicello is open to a few invited people for now. Ask the owner for an invitation.")
+    # in the beta, a stranger's account waits for the owner; invited and allow-listed people are in at once
+    access = "requested" if s.beta and invited is None and not listed else "beta"
     if find_user(db, pending["email"], pending["google_sub"]):
         raise AuthError("You already have an account: please sign in.")
     if invited is None:
@@ -188,10 +192,11 @@ def finish_signup(db: DB, s: StudioSettings, token: str, display: str, adult: bo
     if invited and not db.run("UPDATE invites SET used_by=?, used=? WHERE token=? AND used_by IS NULL",
                               (uid, now, token_hash(invite))):
         raise AuthError("This invite was just used. Ask for a new one.")
-    db.run("INSERT INTO users(id, name, role, pw, created, email, google_sub, display, adult, terms, marketing, joined_by)"
-           " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    db.run("INSERT INTO users(id, name, role, pw, created, email, google_sub, display, adult, terms, marketing, joined_by,"
+           " access, requested) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
            (uid, _handle(db, display or (pending["email"] or "").split("@")[0]), invited["role"] if invited else "friend",
-            "", now, pending["email"], pending["google_sub"], display, now, LEGAL_VERSION, 1 if marketing else 0, joined))
+            "", now, pending["email"], pending["google_sub"], display, now, LEGAL_VERSION, 1 if marketing else 0, joined,
+            access, now if access == "requested" else None))
     tag = ip_tag(s, ip)
     for kind, granted in (("age_18", True), ("terms", True), ("privacy", True), ("marketing", marketing)):
         db.run("INSERT INTO consents(user_id, kind, version, granted, at, ip) VALUES (?,?,?,?,?,?)",
@@ -213,8 +218,16 @@ def on_list(s: StudioSettings, email: str | None) -> bool:
 
 
 def may_use(s: StudioSettings, user: dict) -> bool:
-    """The owner and people the owner invited always may; others only when their email is on the allow-list."""
+    """May this person sign in at all? In the beta everyone may (what they may do is `approved`); otherwise the owner,
+    people the owner invited, and those on the allow-list."""
+    if s.beta:
+        return True
     return user["role"] == "owner" or user.get("joined_by") == "invite" or on_list(s, user.get("email"))
+
+
+def approved(user: dict) -> bool:
+    """May this person make videos? (A signed-in person waiting for approval only sees the request page.)"""
+    return user["role"] == "owner" or (user.get("access") or "beta") in ("beta", "special")
 
 
 def sign_in(db: DB, s: StudioSettings, user: dict, how: str, ip: str) -> str:

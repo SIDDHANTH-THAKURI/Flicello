@@ -18,6 +18,9 @@
     {% endif %}
 
     {% if error %}<div class="error-box rise" role="alert">{{ error }}</div>{% endif %}
+    {% if mode == 'signup' and beta %}
+    <div class="error-box rise" role="note">Flicello is in closed beta. Make an account, tell us what you'd like to make, and we'll email you when you're in.</div>
+    {% endif %}
     {% if mode == 'signup' and not public %}
     <div class="error-box rise" role="note">New accounts are by invitation for now. If you were sent an invite link, open it to join.</div>
     {% endif %}

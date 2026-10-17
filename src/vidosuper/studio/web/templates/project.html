@@ -94,7 +94,7 @@
       </form>
       <form method="post" action="/p/{{ p.id }}/length" class="choices gap-top">
         <input type="hidden" name="csrf" value="{{ csrf }}">
-        {% for n in LENGTHS if n <= p.song_seconds %}<button class="btn" type="submit" name="seconds" value="{{ n }}">Make it {{ n }} s instead</button>{% endfor %}
+        {% for n in lengths if n <= p.song_seconds %}<button class="btn" type="submit" name="seconds" value="{{ n }}">Make it {{ n }} s instead</button>{% endfor %}
       </form>
     </section>
     {% endif %}

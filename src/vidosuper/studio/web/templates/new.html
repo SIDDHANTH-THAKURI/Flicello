@@ -56,8 +56,9 @@
   <fieldset class="group" data-kinds="montage">
     <legend>How long?</legend>
     <div class="choices">
-      {% for n in LENGTHS %}<label class="choice"><input type="radio" name="length" value="{{ n }}" {% if n == 30 %}checked{% endif %}><span>{{ n }} seconds</span></label>{% endfor %}
+      {% for n in lengths %}<label class="choice"><input type="radio" name="length" value="{{ n }}" {% if n == 30 %}checked{% endif %}><span>{{ n|span }}</span></label>{% endfor %}
     </div>
+    {% if more_lengths %}<p class="lead-s muted">Longer films, up to 10 minutes, come with special access.</p>{% endif %}
   </fieldset>
 
   <fieldset class="group" data-kinds="montage">

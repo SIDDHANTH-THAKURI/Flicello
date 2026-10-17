@@ -149,7 +149,8 @@ class DB:
         users = {r[1] for r in con.execute("PRAGMA table_info(users)")}
         for col, kind in (("email", "TEXT"), ("google_sub", "TEXT"), ("display", "TEXT"), ("last_seen", "REAL"),
                           ("marketing", "INTEGER NOT NULL DEFAULT 0"), ("adult", "REAL"), ("terms", "TEXT"),
-                          ("joined_by", "TEXT")):
+                          ("joined_by", "TEXT"), ("access", "TEXT NOT NULL DEFAULT 'beta'"), ("request_note", "TEXT"),
+                          ("requested", "REAL"), ("decided", "REAL")):
             if col not in users:
                 con.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email) WHERE email IS NOT NULL")

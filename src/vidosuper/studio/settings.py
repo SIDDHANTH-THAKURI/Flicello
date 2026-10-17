@@ -24,6 +24,17 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class Tier(_Strict):
+    """What one access level may do (see auth.ACCESS). `videos` None: the trial's videos_per_user."""
+    videos: int | None = None
+    max_seconds: int = Field(60, description="The longest film from clips a person may ask for.")
+    max_recording: int = Field(180, description="The longest recording a talking or voice video may use, in seconds.")
+
+
+def _tiers() -> dict[str, Tier]:
+    return {"beta": Tier(), "special": Tier(videos=10, max_seconds=600, max_recording=600)}
+
+
 class Limits(_Strict):
     videos_per_user: int = Field(3, description="Finished videos a friend may make (the owner is not limited).")
     revisions_per_video: int = 2
@@ -93,6 +104,11 @@ class StudioSettings(_Strict):
     invite_days: int = 7
     public_signup: bool = Field(False, description="Anyone may make an account (Google, email code); otherwise only "
                                                    "invite links work.")
+    beta: bool = Field(False, description="Closed beta: anyone may make an account, but it can only make videos once "
+                                          "the owner approves its request (admin page). Invited and allow-listed "
+                                          "people are approved at once.")
+    tiers: dict[str, Tier] = Field(default_factory=_tiers, description="What each access level may do: 'beta' (an "
+                                                                       "approved person), 'special' (long videos).")
     site_url: str | None = Field(None, description="The public address (https://flicello.com): Google sign-in's "
                                                    "return address, passkeys' domain, links in emails.")
     allowed_emails: list[str] = Field(default_factory=list, description=(
@@ -175,6 +191,7 @@ _ENV = {  # environment variable -> setting (strings are parsed by pydantic)
     "VIDO_STUDIO_HTTPS": "https",
     "VIDO_STUDIO_PROXY_NET": "proxy_net",
     "VIDO_STUDIO_PUBLIC_SIGNUP": "public_signup",
+    "VIDO_STUDIO_BETA": "beta",
     "VIDO_STUDIO_SITE_URL": "site_url",
     "VIDO_STUDIO_MAIL_OUTBOX": "mail_outbox",
     "VIDO_STUDIO_WORKERS": "workers",

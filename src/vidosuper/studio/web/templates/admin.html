@@ -23,7 +23,8 @@
       <h1 class="page-title rise d1">The <em class="sun-text">control room.</em></h1>
       <div class="flags rise d2">
         <span class="flag plain"><i class="pulse-dot" data-health-dot></i><span data-health="worker">worker…</span></span>
-        <span class="flag {{ 'on' if public else 'off' }}">Sign-up {{ 'open to everyone' if public else 'by invite only' }}</span>
+        <span class="flag {{ 'on' if public or beta else 'off' }}">{{ 'Closed beta: anyone may ask, you approve' if beta else ('Sign-up open to everyone' if public else 'Sign-up by invite only') }}</span>
+        {% if requests %}<span class="flag off">{{ requests|length }} waiting for access</span>{% endif %}
         <span class="flag {{ 'on' if health.month_usd < health.cap_usd else 'off' }}">AI budget {{ 'within cap' if health.month_usd < health.cap_usd else 'at cap' }}</span>
       </div>
     </div>
@@ -113,6 +114,35 @@
     </section>
   </div>
 
+  {% if beta %}
+  <section class="panel gap-top" id="requests">
+    <h2>Asking for access</h2>
+    {% if requests %}
+    <p class="lead-s">Beta: their usual allowance ({{ default_videos }} videos, up to {{ tiers['beta'].max_seconds }} s films). Special: {{ tiers['special'].videos or default_videos }} videos, films up to {{ (tiers['special'].max_seconds / 60)|int }} min. An approval is emailed to them.</p>
+    <div class="scroll-x">
+      <table class="people">
+        <thead><tr><th>Person</th><th>What they'd make</th><th>Asked</th><th></th></tr></thead>
+        <tbody>
+        {% for u in requests %}
+        <tr>
+          <td><b>{{ u.display or u.name }}</b><br><span class="muted">{{ u.email or 'no email' }}</span></td>
+          <td>{{ u.request_note or '' }}{% if not u.request_note %}<span class="muted">Signed up, hasn't said yet</span>{% endif %}</td>
+          <td>{{ (u.requested or u.created)|ago }}</td>
+          <td><form method="post" action="/admin/user" class="choices">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="uid" value="{{ u.id }}"><input type="hidden" name="action" value="access">
+            <button class="btn" name="access" value="beta" type="submit">Approve</button>
+            <button class="btn" name="access" value="special" type="submit">Approve as special</button>
+            <button class="link" name="access" value="declined" type="submit">Decline</button>
+          </form></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<p class="viz-empty">Nobody is waiting.</p>{% endif %}
+  </section>
+  {% endif %}
+
   <section class="panel gap-top">
     <h2>People</h2>
     <p class="lead-s">{{ users|length }} account{{ '' if users|length == 1 else 's' }} · {{ consents.yes or 0 }} of {{ consents.n or 0 }} opted in to product emails.</p>
@@ -122,13 +152,13 @@
     </div>
     <div class="scroll-x">
       <table class="people people-list">
-        <thead><tr><th>Person</th><th>Joined</th><th>Signs in with</th><th>Films</th><th>Allowance</th><th>Last seen</th><th>AI $</th><th></th></tr></thead>
+        <thead><tr><th>Person</th><th>Joined</th><th>Signs in with</th><th>Films</th><th>Allowance</th><th>Access</th><th>Last seen</th><th>AI $</th><th></th></tr></thead>
         <tbody>
         {% for u in users %}
         <tr class="{{ 'off' if u.disabled }}">
           <td><b>{{ u.display or u.name }}</b>{% if u.role == 'owner' %} · owner{% endif %}<br><span class="muted">{{ u.email or 'no email' }}</span></td>
           <td>{{ u.created|ago }}<br><span class="muted">{{ u.joined_by or 'invite' }}</span></td>
-          <td><span class="ways">{% if u.google_sub %}<i>Google</i>{% endif %}{% if u.email %}<i>Code</i>{% endif %}{% if u.keys %}<i>Passkey</i>{% endif %}{% if u.pw %}<i>Password</i>{% endif %}</span></td>
+          <td><span class="ways">{% if u.google_sub %}<i>Google</i>{% endif %}{% if u.email %}<i>Code</i>{% endif %}{% if u.passkeys %}<i>Passkey</i>{% endif %}{% if u.pw %}<i>Password</i>{% endif %}</span></td>
           <td>{{ u.films }} <span class="muted">/ {{ u.projects }} started</span></td>
           <td>{% if u.role != 'owner' %}
             <form method="post" action="/admin/user">
@@ -136,6 +166,15 @@
               <input type="number" class="num" name="videos" min="0" max="50" value="{{ u.videos_allowed if u.videos_allowed is not none else default_videos }}">
               <button class="link" name="action" value="videos" type="submit">Set</button>
             </form>{% else %}unlimited{% endif %}</td>
+          <td>{% if u.role != 'owner' %}
+            <form method="post" action="/admin/user">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="uid" value="{{ u.id }}"><input type="hidden" name="action" value="access">
+              <select class="num pick" name="access" aria-label="Access">
+                {% for a, label in [('requested', 'Waiting'), ('beta', 'Beta'), ('special', 'Special'), ('declined', 'Declined')] %}
+                <option value="{{ a }}" {% if (u.access or 'beta') == a %}selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+              <button class="link" type="submit">Set</button>
+            </form>{% else %}owner{% endif %}</td>
           <td>{{ u.last_seen|ago if u.last_seen else '–' }}</td>
           <td>{{ '%.2f'|format(u.usd) }}</td>
           <td>{% if u.role != 'owner' %}

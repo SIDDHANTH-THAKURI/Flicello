@@ -41,7 +41,7 @@
         <span class="sound-label">Sound off</span>
       </button>
       <a class="lp-signin" href="/signin">Sign in</a>
-      <a class="btn-sun" href="/signup"><span>Start free</span></a>
+      <a class="btn-sun" href="/signup"><span>{{ "Ask for access" if beta else "Start free" }}</span></a>
     </div>
   </header>
 
@@ -56,10 +56,10 @@
         </h1>
         <p class="hero-sub" data-rise>Drop in the clips you never posted and a song you love. Flicello watches every second, finds the story and cuts it on the beat.</p>
         <div class="hero-ctas" data-rise>
-          <a class="btn-sun big" href="/signup"><span>Make my first film</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+          <a class="btn-sun big" href="/signup"><span>{{ "Ask for access" if beta else "Make my first film" }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
           <a class="btn-ghost" href="#watch">See how it works</a>
         </div>
-        <p class="hero-note mono" data-rise>Free during early access · No card · 18+</p>
+        <p class="hero-note mono" data-rise>{{ "Closed beta · Free" if beta else "Free during early access" }} · No card · 18+</p>
       </div>
       <div class="hud mono" aria-hidden="true">
         <span class="hud-l">RAW · 12 CLIPS · 4K · UNEDITED</span>
@@ -219,8 +219,8 @@
     <!-- finale --------------------------------------------------------------------- -->
     <section class="finale" id="start">
       <h2 class="finale-title" data-split><span class="line">Your next post</span><span class="line">is already <em class="serif sun-text">filmed.</em></span></h2>
-      <a class="btn-sun big" href="/signup"><span>Make my first film</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
-      <p class="mono finale-note">Free during early access · No card · 18+</p>
+      <a class="btn-sun big" href="/signup"><span>{{ "Ask for access" if beta else "Make my first film" }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <p class="mono finale-note">{{ "Closed beta · Free" if beta else "Free during early access" }} · No card · 18+</p>
     </section>
   </main>
 

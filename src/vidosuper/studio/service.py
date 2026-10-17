@@ -16,6 +16,7 @@ stage is one job in the queue; the worker runs them one at a time.
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import time
 import traceback
@@ -47,12 +48,13 @@ STAGES = {
     "failed": "Something went wrong",
 }
 BUSY = {"preparing", "pitching", "sampling", "rendering", "revising"}
+log = logging.getLogger("vidosuper.studio.service")
 JOB_STAGE = {"prepare": "preparing", "pitch": "pitching", "sample": "sampling", "render": "rendering",
              "revise": "revising"}
 PRIORITY = {"pitch": 2, "sample": 3, "learn": 4, "prepare": 5, "render": 6, "revise": 6}  # short jobs first
 FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad shots", "shaky", "too short",
                  "too long", "didn't follow my idea", "colour", "sound"]
-LENGTHS = (15, 30, 45, 60)
+LENGTHS = (15, 30, 45, 60, 90, 120, 180, 300, 600)  # who may ask for which: Studio.lengths_for (access levels)
 MAX_SAMPLE_TRIES = 3
 STYLES = ("designed", "labels")  # designer animations behind the person; clean labels over the video
 TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180}  # first guesses, until real jobs have run
@@ -86,10 +88,73 @@ class Studio:
             p.save()
         return p
 
+    # ------------------------------------------------------------------ access (closed beta; see auth.ACCESS)
+    def tier(self, user: dict):
+        """What this person's access level allows; the owner gets everything special people get, and more."""
+        from .settings import Tier
+
+        if self.is_owner(user):
+            top = self.s.tiers.get("special") or Tier()
+            return Tier(videos=None, max_seconds=max(LENGTHS), max_recording=max(top.max_recording,
+                                                                                 int(self.s.limits.project_seconds)))
+        return self.s.tiers.get("special" if user.get("access") == "special" else "beta") or Tier()
+
+    def lengths_for(self, user: dict) -> list[int]:
+        return [n for n in LENGTHS if n <= self.tier(user).max_seconds]
+
+    def request_access(self, user: dict, note: str) -> bool:
+        """Someone waiting for the beta says what they would make. True the first time (the owner is told then)."""
+        note = " ".join((note or "").split())[:600]
+        if len(note) < 3:
+            raise ActionError("Tell us in a few words what you'd like to make.")
+        first = not (user.get("request_note") or "")
+        self.db.run("UPDATE users SET request_note=?, requested=COALESCE(requested, ?) WHERE id=?",
+                    (note, time.time(), user["id"]))
+        if first:
+            from . import mail
+
+            who = user.get("display") or user["name"]
+            alert(self.db, self.s, "access", f"{who} asked for access: {note[:200]}", "warn")
+            if mail.available(self.s):
+                site = (self.s.site_url or "").rstrip("/")
+                for owner in self.db.all("SELECT email FROM users WHERE role='owner' AND email IS NOT NULL"):
+                    try:
+                        mail.send(self.s, owner["email"], *mail.notice_email(self.s, f"{who} asked for access", [
+                            f"{who} ({user.get('email') or 'no email'}) would like to use Flicello.",
+                            f"What they'd make: {note}",
+                            f"Approve or decline on the admin page: {site}/admin"]))
+                    except Exception:  # noqa: BLE001 - the request is saved and on the admin page either way
+                        log.warning("could not email the owner about an access request")
+        return first
+
+    def decide_access(self, target: dict, access: str) -> None:
+        """The owner approves (beta or special), declines, or puts someone back to waiting. An approval is emailed."""
+        from .auth import ACCESS
+
+        if access not in ACCESS or target["role"] == "owner":
+            raise ActionError("Not changed.")
+        was = target.get("access") or "beta"
+        self.db.run("UPDATE users SET access=?, decided=? WHERE id=?", (access, time.time(), target["id"]))
+        if access in ("beta", "special") and was in ("requested", "declined") and target.get("email"):
+            from . import mail
+
+            if mail.available(self.s):
+                site = (self.s.site_url or "").rstrip("/")
+                lines = ["Your Flicello access is approved. You can make your first video now.",
+                         f"Sign in here: {site}/signin"]
+                if access == "special":
+                    lines.insert(1, "You also have special access: films up to 10 minutes long.")
+                try:
+                    mail.send(self.s, target["email"], *mail.notice_email(self.s, "You're in", lines))
+                except Exception:  # noqa: BLE001 - they can sign in anyway; the owner sees no email went
+                    log.warning("could not email an approval")
+
     def videos_left(self, user: dict) -> int | None:
         if self.is_owner(user):
             return None
-        allowed = user["videos_allowed"] if user["videos_allowed"] is not None else self.s.limits.videos_per_user
+        tier_videos = self.tier(user).videos
+        allowed = (user["videos_allowed"] if user["videos_allowed"] is not None
+                   else tier_videos if tier_videos is not None else self.s.limits.videos_per_user)
         # a video counts once it exists; deleting an unfinished one gives the place back, a finished one doesn't
         made = self.db.value("SELECT COUNT(*) FROM projects WHERE user_id=? AND (deleted=0 OR version>=1)",
                              (user["id"],), 0)
@@ -111,7 +176,7 @@ class Studio:
             raise ActionError("You've used all your videos for this trial. Thank you!")
         if shapes not in ("9:16", "16:9", "both"):
             raise ActionError("Pick a shape.")
-        if int(length) not in LENGTHS:
+        if int(length) not in self.lengths_for(user):
             raise ActionError("Pick a length.")
         if pace not in ("calm", "balanced", "fast", "every"):
             raise ActionError("Pick how fast it should cut.")
@@ -341,7 +406,7 @@ class Studio:
 
     def set_length(self, project: dict, length: int) -> None:
         self._guard(project, "setup")
-        if int(length) not in LENGTHS:
+        if int(length) not in self.lengths_for(self.user(project["user_id"])):
             raise ActionError("Pick one of the lengths.")
         self.db.run("UPDATE projects SET length=?, updated=? WHERE id=?", (float(length), time.time(), project["id"]))
 
@@ -354,6 +419,12 @@ class Studio:
                 self.db.event(project["id"], "Switched to a talking video: the note asks for graphics for what is said.", "info")
                 project = self.db.project(project["id"])
         if project["kind"] != "montage":
+            tier = self.tier(self.user(project["user_id"]))
+            took = float(self.db.value("SELECT COALESCE(SUM(seconds), 0) FROM clips WHERE project_id=?",
+                                       (project["id"],), 0.0))
+            if took > tier.max_recording + 1:
+                raise ActionError(f"That recording is {took / 60:.1f} minutes; with your access a video can use up to "
+                                  f"{tier.max_recording / 60:.0f}. Trim it and upload it again.")
             self._start_explainer(project)
             return
         if not self.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (project["id"],), 0):
