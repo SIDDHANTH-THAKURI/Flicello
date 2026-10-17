@@ -95,6 +95,9 @@ class StudioSettings(_Strict):
                                                    "invite links work.")
     site_url: str | None = Field(None, description="The public address (https://flicello.com): Google sign-in's "
                                                    "return address, passkeys' domain, links in emails.")
+    allowed_emails: list[str] = Field(default_factory=list, description=(
+        "When set, only these emails may sign in or make an account with Google or an email code (plus the owner and "
+        "people the owner invited); everyone else is told it is by invitation. Env: comma-separated."))
     signups_per_day: int = Field(100, description="New accounts a day; past it, people join a waiting list.")
     mail_from: str = "Flicello <hello@flicello.com>"
     mail_outbox: bool = Field(False, description="Write emails to <home>/outbox instead of sending them (local tests).")
@@ -195,6 +198,9 @@ def load_settings(home: Path | None = None, overrides: dict | None = None) -> St
     for env, key in _ENV.items():
         if os.environ.get(env):
             data[key] = os.environ[env]
+    if os.environ.get("VIDO_STUDIO_ALLOWED_EMAILS"):
+        data["allowed_emails"] = [e.strip().lower() for e in os.environ["VIDO_STUDIO_ALLOWED_EMAILS"].split(",")
+                                  if e.strip()]
     if os.environ.get("VIDO_STUDIO_MONTHLY_USD"):
         data.setdefault("limits", {})["monthly_usd"] = float(os.environ["VIDO_STUDIO_MONTHLY_USD"])
     data.update(overrides or {})

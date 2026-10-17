@@ -66,11 +66,15 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
         short_cookie(resp, PENDING, token, auth.PENDING_MINUTES)
         return resp
 
-    def may_join(request: Request) -> bool:
+    def may_join(request: Request, email: str | None = None) -> bool:
         from ..accounts import open_invite
 
         token = request.cookies.get(INVITE)
-        return s.public_signup or bool(token and open_invite(db, token))
+        if token and open_invite(db, token):
+            return True
+        if s.allowed_emails:  # an allow-list: only those on it may join on their own
+            return auth.on_list(s, email)
+        return s.public_signup
 
     def signin_page(request: Request, mode: str = "signin", **ctx) -> HTMLResponse:
         return h.page(request, "signin.html", None, None, mode=mode, google=auth.google_ready(),
@@ -129,7 +133,7 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
                 return signed_in(request, user, "email", next)
             except AccountError as exc:
                 return signin_page(request, mode, error=str(exc))
-        if not may_join(request):
+        if not may_join(request, address):
             return signin_page(request, mode, error="There's no Flicello account for that email yet, and new "
                                                     "accounts are by invitation for now.")
         return to_join(address, None, address.split("@")[0])
@@ -164,7 +168,7 @@ def mount(app: FastAPI, studio: Studio, h: SimpleNamespace) -> None:
                 return h.back("/signin", str(exc))
             resp.delete_cookie(OAUTH, path="/")
             return resp
-        if not may_join(request):
+        if not may_join(request, email):
             return h.back("/signin", "There's no Flicello account for that Google account yet, and new accounts are "
                                      "by invitation for now.")
         resp = to_join(email, str(claims["sub"]), str(claims.get("name") or email.split("@")[0]))

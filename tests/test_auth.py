@@ -320,3 +320,20 @@ def test_someone_with_a_password_account_adds_an_email_proven_by_a_code(studio):
     r = client.post("/auth/email/verify", data={"email": "lou@example.com", "code": last_code(studio.s)}, headers=SAME,
                     follow_redirects=False)
     assert r.status_code == 303 and "vs_session" in r.headers["set-cookie"]
+
+
+def test_with_an_allow_list_only_those_emails_may_join_or_sign_in(studio):
+    studio.s.public_signup = False
+    studio.s.allowed_emails = ["ava@example.com"]
+    client = TestClient(create_app(studio))
+    client.post("/auth/email", data={"email": "eve@example.com"}, headers=SAME)  # not on the list: no account
+    r = client.post("/auth/email/verify", data={"email": "eve@example.com", "code": last_code(studio.s)}, headers=SAME)
+    assert "invitation" in r.text and not studio.db.one("SELECT id FROM users")
+    signup(client, studio)  # on the list: joins although public sign-up is closed
+    ava = studio.db.one("SELECT * FROM users WHERE email='ava@example.com'")
+    assert ava is not None
+    studio.s.allowed_emails = ["someone@else.com"]  # taken off the list: can't sign in any more
+    with pytest.raises(auth.AuthError):
+        auth.sign_in(studio.db, studio.s, ava, "email", "1.2.3.4")
+    owner = {**ava, "role": "owner"}  # the owner and invited people always may
+    assert auth.may_use(studio.s, owner) and auth.may_use(studio.s, {**ava, "joined_by": "invite"})

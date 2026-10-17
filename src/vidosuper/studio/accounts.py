@@ -137,6 +137,10 @@ def login(db: DB, s: StudioSettings, name: str, password: str, ip: str, device: 
         for k in keys + ([] if known else ["all"]):
             db.run("INSERT INTO attempts(key, at) VALUES (?,?)", (k, time.time()))
         raise AccountError("That name and password don't match.")
+    from .auth import may_use
+
+    if not may_use(s, user):
+        raise AccountError("Flicello is open to a few invited people for now. Ask the owner for an invitation.")
     return user, new_session(db, s, user["id"], ip)
 
 

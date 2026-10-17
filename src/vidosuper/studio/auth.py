@@ -170,8 +170,11 @@ def finish_signup(db: DB, s: StudioSettings, token: str, display: str, adult: bo
         raise AuthError("Flicello is for people aged 18 and over.")
     if not agree:
         raise AuthError("Please accept the Terms and the Privacy Policy to continue.")
-    if not s.public_signup and invited is None:
+    listed = bool(s.allowed_emails) and on_list(s, pending["email"])
+    if not s.public_signup and invited is None and not listed:
         raise AuthError("New accounts are by invitation for now.")
+    if s.allowed_emails and invited is None and not listed:
+        raise AuthError("Flicello is open to a few invited people for now. Ask the owner for an invitation.")
     if find_user(db, pending["email"], pending["google_sub"]):
         raise AuthError("You already have an account: please sign in.")
     if invited is None:
@@ -204,9 +207,21 @@ def set_marketing(db: DB, s: StudioSettings, user_id: str, on: bool, ip: str) ->
            (user_id, "marketing", LEGAL_VERSION, 1 if on else 0, time.time(), ip_tag(s, ip)))
 
 
+def on_list(s: StudioSettings, email: str | None) -> bool:
+    """With an allow-list set: is this email on it? (No list: everyone is.)"""
+    return not s.allowed_emails or (email or "").strip().lower() in {e.lower() for e in s.allowed_emails}
+
+
+def may_use(s: StudioSettings, user: dict) -> bool:
+    """The owner and people the owner invited always may; others only when their email is on the allow-list."""
+    return user["role"] == "owner" or user.get("joined_by") == "invite" or on_list(s, user.get("email"))
+
+
 def sign_in(db: DB, s: StudioSettings, user: dict, how: str, ip: str) -> str:
     if user["disabled"]:
         raise AuthError("This account is switched off. Contact hello@flicello.com if you think that's a mistake.")
+    if not may_use(s, user):
+        raise AuthError("Flicello is open to a few invited people for now. Ask the owner for an invitation.")
     db.run("UPDATE users SET last_seen=? WHERE id=?", (time.time(), user["id"]))
     audit(db, user["id"], "signin", how, ip_tag(s, ip))
     return new_session(db, s, user["id"], ip)
