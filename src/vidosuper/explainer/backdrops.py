@@ -458,6 +458,11 @@ class Plates:
         return img
 
     def frame(self, key: str, camera: str, p: float, t: float, light: bool = False, soft: bool = False) -> Image.Image | None:
+        out = self.array(key, camera, p, t, light, soft)
+        return None if out is None else Image.fromarray(out).convert("RGBA")
+
+    def array(self, key: str, camera: str, p: float, t: float, light: bool = False, soft: bool = False) -> np.ndarray | None:
+        """The plate as the camera sees it at `t`: RGB pixels (no image object; the talking video blends arrays)."""
         src = self._load(key, light, soft)
         if src is None:
             return None
@@ -471,5 +476,4 @@ class Plates:
         cx = ww / 2 + ox * w * base
         cy = hh / 2 + oy * h * base
         m = np.array([[s, 0, cx - s * w / 2], [0, s, cy - s * h / 2]], np.float32)
-        out = cv2.warpAffine(src, m, (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REFLECT)
-        return Image.fromarray(out).convert("RGBA")
+        return cv2.warpAffine(src, m, (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REFLECT)

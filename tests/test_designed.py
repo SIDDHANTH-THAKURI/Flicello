@@ -123,7 +123,7 @@ def test_a_designed_video_puts_the_animation_behind_the_person_and_keeps_their_s
     lib.pull("podcast")
     w, h = 270, 480
 
-    def fake_matte(rgb, model=None):  # the person: the lower middle of the frame
+    def fake_matte(rgb, model=None, full=True):  # the person: the lower middle of the frame (any size: it scales)
         m = np.zeros(rgb.shape[:2], np.float32)
         m[int(rgb.shape[0] * 0.45):, int(rgb.shape[1] * 0.3):int(rgb.shape[1] * 0.7)] = 1.0
         return m
@@ -244,3 +244,37 @@ def test_drawing_processes_never_outgrow_free_memory(monkeypatch):
     assert designed.safe_workers(3) == 1
     monkeypatch.setattr(designed, "free_memory_gb", lambda: None)
     assert designed.safe_workers(3) == 2
+
+
+def test_drawing_the_person_only_inside_their_box_gives_the_same_picture_as_the_whole_frame():
+    """The speed-up (2.9x on a real talk) must not change a pixel that matters: the old full-frame maths, here
+    written out, against Designer.person, which only touches the box around the person."""
+    import cv2
+
+    from vidosuper.explainer import designed
+    from vidosuper.explainer.script import VoiceScript
+
+    w, h = 360, 640
+    rng = np.random.default_rng(3)
+    rgb = (rng.random((h, w, 3)) * 255).astype(np.uint8)
+    m = np.zeros((h, w), np.float32)
+    cv2.ellipse(m, (200, 420), (80, 200), 0, 0, 360, 1.0, -1)
+    m = cv2.GaussianBlur(m, (0, 0), 4)
+    base = (rng.random((h, w, 3)) * 255).astype(np.float32)
+    d = designed.Designer(VoiceScript(name="x"), [], (w, h), None, np.zeros(1), False)
+    got = base.copy()
+    d.person(got, rgb, m)
+    # the old way, on the whole frame
+    person = cutout.decontaminate(rgb, m)
+    cv2.multiply(person, 1.06, dst=person)
+    cv2.subtract(person, 11.7, dst=person)
+    soft = cv2.GaussianBlur(m, (0, 0), 1.2)
+    q4 = cv2.resize(m, (w // 4, h // 4), interpolation=cv2.INTER_AREA)
+    wide = cv2.resize(cv2.GaussianBlur(q4, (0, 0), 1.5), (w, h), interpolation=cv2.INTER_LINEAR)
+    edge = np.clip(soft - wide, 0, 1)
+    person += edge[..., None] * (np.array(d.rim, np.float32) * 0.9)
+    shade = 1.0 - cv2.resize(cv2.GaussianBlur(q4, (0, 0), 6), (w, h), interpolation=cv2.INTER_LINEAR) * 0.45
+    want = cv2.blendLinear(base * shade[..., None], np.clip(person, 0, 255), 1.0 - soft, soft)
+    diff = np.abs(got - want)
+    assert diff.max() < 2.0, diff.max()  # float rounding only
+    assert np.array_equal(got[:60], base[:60])  # above the box (the person starts at y=220, the box 120 px higher)

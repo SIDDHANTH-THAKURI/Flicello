@@ -118,8 +118,9 @@ class StudioSettings(_Strict):
     mail_from: str = "Flicello <hello@flicello.com>"
     mail_outbox: bool = Field(False, description="Write emails to <home>/outbox instead of sending them (local tests).")
     improve_every: int = Field(5, description="Start the improvement routine after this many new ratings.")
-    render_processes: int = Field(3, description="Processes that draw a designed talking video at once (a laptop "
-                                                 "with 12+ threads: 3).")
+    render_processes: int = Field(2, description="Processes that draw a designed talking video at once. Measured on "
+                                                 "the owner's laptop (i5-13500H, Iris Xe, cut-out on the GPU): 1 -> 3.3, "
+                                                 "2 -> 4.8, 3 -> 2.3 frames/s (three fight over the GPU and the cores).")
     improve_deploy: bool = Field(False, description="Let a finished improvement branch go live by itself when the tests "
                                                     "pass, nothing is running and it touches no protected file (deploy.py); "
                                                     "undone by itself if the site does not come back.")

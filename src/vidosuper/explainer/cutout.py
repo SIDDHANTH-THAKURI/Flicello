@@ -23,6 +23,18 @@ class CutoutUnavailable(RuntimeError):
     """The matting model is not installed."""
 
 
+def providers() -> list[str]:
+    """Where the model runs, best first: an NVIDIA GPU (the cloud), any Windows GPU through DirectML (the owner's PC:
+    141 ms a frame on its Iris Xe against 256 ms on all its CPU cores, the same matte to 1e-5, and the cores stay free
+    for drawing), else the CPU. VIDO_MATTE_DEVICE=cpu forces the CPU."""
+    import onnxruntime as ort
+
+    have = ort.get_available_providers()
+    if os.environ.get("VIDO_MATTE_DEVICE", "").lower() == "cpu":
+        return ["CPUExecutionProvider"]
+    return [p for p in ("CUDAExecutionProvider", "DmlExecutionProvider") if p in have][:1] + ["CPUExecutionProvider"]
+
+
 @lru_cache(maxsize=1)
 def _session(path: str):
     import onnxruntime as ort
@@ -32,15 +44,23 @@ def _session(path: str):
     options = ort.SessionOptions()
     options.intra_op_num_threads = int(os.environ.get("VIDO_MATTE_THREADS", 0)) or max(1, (os.cpu_count() or 4) // 2)
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    return ort.InferenceSession(path, options, providers=["CPUExecutionProvider"])
+    chosen = providers()
+    if chosen[0] == "DmlExecutionProvider":  # DirectML's own rules
+        options.enable_mem_pattern = False
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    try:
+        return ort.InferenceSession(path, options, providers=chosen)
+    except Exception:  # noqa: BLE001 - a GPU that won't start: the CPU always works
+        return ort.InferenceSession(path, options, providers=["CPUExecutionProvider"])
 
 
 def available(model: Path = MODEL) -> bool:
     return Path(model).exists()
 
 
-def raw_matte(rgb: np.ndarray, model: Path = MODEL) -> np.ndarray:
-    """MODNet's matte for one RGB frame, 0..1, at the frame's size."""
+def raw_matte(rgb: np.ndarray, model: Path = MODEL, full: bool = True) -> np.ndarray:
+    """MODNet's matte for one RGB frame, 0..1: at the frame's size, or (`full` False) at the model's own size, which
+    is all the Tracker needs (it works at half the frame's size)."""
     session = _session(str(model))
     h, w = rgb.shape[:2]
     scale = SHORT_SIDE / min(h, w)
@@ -49,28 +69,33 @@ def raw_matte(rgb: np.ndarray, model: Path = MODEL) -> np.ndarray:
     x = ((x - 0.5) / 0.5).transpose(2, 0, 1)[None]
     out = session.run(None, {session.get_inputs()[0].name: x})[0]
     m = np.squeeze(out).astype(np.float32)
-    return cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
+    return cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR) if full else m
 
 
 def guided(guide: np.ndarray, src: np.ndarray, radius: int = 6, eps: float = 1e-3) -> np.ndarray:
     """He et al.'s guided filter (grey guide), run at half size: the matte follows the picture's real edges."""
     g = cv2.resize(guide, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
     p = cv2.resize(src, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+    q = guided_at(g, p, radius, eps)
+    return cv2.resize(q, (guide.shape[1], guide.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+
+def guided_at(g: np.ndarray, p: np.ndarray, radius: int = 6, eps: float = 1e-3) -> np.ndarray:
+    """The guided filter at the size it is given."""
     size = (2 * radius + 1, 2 * radius + 1)
     mean = lambda a: cv2.boxFilter(a, -1, size)  # noqa: E731
     mg, mp = mean(g), mean(p)
     a = (mean(g * p) - mg * mp) / (mean(g * g) - mg * mg + eps)
     b = mp - a * mg
-    q = mean(a) * g + mean(b)
-    return cv2.resize(q, (guide.shape[1], guide.shape[0]), interpolation=cv2.INTER_LINEAR)
+    return mean(a) * g + mean(b)
 
 
-def attached(m: np.ndarray) -> np.ndarray:
+def attached(m: np.ndarray, shrink: int = 4) -> np.ndarray:
     """Only the pieces of the matte that belong to a person in the frame: the biggest piece, and any piece that
     reaches the bottom edge (a body leaves the frame at the bottom); a lamp or ceiling floating above is dropped.
-    Worked out at quarter size (whole pieces, not edges)."""
+    Worked out at a quarter of the frame's size (whole pieces, not edges): `shrink` is how much smaller than `m`."""
     h, w = m.shape
-    q = cv2.resize(m, (w // 4, h // 4), interpolation=cv2.INTER_AREA)
+    q = cv2.resize(m, (w // shrink, h // shrink), interpolation=cv2.INTER_AREA)
     hard = (q > 0.5).astype(np.uint8)
     n, lab, stats, _ = cv2.connectedComponentsWithStats(hard, 8)
     if n <= 2:
@@ -94,34 +119,51 @@ class Tracker:
         self.prev: np.ndarray | None = None
 
     def __call__(self, rgb: np.ndarray, raw: np.ndarray | None = None) -> np.ndarray:
-        m = raw if raw is not None else raw_matte(rgb, self.model)
-        grey = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
-        m = np.clip(guided(grey, m), 0.0, 1.0)
-        m = attached(m)
-        if self.prev is not None:
-            moving = np.clip(np.abs(m - self.prev) * 3.0, 0.0, 1.0)  # a hand that moves follows at once
-            m = moving * m + (1 - moving) * (0.55 * m + 0.45 * self.prev)
+        """The frame's matte at its full size. All the work is done at half size (the guided filter's detail is half
+        size anyway) and scaled up once at the end: a quarter of the cost of doing the same at full size."""
+        h, w = rgb.shape[:2]
+        half = (w // 2, h // 2)
+        m = raw if raw is not None else raw_matte(rgb, self.model, full=False)
+        p = cv2.resize(m, half, interpolation=cv2.INTER_AREA if m.shape[1] > half[0] else cv2.INTER_LINEAR)
+        grey = cv2.resize(cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY), half, interpolation=cv2.INTER_AREA).astype(np.float32)
+        grey *= 1.0 / 255.0
+        m = np.clip(guided_at(grey, p), 0.0, 1.0)
+        m = attached(m, shrink=2)
+        if self.prev is not None and self.prev.shape == m.shape:
+            moving = cv2.absdiff(m, self.prev)
+            moving *= 3.0
+            np.minimum(moving, 1.0, out=moving)  # a hand that moves follows at once
+            m = cv2.blendLinear(m, 0.55 * m + 0.45 * self.prev, moving, 1.0 - moving)
         self.prev = m
-        return np.clip((m - 0.04) / 0.92, 0.0, 1.0).astype(np.float32)
+        out = (m - 0.04) * (1 / 0.92)
+        np.clip(out, 0.0, 1.0, out=out)
+        return cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
 
 
 def decontaminate(rgb: np.ndarray, m: np.ndarray, radius: int = 9) -> np.ndarray:
     """The person's colours at their soft edge, without the wall behind them showing through (a light fringe around
-    hair): edge pixels take the colour of the person just inside the edge. Worked out at half size (it is a blur)."""
+    hair): edge pixels take the colour of the person just inside the edge. Worked out at half size (it is a blur),
+    with OpenCV's own (all-core) operations, and blended in only where the edge is."""
     h, w = m.shape
     img = rgb.astype(np.float32)
-    edge = ((m > 0.02) & (m < 0.95)).astype(np.float32) * 0.65
-    if not edge.any():
+    band = cv2.inRange(m, 0.0201, 0.9499)  # the soft edge: 0.02 < m < 0.95
+    if not cv2.countNonZero(band):
         return img
     hs, ws = h // 2, w // 2
     small = cv2.resize(img, (ws, hs), interpolation=cv2.INTER_AREA)
-    inside = (cv2.resize(m, (ws, hs), interpolation=cv2.INTER_AREA) > 0.95).astype(np.float32)
+    inside = cv2.threshold(cv2.resize(m, (ws, hs), interpolation=cv2.INTER_AREA), 0.95, 1.0, cv2.THRESH_BINARY)[1]
     size = (radius + 1, radius + 1)
-    num = cv2.boxFilter(small * inside[..., None], -1, size)
-    den = cv2.boxFilter(inside, -1, size)[..., None]
-    fg = np.where(den > 1e-3, num / np.maximum(den, 1e-3), small).astype(np.float32)
-    fg = cv2.resize(fg, (w, h), interpolation=cv2.INTER_LINEAR)
-    return cv2.blendLinear(img, fg, 1.0 - edge, edge)
+    num = cv2.boxFilter(cv2.multiply(small, cv2.merge([inside, inside, inside])), -1, size)
+    den = cv2.boxFilter(inside, -1, size)
+    fg = small.copy()
+    cv2.copyTo(cv2.divide(num, cv2.merge([np.maximum(den, 1e-3)] * 3)), (den > 1e-3).astype(np.uint8), fg)
+    x, y, bw, bh = cv2.boundingRect(band)  # only the edge band needs the blend
+    x0, y0 = max(0, x - 2), max(0, y - 2)
+    x1, y1 = min(w, x + bw + 2), min(h, y + bh + 2)
+    fg = cv2.resize(fg, (w, h), interpolation=cv2.INTER_LINEAR)[y0:y1, x0:x1]
+    edge = band[y0:y1, x0:x1].astype(np.float32) * (0.65 / 255.0)
+    img[y0:y1, x0:x1] = cv2.blendLinear(np.ascontiguousarray(img[y0:y1, x0:x1]), np.ascontiguousarray(fg), 1.0 - edge, edge)
+    return img
 
 
 def box(m: np.ndarray, at: float = 0.5) -> tuple[float, float, float, float] | None:
@@ -146,7 +188,7 @@ class Stream:
         self.pending = None
 
     def raw(self, rgb: np.ndarray):
-        return self.pool.submit(raw_matte, rgb, self.tracker.model)
+        return self.pool.submit(raw_matte, rgb, self.tracker.model, False)
 
     def close(self) -> None:
         self.pool.shutdown(wait=False, cancel_futures=True)

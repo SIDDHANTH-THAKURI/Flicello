@@ -214,10 +214,22 @@ class Designer:
         """What stands behind the person: the look's painted place (out of focus, the camera creeping in over the
         whole video), else the drawn stage."""
         if self.plates is not None and self.plates.has(self.s.stage_file):
-            img = self.plates.frame(self.s.stage_file, "push", t / self.duration, t, soft=True)
+            img = self.plates.array(self.s.stage_file, "push", t / self.duration, t, soft=True)
             if img is not None:
-                return np.asarray(img.convert("RGB"), np.float32)
+                return img.astype(np.float32)
         return self.stage.frame(t, level)
+
+    def glow(self, level: float) -> Image.Image:
+        """The soft light behind the head, breathing with the voice. Its size moves in 4-pixel steps and its strength
+        in 6 steps of 255, so the few dozen blurs it takes are made once (blurring it every frame cost 29 ms)."""
+        r = int(self.w * (0.33 + 0.05 * level)) // 4 * 4
+        a = int(70 + 50 * level) // 6 * 6
+        cache = self.__dict__.setdefault("_glows", {})
+        if (r, a) not in cache:
+            g = Image.new("RGBA", (2 * r, 2 * r), (0, 0, 0, 0))
+            ImageDraw.Draw(g).ellipse([0, 0, 2 * r - 1, 2 * r - 1], fill=(*self.rim, a))
+            cache[(r, a)] = g.filter(ImageFilter.GaussianBlur(r * 0.35))
+        return cache[(r, a)]
 
     def lottie(self, aid: str, t: float, width: int, once: bool = False) -> Image.Image | None:
         if not aid or self.lib is None:
@@ -321,10 +333,7 @@ class Designer:
         if amb is not None:
             place(layer, amb, hx, hy + self.h * 0.03, alpha=0.5)
         else:  # a soft light behind the head that breathes with the voice
-            r = int(self.w * (0.33 + 0.05 * level))
-            glow = Image.new("RGBA", (2 * r, 2 * r), (0, 0, 0, 0))
-            ImageDraw.Draw(glow).ellipse([0, 0, 2 * r - 1, 2 * r - 1], fill=(*self.rim, int(70 + 50 * level)))
-            place(layer, glow.filter(ImageFilter.GaussianBlur(r * 0.35)), hx, hy)
+            place(layer, self.glow(level), hx, hy)
         title_space = 0.0
         for c in self.titles:
             if c.at - 0.05 <= t <= c.until + 0.3:
@@ -437,30 +446,63 @@ class Designer:
             place(layer, p, x + p.width * sc / 2, self.h * 0.84, scale=sc)
             x += (p.width + gap) * sc
 
+    def person(self, base: np.ndarray, rgb: np.ndarray, m: np.ndarray) -> None:
+        """The cut-out person over `base` (in place): their colours cleaned at the edge, a touch more contrast, a rim
+        of light along the outline and a soft shadow behind them. Only the box around them is touched: outside it the
+        matte, the rim and the shadow are all zero, so the picture there is the backdrop as it was (the box has room
+        for the shadow's blur), and a person filling a third of the frame costs a third."""
+        h, w = m.shape
+        q4 = cv2.resize(m, (w // 4, h // 4), interpolation=cv2.INTER_AREA)
+        found = cv2.findNonZero(cv2.threshold(q4, 0.002, 255, cv2.THRESH_BINARY)[1].astype(np.uint8))
+        if found is None:
+            return
+        bx, by, bw, bh = cv2.boundingRect(found)
+        pad = 30  # quarter-size pixels: the shadow blur (sigma 6) reaches 18, the rim's 5
+        qx0, qy0 = max(0, bx - pad), max(0, by - pad)
+        qx1, qy1 = min(q4.shape[1], bx + bw + pad), min(q4.shape[0], by + bh + pad)
+        x0, y0, x1, y1 = qx0 * 4, qy0 * 4, min(w, qx1 * 4), min(h, qy1 * 4)
+        if qx1 * 4 >= w:
+            x1 = w
+        if qy1 * 4 >= h:
+            y1 = h
+        rw, rh = x1 - x0, y1 - y0
+        # the quarter-size blurs are worked out on the whole quarter frame (cheap), then cut to the box at full size
+        wide = cv2.resize(cv2.GaussianBlur(q4, (0, 0), 1.5), (w, h), interpolation=cv2.INTER_LINEAR)[y0:y1, x0:x1]
+        shade = cv2.resize(cv2.GaussianBlur(q4, (0, 0), 6), (w, h), interpolation=cv2.INTER_LINEAR)[y0:y1, x0:x1]
+        mb = np.ascontiguousarray(m[y0:y1, x0:x1])
+        person = cutout.decontaminate(np.ascontiguousarray(rgb[y0:y1, x0:x1]), mb)
+        cv2.multiply(person, 1.06, dst=person)
+        cv2.subtract(person, 11.7, dst=person)  # (p - 128) * 1.06 + 124: a touch more contrast
+        soft = cv2.GaussianBlur(mb, (0, 0), 1.2)
+        edge = cv2.subtract(soft, wide)
+        np.clip(edge, 0, 1, out=edge)
+        r, g, b = (float(v) * 0.9 for v in self.rim)
+        cv2.add(person, cv2.merge([edge * r, edge * g, edge * b]), dst=person)
+        shade *= -0.45
+        shade += 1.0
+        region = np.ascontiguousarray(base[y0:y1, x0:x1])
+        cv2.multiply(region, cv2.merge([shade, shade, shade]), dst=region)
+        np.clip(person, 0, 255, out=person)
+        base[y0:y1, x0:x1] = cv2.blendLinear(region, person, 1.0 - soft, soft)
+        assert region.shape[:2] == (rh, rw)
+
     def frame(self, i: int, t: float, rgb: np.ndarray, raw: np.ndarray | None) -> np.ndarray:
         level = float(self.levels[min(i, len(self.levels) - 1)]) if len(self.levels) else 0.0
         m = self.tracker(rgb, raw) if self.tracker is not None else None
         self.zones.update(m)
         behind = self.behind(t, level)
-        if m is not None:
-            base = blend(self.backdrop(t, level), behind)
-            person = cutout.decontaminate(rgb, m)
-            cv2.multiply(person, 1.06, dst=person)
-            cv2.subtract(person, 11.7, dst=person)  # (p - 128) * 1.06 + 124: a touch more contrast
-            soft = cv2.GaussianBlur(m, (0, 0), 1.2)
-            q4 = cv2.resize(m, (self.w // 4, self.h // 4), interpolation=cv2.INTER_AREA)
-            wide = cv2.resize(cv2.GaussianBlur(q4, (0, 0), 1.5), (self.w, self.h), interpolation=cv2.INTER_LINEAR)
-            edge = np.clip(soft - wide, 0, 1)
-            person += edge[..., None] * (np.array(self.rim, np.float32) * 0.9)
-            shade = 1.0 - cv2.resize(cv2.GaussianBlur(q4, (0, 0), 6), (self.w, self.h), interpolation=cv2.INTER_LINEAR) * 0.45
-            base *= shade[..., None]
-            img = cv2.blendLinear(base, np.clip(person, 0, 255), 1.0 - soft, soft)
+        cut = next((s for s in self.s.scenes if s.start - 0.25 <= t <= s.end + 0.25), None)
+        covered = cut is not None and cut.start <= t <= cut.end  # a full-screen scene hides the person completely
+        if covered:
+            img = np.zeros((self.h, self.w, 3), np.float32)
+        elif m is not None:
+            img = blend(self.backdrop(t, level), behind)
+            self.person(img, rgb, m)
         else:  # no cut-out: graphics over the picture, on a dark band so they read
             img = rgb.astype(np.float32)
             band = np.clip(1 - np.linspace(0, 1, self.h) / 0.42, 0, 1)[:, None, None] * 0.6
             img = img * (1 - band)
             img = blend(np.ascontiguousarray(img, dtype=np.float32), behind)
-        cut = next((s for s in self.s.scenes if s.start - 0.25 <= t <= s.end + 0.25), None)
         if cut is not None:  # a full-screen animated scene, cross-faded in and out over the person
             from .compose import _scene_frame
 
