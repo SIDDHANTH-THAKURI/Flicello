@@ -9,7 +9,8 @@ It only ever calls the server (web/workerapi.py); the server never connects to i
   4. uploads what the job made or changed, and only then lets the job's stage change land (`hold`), so the site
      never shows a finished video whose file has not arrived.
 The pipeline's working files (proxies, measurements, transcripts) stay on this machine between a project's jobs;
-copies of projects the server no longer has (deleted, or past retention) are removed every few minutes.
+copies of projects the server no longer has (deleted, or past retention) are removed every few minutes, and on the
+owner's PC the old PC-hosted studio's leftovers keep the same promise (legacy.py).
 
 It works in two lanes (db.LONG_KINDS), each its own process: this one renders whole films, a second one it starts and
 watches does everything short (watching clips, the story, looks, samples). Without that, one hour-long film made
@@ -29,6 +30,7 @@ from pathlib import Path
 
 import httpx
 
+from . import legacy
 from .db import DB
 from .pipeline import remove_project_files
 from .settings import Limits, Models, StudioSettings, load_settings
@@ -230,6 +232,11 @@ class RemoteWorker:
             removed = self.purge()
             if removed:
                 log.info("removed %d project copies the server no longer has", removed)
+            if not self.cloud:
+                try:
+                    legacy.sweep(days=self.studio.s.limits.retention_days)
+                except Exception:  # noqa: BLE001 - tidying up must never stop the renderer
+                    log.exception("tidying the old studio's leftovers failed")
         data = _call(self.http, "POST", PREFIX + "/claim", json={"lane": self.lane, "worker": self.name,
                                                                  "cloud": self.cloud}).json()
         job = data["job"]
