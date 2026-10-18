@@ -1,5 +1,6 @@
 {# Music made for the film: what they asked for, what the AI understood, a track to listen to, and changing it. #}
 {% macro beat_block(p, csrf, beats, beats_left, can_compose, track_seconds, voice=False) %}
+{% if p.error and p.stage in ('setup', 'understood') %}<p class="msg" role="alert">{{ p.error }}</p>{% endif %}
 {% set chosen = (beats|selectattr('id', 'equalto', p.beat)|first) if p.beat else none %}
 {% set shown = chosen or (beats|first if beats else none) %}
 {% if shown %}

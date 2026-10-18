@@ -1429,6 +1429,57 @@ def test_when_the_music_service_fails_our_own_beat_stands_in_and_they_are_told(s
     assert not studio.db.all("SELECT * FROM spend WHERE task='beat' AND backend='elevenlabs'")
 
 
+
+def test_when_making_the_music_breaks_they_are_back_where_they_asked_not_stuck(studio, media, monkeypatch):
+    calls: list = []
+    _fake_composer(monkeypatch, calls)
+    _friend(studio, "Mo")
+    client, csrf = _signed_in(studio, "Mo")
+    r = client.post("/new", data={"csrf": csrf, "title": "Beach", "shapes": "9:16", "length": 30,
+                                  "intent": "a day at the beach"}, follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+
+    def broken(*a, **kw):
+        raise RuntimeError("the music step broke")
+
+    monkeypatch.setattr(studio, "_compose", broken)
+    client.post(f"/p/{pid}/beat", data={"csrf": csrf, "ask": "calm guitar"})
+    _drain(studio)
+    studio.db.run("UPDATE jobs SET after=0 WHERE project_id=?", (pid,))  # its one retry, now
+    _drain(studio)
+    p = studio.db.project(pid)
+    assert p["stage"] == "setup" and "couldn't be made" in p["error"]
+    assert not studio.db.active_job(pid)
+    assert "couldn&#39;t be made" in client.get(f"/p/{pid}").text or "couldn't be made" in client.get(f"/p/{pid}").text
+    # and they can carry on: ask again (it works now) and the message goes
+    monkeypatch.undo()
+    _fake_composer(monkeypatch, calls)
+    client.post(f"/p/{pid}/beat", data={"csrf": csrf, "ask": "calm guitar"})
+    _drain(studio)
+    p = studio.db.project(pid)
+    assert p["stage"] == "setup" and not p["error"] and studio.beats(p)
+
+
+
+def test_when_the_ai_cant_read_the_music_request_it_is_read_simply_and_made(studio, media, monkeypatch):
+    from vidosuper.studio.brain import core
+
+    calls: list = []
+    _fake_composer(monkeypatch, calls)
+
+    def refused(self, *a, **kw):
+        raise RuntimeError("Error code: 401 - authentication_error")
+
+    monkeypatch.setattr(core.LocalBrain, "beat_idea", refused)
+    friend = _friend(studio, "Ji")
+    p = studio.create_project(friend, "Hills", "9:16", 30, "a hike")
+    studio.make_beat(p, "calm piano")
+    _drain(studio)
+    p = studio.db.project(p["id"])
+    assert p["stage"] == "setup" and not p["error"] and studio.beats(p) and calls
+    assert any("couldn't read the request" in e["message"] for e in studio.db.all("SELECT * FROM events"))
+
+
 def test_a_voice_video_gets_the_music_made_for_it_under_the_voice(studio, media, monkeypatch):
     from vidosuper.explainer import make as explainer_make
 

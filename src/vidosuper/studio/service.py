@@ -912,8 +912,18 @@ class Studio:
         whole = made.whole(seconds)
         shape = [({"lift": "last drop (the drop's styles again)", "groove": "steady groove"}.get(n, n), t) for n, t in
                  made.section_times(made.layout(seconds, 96, purpose) if whole else made.taste_layout(), 96)]
-        idea = pipe.brain.beat_idea(ask, self._film_for_music(project), purpose, seconds, project["pace"],
-                                    base["idea"] if base else None, change, shape)
+        try:
+            idea = pipe.brain.beat_idea(ask, self._film_for_music(project), purpose, seconds, project["pace"],
+                                        base["idea"] if base else None, change, shape)
+        except BudgetExceeded:  # (and PersonLimit) the money rules decide, not a fallback
+            raise
+        except Exception as exc:  # noqa: BLE001 - the AI can't read it now (down, refused key): read it simply here
+            from .brain.core import local_beat_idea
+
+            self.db.event(project["id"], f"music: the AI couldn't read the request ({type(exc).__name__}: "
+                          f"{' '.join(str(exc).split())[:160]}); read it without the AI", "warn", job["id"])
+            idea = local_beat_idea(ask, self._film_for_music(project), purpose, project["pace"],
+                                   base["idea"] if base else None, change)
         name = f"beat-{secrets.token_hex(4)}.mp3"
         maker, note, song_id, took = "elevenlabs", "", "", 0.0
         try:
@@ -1401,7 +1411,15 @@ class Studio:
                 self.db.requeue(job["id"], delay=20.0, error=str(exc)[:500])
                 return
             self.db.job_done(job["id"], "failed", str(exc)[:500])
-            if job["kind"] in JOB_STAGE:
+            if job["kind"] == "beat":
+                # music is one choice inside a step, not the video: back to where they asked for it (setup or 'what
+                # I understood'), told why, free to ask again, pick another track or upload a song. A 'failed' video
+                # could only retry the same thing or go back to the start and lose what was agreed.
+                params = job["params"] if isinstance(job["params"], dict) else json.loads(job["params"] or "{}")
+                message = str(exc) if user_fixable else ("The music couldn't be made this time. Try again, describe "
+                                                         "it differently, or upload a song.")
+                self.db.set_stage(project["id"], params.get("back") or "setup", error=message[:300])
+            elif job["kind"] in JOB_STAGE:
                 message = str(exc) if user_fixable else "Something went wrong on our side. The owner has been told; you can try again."
                 self.db.set_stage(project["id"], "failed", error=message[:300])
             alert(self.db, self.s, "job", f"{job['kind']} failed for a video: {type(exc).__name__}: {str(exc)[:200]}")
