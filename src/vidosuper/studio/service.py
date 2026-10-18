@@ -624,6 +624,10 @@ class Studio:
             return None
         typical = self.expected_seconds(job)
         if job["status"] == "queued" and job.get("id"):  # a real one in the queue
+            from . import cloud
+
+            if cloud.can_take(self, job):  # a cloud renderer starts for it if the PC doesn't take it soon
+                return int(typical + 60)
             running, queued = self.ahead(job)
             return int(typical + sum(self.eta(r) or 0 for r in running)
                        + sum(self.expected_seconds(r) for r in queued))
@@ -1804,13 +1808,18 @@ class Studio:
     # ------------------------------------------------------------------ remote renderer (see remote.py)
     def renderer_seen(self) -> float | None:
         """Seconds since a remote worker (either lane) last checked in, or None if none ever has."""
-        at = self.db.value("SELECT MAX(at) FROM heartbeat WHERE name IN ('renderer', 'renderer-quick')", (), None)
+        at = self.db.value("SELECT MAX(at) FROM heartbeat WHERE name IN ('renderer', 'renderer-quick') OR name LIKE "
+                           "'modal-%'", (), None)
         return round(time.time() - at, 1) if at else None
 
     def queued_note(self, job: dict | None) -> str:
         """What a waiting video says while remote rendering is on and no renderer is online."""
         if not job or job["status"] != "queued" or self.s.jobs != "remote":
             return ""
+        from . import cloud
+
+        if cloud.can_take(self, job) and (self.s.modal_mode == "always" or not cloud.pc_online(self.db)):
+            return "Starting a cloud renderer for it: it begins in about a minute. You can leave this page."
         seen = self.renderer_seen()
         if seen is None or seen >= 90:
             return "Waiting for the video renderer to come online. Your video will start by itself; you can leave this page."
@@ -1839,7 +1848,14 @@ class Studio:
             "month_usd": round(self.db.month_spend(), 3),
             "month_usd_all": round(self.db.month_spend(billed_only=False), 3),
             "cap_usd": self.s.limits.monthly_usd,
+            "cloud": cloud_status(self),
         }
+
+
+def cloud_status(studio) -> dict:
+    from .cloud import status
+
+    return status(studio)
 
 
 def stage_label(stage: str) -> str:

@@ -59,8 +59,9 @@ def studio_config(workspace: Path, render_preset: str = "medium", models_dir: Pa
     """The pipeline's settings for studio projects: their own workspace, a quicker final encode."""
     # fewer FFmpeg jobs at once than the command line uses (3/4/2): a 4K phone clip decodes into a lot of memory,
     # and the studio shares a PC with the owner's other programs
-    overrides: dict = {"workspace": str(workspace), "render": {"workers": 2, "final": {"preset": render_preset}},
-                       "measure": {"workers": 2}, "ingest": {"workers": 1}, "output": {"outro": "none"}}
+    many = int(os.environ.get("VIDO_STUDIO_PIPELINE_WORKERS") or 2)  # a cloud renderer has the cores to do more at once
+    overrides: dict = {"workspace": str(workspace), "render": {"workers": many, "final": {"preset": render_preset}},
+                       "measure": {"workers": many}, "ingest": {"workers": 1}, "output": {"outro": "none"}}
     if models_dir is not None:
         overrides["analysis"] = {"models_dir": str(models_dir)}
     if os.name != "nt" or os.environ.get("VIDO_STUDIO_HWACCEL") == "none":

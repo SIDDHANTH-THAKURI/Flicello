@@ -77,7 +77,11 @@ def mount(app, studio) -> None:
         authorised(request)
         data = await body(request)
         lane = data.get("lane") if data.get("lane") in LANES else "all"
-        job = db.claim(lane, str(data.get("worker") or "")[:40] or None)
+        from ..cloud import pc_only_users
+
+        cloud = bool(data.get("cloud"))
+        job = db.claim(lane, str(data.get("worker") or "")[:40] or None, cloud,
+                       tuple(pc_only_users(studio)) if cloud else ())
         return json_response({"job": job, "settings": {
             "brain": s.brain, "owner_brain": s.owner_brain,  # money decisions stay the server's
             "limits": s.limits.model_dump(), "models": s.models.model_dump()}})

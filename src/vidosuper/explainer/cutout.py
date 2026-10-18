@@ -42,7 +42,9 @@ def _session(path: str):
     if not Path(path).exists():
         raise CutoutUnavailable(f"portrait matting model missing: {path}")
     options = ort.SessionOptions()
-    options.intra_op_num_threads = int(os.environ.get("VIDO_MATTE_THREADS", 0)) or max(1, (os.cpu_count() or 4) // 2)
+    from ..cpus import usable_cpus
+
+    options.intra_op_num_threads = int(os.environ.get("VIDO_MATTE_THREADS", 0)) or max(1, usable_cpus() // 2)
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     chosen = providers()
     if chosen[0] == "DmlExecutionProvider":  # DirectML's own rules

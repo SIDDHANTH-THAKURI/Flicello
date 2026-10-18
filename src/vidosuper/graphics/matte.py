@@ -22,7 +22,9 @@ def _session(path: str):
     if not Path(path).exists():
         raise FileNotFoundError(f"person matte model missing: {path} (download u2net_human_seg.onnx from the rembg releases)")
     options = ort.SessionOptions()
-    options.intra_op_num_threads = max(1, (os.cpu_count() or 4) // 2)
+    from ..cpus import usable_cpus
+
+    options.intra_op_num_threads = max(1, usable_cpus() // 2)
     return ort.InferenceSession(path, options, providers=["CPUExecutionProvider"])
 
 

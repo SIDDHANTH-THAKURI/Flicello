@@ -837,6 +837,20 @@ def create_app(studio: Studio) -> FastAPI:
                     tier_credits=studio.tier_credits(),
                     balances={u["id"]: studio.credits(u) for u in users if u["role"] != "owner"})
 
+    @app.post("/admin/cloud-test")
+    def admin_cloud_test(request: Request, csrf: str = Form("")):
+        user, sess = need_owner(request)
+        check_csrf(sess, csrf)
+        from ..cloud import request_test, wake
+
+        try:
+            request_test(studio)
+        except ActionError as exc:
+            return back("/admin#cloud", str(exc))
+        wake(studio)
+        return back("/admin#cloud", "A cloud renderer is starting to test itself: the result comes in Alerts in a "
+                                    "few minutes (the first test also fetches the speech models).")
+
     @app.post("/admin/pricing")
     def admin_pricing(request: Request, csrf: str = Form(""), per_minute: int = Form(1), looks: int = Form(1),
                       beta: int = Form(3), special: int = Form(12)):

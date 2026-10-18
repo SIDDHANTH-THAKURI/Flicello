@@ -647,6 +647,7 @@ def _chunk(job: dict) -> str:
     import os
 
     os.environ["VIDO_MATTE_THREADS"] = str(job["threads"])
+    cv2.setNumThreads(max(1, job["threads"]))  # OpenCV would otherwise take every CPU it sees, in every part
     script = VoiceScript.model_validate_json(job["script"])
     lib = Library(Path(job["lib"])) if job["lib"] else None
     out = Path(job["out"])
@@ -699,13 +700,19 @@ def render_designed(script: VoiceScript, video: Path, utterances: list[dict], ou
         return out
     tmp = Path(tempfile.mkdtemp(prefix="designed-", dir=out.parent))
     bounds = [round(total * k / workers) for k in range(workers + 1)]
-    threads = max(2, (os.cpu_count() or 4) // workers)
+    from ..cpus import usable_cpus
+
+    threads = max(2, usable_cpus() // workers)  # the container's real CPUs, not the host's
     jobs = [{"script": script.model_dump_json(), "lib": str(lib.root) if lib else "", "video": str(video), "words": words,
              "size": list(size), "levels": levels[bounds[k]:bounds[k + 1]].tolist() if len(levels) > 1 else [0.0],
              "start": start + bounds[k] / FPS, "frames": bounds[k + 1] - bounds[k], "first": 0, "quality": quality,
              "out": str(tmp / f"part{k}.mp4"), "threads": threads, "plates": str(plates_dir) if plates_dir else "",
              "duration": duration or 0.0} for k in range(workers)]
-    with ProcessPoolExecutor(workers) as ex:
+    import multiprocessing
+
+    # fresh processes, never forked: on Linux a fork copies a parent whose model thread pools (the speech model, the
+    # cut-out) are mid-flight, and the parts hung forever (found on the cloud renderer; Windows always spawns)
+    with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn")) as ex:
         futs = [ex.submit(_chunk, j) for j in jobs]
         best = 0.0
         while progress and not all(f.done() for f in futs):  # frames drawn by all the parts together

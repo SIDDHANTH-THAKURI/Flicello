@@ -304,3 +304,28 @@ invite tokens never reach the log.
 settings, never anyone's footage, titles, requests or written feedback.
 - **Charts:** follow the dataviz method. The palette was validated against the panel surface `#101016`.
 - **Live data:** refreshes every 5 seconds.
+
+## The cloud renderer: Modal (2026-10-18)
+
+flicello.com renders on the owner's PC (renderer.cmd) and, when the PC can't, on Modal: containers running the same
+remote worker (`src/vidosuper/studio/remote.py`, `cloud=True`), started by the site and stopped when the queue is empty.
+
+- **When the cloud works** (`VIDO_STUDIO_MODAL` on the server): `auto` (default) - the PC goes first; the cloud takes
+  everything while the PC is offline, and a step that has waited 45 s while the PC is busy. `always` - every step the
+  cloud can run goes there. `off`. The owner's own videos always stay on the PC (they use the owner's Claude plan).
+- **Size and cost:** one renderer = 8 cores (16 vCPUs) and 16 GiB, about $0.50 an hour while it works, up to 3 at
+  once; each stops after 90 s with nothing to do. Its time goes on the books (spend, backend `modal`) and counts
+  towards the monthly cap. Set a spending limit in the Modal dashboard too.
+- **Set up** (from the repo, with the venv's `modal`, logged in to the owner's workspace):
+  1. the secret `flicello-worker` with VIDO_STUDIO_WORKER_TOKEN, ANTHROPIC_API_KEY, GEMINI_API_KEY and
+     ELEVENLABS_API_KEY (`modal secret create flicello-worker --from-json <file> --force`; never paste keys in chat);
+  2. the cut-out model into the volume: `modal volume put flicello-models <modnet.onnx> /modnet.onnx`
+     (in Git Bash set `MSYS_NO_PATHCONV=1`, or the remote path turns into a Windows one);
+  3. `modal deploy deploy/modal_app.py` (prints the `wake` address), then `modal run deploy/modal_app.py::prepare`
+     (fetches the speech models into the volume) and `modal run deploy/modal_app.py::check` (a self-test);
+  4. on the server, `VIDO_STUDIO_MODAL_URL=<the wake address>` in /srv/flicello/.env.studio, then restart the
+     studio container.
+- **Check it:** admin page, "Cloud renderer" -> "Test the cloud renderer": a container draws a short designed talk
+  with no one's footage and reports its speed in Alerts.
+- **After a code change:** `modal deploy deploy/modal_app.py` again (the code is mounted, so it's quick), as well
+  as the server deploy.

@@ -226,17 +226,25 @@ class DB:
                         "VALUES (?,?,?,?, 'queued', ?, ?)",
                         (project_id, user_id, kind, json.dumps(params or {}), priority, time.time()))
 
-    def claim(self, lane: str = "all", worker: str | None = None) -> dict | None:
+    def claim(self, lane: str = "all", worker: str | None = None, cloud: bool = False,
+              pc_only: tuple[str, ...] = ()) -> dict | None:
         """The next queued job of this lane (lowest priority number first, then oldest), marked running atomically
-        and as `worker`'s (so a worker starting again puts back only its own jobs, not another lane's)."""
+        and as `worker`'s (so a worker starting again puts back only its own jobs, not another lane's). A `cloud`
+        worker never takes the steps of people in `pc_only` (the owner's videos use Claude Code, which only exists on
+        the PC); a cloud self-test is only ever taken by a cloud worker."""
         if lane not in LANES:
             raise ValueError(f"unknown lane {lane!r}")
+        if cloud and pc_only:
+            who = " AND (user_id IS NULL OR user_id NOT IN (" + ",".join("?" * len(pc_only)) + "))"
+        else:
+            who = "" if cloud else " AND kind != 'selftest'"
         con = self.connect()
         try:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("SELECT * FROM jobs WHERE status='queued' AND (after IS NULL OR after <= ?)"
-                              + _lane_sql(lane) + " ORDER BY priority, id LIMIT 1",
-                              (time.time(), *(LONG_KINDS if lane != "all" else ()))).fetchone()
+                              + _lane_sql(lane) + who + " ORDER BY priority, id LIMIT 1",
+                              (time.time(), *(LONG_KINDS if lane != "all" else ()),
+                               *(pc_only if cloud else ()))).fetchone()
             if row is None:
                 con.execute("COMMIT")
                 return None

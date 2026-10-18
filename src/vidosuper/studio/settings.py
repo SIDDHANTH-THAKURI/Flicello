@@ -135,6 +135,13 @@ class StudioSettings(_Strict):
     render_processes: int = Field(2, description="Processes that draw a designed talking video at once. Measured on "
                                                  "the owner's laptop (i5-13500H, Iris Xe, cut-out on the GPU): 1 -> 3.3, "
                                                  "2 -> 4.8, 3 -> 2.3 frames/s (three fight over the GPU and the cores).")
+    modal_url: str | None = Field(None, description="The cloud renderer's wake address: the `wake` endpoint of "
+                                                    "deploy/modal_app.py (Modal). Unset: no cloud renderer.")
+    modal_mode: Literal["off", "auto", "always"] = Field("auto", description=(
+        "auto: the cloud takes what the PC can't (everything while the PC is offline, a step that has waited "
+        "`modal_wait` seconds while it is busy); always: every step the cloud can run goes there at once; off."))
+    modal_wait: int = Field(45, description="auto: how long a step waits for a busy PC before the cloud takes it.")
+    modal_max: int = Field(3, description="Cloud renderers at once (each costs about $0.50 an hour while it works).")
     improve_deploy: bool = Field(False, description="Let a finished improvement branch go live by itself when the tests "
                                                     "pass, nothing is running and it touches no protected file (deploy.py); "
                                                     "undone by itself if the site does not come back.")
@@ -212,6 +219,9 @@ _ENV = {  # environment variable -> setting (strings are parsed by pydantic)
     "VIDO_STUDIO_WORKERS": "workers",
     "VIDO_STUDIO_JOBS": "jobs",
     "VIDO_STUDIO_ALERT_URL": "alert_url",
+    "VIDO_STUDIO_MODAL_URL": "modal_url",
+    "VIDO_STUDIO_MODAL": "modal_mode",
+    "VIDO_STUDIO_RENDER_PROCESSES": "render_processes",
 }
 
 

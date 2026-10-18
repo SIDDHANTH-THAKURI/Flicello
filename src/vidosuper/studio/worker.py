@@ -25,6 +25,7 @@ RENDERER_GONE = 150  # a renderer lane that has not checked in for this long is 
 STALL_RETRY = 25 * 60  # a step on a renderer that has not moved for this long is taken back and started again
 GIVE_UP_TRIES = 3  # ... and after this many tries the video fails with a plain message (and Try again)
 WATCH_EVERY = 60.0
+WAKE_EVERY = 10.0  # how often waiting steps are checked for a cloud renderer
 
 
 def recover(studio: Studio) -> int:
@@ -132,6 +133,7 @@ def maintain(studio: Studio) -> None:
             db.set_stage(job["project_id"], "failed", error="This step took far too long. The owner has been told.")
         alert(db, s, "stuck", f"A job {why} and was stopped.")
     sweep_uploads(db, s)
+    db.run("DELETE FROM heartbeat WHERE name LIKE 'modal-%' AND at < ?", (now - 86400,))  # cloud renderers come and go
     cutoff = now - s.limits.retention_days * 86400
     old = db.all("SELECT p.* FROM projects p JOIN users u ON u.id = p.user_id WHERE p.deleted=0 AND p.updated < ? "
                  "AND u.role != 'owner'", (cutoff,))
@@ -154,6 +156,7 @@ class Worker:
         self.stop = threading.Event()
         self._last_maintenance = 0.0
         self._last_watch = 0.0
+        self._last_wake = 0.0
 
     def tick(self) -> bool:
         """One round: heartbeat, maintenance when due, and at most one job. True if a job ran."""
@@ -175,6 +178,13 @@ class Worker:
                 log.exception("maintenance failed")
                 alert(db, s, "maintenance", f"Housekeeping failed: {exc}", "warning")
         if s.jobs == "remote":
+            if time.time() - self._last_wake > WAKE_EVERY:  # work the PC isn't taking: a cloud renderer (cloud.py)
+                self._last_wake = time.time()
+                from .cloud import wake
+
+                did = wake(self.studio)
+                if did:
+                    log.info("cloud: %s", did)
             return False  # remote workers claim the jobs (see remote.py); this one only keeps house
         if free_gb(s) < s.limits.min_free_gb * 0.5:
             return False  # nearly out of disk: renders would fail half-way; wait (the alert is out)

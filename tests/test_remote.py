@@ -277,3 +277,110 @@ def test_a_video_can_go_back_to_its_clips_and_a_running_step_can_be_stopped(serv
     server.db.run("UPDATE projects SET stage='review' WHERE id=?", (p["id"],))
     page = client.get(f"/p/{p['id']}").text
     assert "Back to clips and settings" in page and 'class="step-back"' in page
+
+
+# ---------------------------------------------------------------- the cloud renderer (cloud.py, deploy/modal_app.py)
+
+class _Posts:
+    """Stands in for httpx.post to the cloud's wake address."""
+
+    def __init__(self, status: int = 200):
+        self.calls, self.status = [], status
+
+    def __call__(self, url, json=None, headers=None, timeout=None):
+        self.calls.append({"url": url, "json": json, "auth": (headers or {}).get("Authorization", "")})
+        return type("R", (), {"status_code": self.status})()
+
+
+def _friend_job(server, kind="prepare", name="Fay"):
+    token = accounts.create_invite(server.db, server.s, name)
+    friend = accounts.register(server.db, token, name, "a long password 2")
+    p = server.create_project(friend, "Theirs", "9:16", 30, "")
+    return friend, p, server.db.enqueue(kind, p["id"], friend["id"])
+
+
+def test_a_cloud_renderer_never_takes_the_owners_claude_code_steps_and_a_pc_never_takes_a_cloud_test(server):
+    owner, mine = _project(server)
+    server.s.owner_brain = "claude_code"
+    first = server.db.enqueue("prepare", mine["id"], owner["id"], priority=1)
+    _, _, theirs = _friend_job(server)
+    test = server.db.enqueue("selftest", None, None, {}, 1)
+    client = TestClient(create_app(server))
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    cloud = lambda: client.post("/api/worker/claim", headers=auth, json={"worker": "modal-a", "cloud": True}).json()["job"]  # noqa: E731
+    assert cloud()["id"] == test and cloud()["id"] == theirs and cloud() is None  # never the owner's
+    server.db.requeue(test)
+    pc = client.post("/api/worker/claim", headers=auth, json={"worker": "renderer"}).json()["job"]
+    assert pc["id"] == first and client.post("/api/worker/claim", headers=auth, json={"worker": "renderer"}).json()["job"] is None
+
+
+def test_the_site_starts_cloud_renderers_only_for_work_the_pc_isnt_taking(server):
+    import time as _t
+
+    from vidosuper.studio import cloud
+
+    posts = _Posts()
+    assert cloud.wake(server, post=posts) == "" and not posts.calls  # not set up
+    server.s.modal_url = "https://example.modal.run/wake"
+    owner, mine = _project(server)
+    server.s.owner_brain = "claude_code"
+    server.db.enqueue("prepare", mine["id"], owner["id"])
+    assert cloud.wake(server, post=posts) == "" and not posts.calls  # only the owner's step: it waits for the PC
+    _, p, job = _friend_job(server)
+    server.db.heartbeat("renderer", {})
+    assert cloud.wake(server, post=posts) == "" and not posts.calls  # the PC is online and takes it in a moment
+    assert "cloud renderer" not in server.queued_note(server.db.one("SELECT * FROM jobs WHERE id=?", (job,)))
+    later = _t.time() + server.s.modal_wait + 5  # ... unless it has waited too long (the PC is busy)
+    assert cloud.wake(server, now=later, post=posts).startswith("started 1")
+    assert posts.calls[-1]["json"]["n"] == 1 and posts.calls[-1]["auth"] == f"Bearer {TOKEN}"
+    assert cloud.wake(server, now=later + 5, post=posts) == ""  # one is already starting for it
+    server.db.run("UPDATE heartbeat SET at=? WHERE name='renderer'", (_t.time() - 600,))  # the PC goes offline
+    note = server.queued_note(server.db.one("SELECT * FROM jobs WHERE id=?", (job,)))
+    assert "cloud renderer" in note and server.eta(server.db.one("SELECT * FROM jobs WHERE id=?", (job,))) > 60
+    server.db.run("DELETE FROM heartbeat WHERE name='cloud-wake'")
+    assert cloud.wake(server, post=posts).startswith("started")
+    failing = _Posts(500)
+    server.db.run("DELETE FROM heartbeat WHERE name='cloud-wake'")
+    assert cloud.wake(server, post=failing) == ""
+    assert server.db.one("SELECT * FROM alerts WHERE kind='cloud'")  # the owner is told
+    server.s.modal_mode = "off"
+    assert cloud.wake(server, post=posts) == ""
+
+
+def test_a_cloud_renderer_stops_when_idle_reports_its_self_test_and_its_time_goes_on_the_books(server, tmp_path, monkeypatch):
+    from vidosuper.studio import cloud, selftest
+
+    monkeypatch.setattr(selftest, "run", lambda *a, **k: {"ok": True, "cpus": 16, "render_fps": 9.5, "cutout_ms": 80.0,
+                                                          "cutout_on": "CPUExecutionProvider", "speech_model_s": 3.0,
+                                                          "ffmpeg": "ffmpeg version 7", "problems": []})
+    server.s.modal_url = "https://example.modal.run/wake"
+    test = cloud.request_test(server)
+    with pytest.raises(Exception):
+        cloud.request_test(server)  # one at a time
+    worker = RemoteWorker(home=tmp_path / "cloud", http=TestClient(create_app(server)), token=TOKEN, name="modal-x1",
+                          cloud=True)
+    assert worker.run(idle_exit=0.3) == 1  # the test, then nothing for a moment: it stops by itself
+    row = server.db.one("SELECT * FROM jobs WHERE id=?", (test,))
+    assert row["status"] == "done" and "passed" in server.db.steps(test)[-1]["message"]
+    assert "Cloud test passed" in server.db.one("SELECT message FROM alerts WHERE kind='cloud'")["message"]
+    assert server.db.one("SELECT * FROM spend WHERE backend='modal'")["usd"] >= 0
+    assert cloud.status(server)["test"]["status"] == "done"
+    # a real step: its time is paid for and recorded against the video
+    friend, p, job = _friend_job(server, "render", "Gil")
+    monkeypatch.setattr(worker.studio, "_job_render", lambda j, project, person: worker.studio.db.set_stage(project["id"], "done"))
+    assert worker.tick() is True
+    spent = server.db.one("SELECT * FROM spend WHERE backend='modal' AND job_id=?", (job,))
+    assert spent["project_id"] == p["id"] and spent["user_id"] == friend["id"] and spent["task"] == "cloud"
+    assert server.db.one("SELECT info FROM heartbeat WHERE name='modal-x1'")["info"].count('"cloud": true') == 1
+
+
+def test_threads_are_sized_to_the_cpus_a_machine_is_paid_for(monkeypatch):
+    from vidosuper import cpus
+
+    cpus.usable_cpus.cache_clear()
+    monkeypatch.setenv("VIDO_CPUS", "16")
+    assert cpus.usable_cpus() == 16  # a cloud renderer saw 24 (the host) and its parts fought over the cores
+    cpus.usable_cpus.cache_clear()
+    monkeypatch.delenv("VIDO_CPUS")
+    assert 1 <= cpus.usable_cpus() <= (__import__("os").cpu_count() or 64)
+    cpus.usable_cpus.cache_clear()

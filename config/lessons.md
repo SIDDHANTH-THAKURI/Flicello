@@ -158,3 +158,15 @@ merely clean and synced is a 4, not a 7. Be harsh; predict the user's number.
   to fix a spelling. Captions now take multi-word fixes ("get hub" -> "GitHub").
 - Credits: a film uses them by its length, taken at start (the difference if started again), all back if it is
   deleted unfinished, and a refund for an earlier month becomes extra credits so nothing is lost.
+
+## 2026-10-18 · The cloud renderer (Modal)
+- Same worker as the PC, `cloud=True`, in 8-core/16 GiB containers the site wakes (auto: PC first; cloud when the PC
+  is off or a step waited 45 s); the owner's Claude Code steps never go there. A self-test with synthetic footage
+  (selftest.py) found two real bugs before any person's video did:
+  - forked drawing processes hang on Linux when the parent already runs model thread pools (speech model, cut-out):
+    use the "spawn" start method (Windows always spawns, so the PC never showed it);
+  - os.cpu_count() in a container is the host's (24 for 16 vCPUs paid for): every part sized its threads from it and
+    they fought. Sizing to the paid CPUs (VIDO_CPUS=16) took a designed talk from 7.7 to 14.6 frames/s (PC: ~4.5),
+    and keeps Modal's bill (it charges for bursting past the request) equal to what the books record.
+- Four drawing processes beat six (14.6 vs 11.7 frames/s) on 16 vCPUs. CPU only is enough for now; the cut-out is
+  274 ms a frame there, so a GPU is the next step if designed talks grow.

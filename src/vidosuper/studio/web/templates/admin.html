@@ -166,6 +166,24 @@
   </section>
   {% endif %}
 
+  {% set c = health.cloud %}
+  <section class="panel gap-top" id="cloud">
+    <h2>Cloud renderer</h2>
+    {% if c.on %}
+    <p class="lead-s">Modal, mode <b>{{ c.mode }}</b>: {% if c.mode == 'always' %}every step it can run goes there{% else %}your PC goes first; the cloud takes what it can't (everything while the PC is off, a step that waits while it's busy){% endif %}. Your own films stay on the PC (they use your Claude plan). Up to {{ c.max }} at once, about $0.50 an hour each while working.</p>
+    <div class="rows">
+      <div><span class="k">Working now</span><span class="v">{{ c.running }}</span></div>
+      <div><span class="k">Last started</span><span class="v">{{ c.woke|ago if c.woke else 'never' }}</span></div>
+      <div><span class="k">This month</span><span class="v">${{ '%.2f'|format(c.month_usd) }}</span></div>
+      {% if c.test %}<div><span class="k">Last test</span><span class="v">{{ c.test.status }}{% if c.test.message %}: {{ c.test.message }}{% endif %} · {{ c.test.created|ago }}</span></div>{% endif %}
+    </div>
+    <form method="post" action="/admin/cloud-test" class="gap-top"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="btn" type="submit">Test the cloud renderer</button></form>
+    {% else %}
+    <p class="lead-s">Not set up yet: deploy deploy/modal_app.py and set VIDO_STUDIO_MODAL_URL on the server (docs/studio.md).</p>
+    {% endif %}
+  </section>
+
   <section class="panel gap-top" id="credits">
     <h2>Credits</h2>
     <p class="lead-s">What a film uses and what each access level gets every month. New films use the new numbers; films already started keep theirs. Give anyone extra credits in the list below (they don't run out).</p>

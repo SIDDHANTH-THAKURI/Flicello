@@ -167,7 +167,7 @@ LANE_NAMES = {"all": "renderer", "long": "renderer", "quick": "renderer-quick"}
 
 class RemoteWorker:
     def __init__(self, server: str = "", token: str = "", home: Path | None = None, http: httpx.Client | None = None,
-                 name: str = "", lane: str = "all"):
+                 name: str = "", lane: str = "all", cloud: bool = False):
         from .service import Studio
 
         s = load_settings(home or default_home())  # also reads the repo's .env (the token)
@@ -180,6 +180,7 @@ class RemoteWorker:
         if token:
             http.headers["Authorization"] = f"Bearer {token}"
         self.http, self.lane, self.name = http, lane, name or LANE_NAMES[lane]
+        self.cloud = cloud  # a cloud renderer (cloud.py): never the owner's Claude Code steps; its time is paid for
         self.studio = Studio(s)
         self.db = RemoteDB(http)
         self.studio.db = self.db
@@ -216,19 +217,27 @@ class RemoteWorker:
     def recover(self) -> int:
         return _call(self.http, "POST", PREFIX + "/recover", json={"worker": self.name}).json()["requeued"]
 
+    def _beat(self) -> None:
+        self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node(), "music": self.music,
+                                      "cloud": self.cloud})
+
     def tick(self) -> bool:
         """One round: heartbeat, tidy up when due, and at most one job. True if a job ran."""
-        self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node(), "music": self.music})
+        self._beat()
         if time.time() - self._last_purge > PURGE_EVERY:
             self._last_purge = time.time()
             removed = self.purge()
             if removed:
                 log.info("removed %d project copies the server no longer has", removed)
-        data = _call(self.http, "POST", PREFIX + "/claim", json={"lane": self.lane, "worker": self.name}).json()
+        data = _call(self.http, "POST", PREFIX + "/claim", json={"lane": self.lane, "worker": self.name,
+                                                                 "cloud": self.cloud}).json()
         job = data["job"]
         if job is None:
             return False
         self._apply(data["settings"])
+        if job["kind"] == "selftest":
+            self._selftest(job)
+            return True
         uid, pid = job["user_id"], job["project_id"]
         log.info("job %s %s (project %s, try %s)", job["id"], job["kind"], pid, job["attempts"])
         started = time.monotonic()
@@ -253,12 +262,50 @@ class RemoteWorker:
             raise
         self.db.release()
         log.info("job %s finished in %.0fs", job["id"], time.monotonic() - started)
+        if self.cloud:
+            self._spend(job, uid, pid, time.monotonic() - started)
         return True
+
+    def _spend(self, job: dict, uid: str | None, pid: str | None, took: float) -> None:
+        """A cloud renderer's time is paid for: it goes on the same books as the AI (the monthly cap counts it)."""
+        from .brain import BudgetExceeded, Usage
+        from .cloud import CORES, usd_per_second
+
+        try:
+            project = self.db.project(pid) if pid else None
+            self.studio._spender(project, uid, job["id"])(Usage(
+                "cloud", f"modal-{CORES}-cores", "modal", usd=round(took * usd_per_second(), 5), seconds=round(took, 1)))
+        except BudgetExceeded:
+            pass  # the step is done; the cap stops the next AI call, and the owner was told
+        except Exception:  # noqa: BLE001 - the books are not worth losing a finished video over
+            log.exception("could not record the cloud time of job %s", job["id"])
+
+    def _selftest(self, job: dict) -> None:
+        """The owner's check that this machine can make a real video (selftest.py); the result is an alert."""
+        from . import selftest
+        from .alerts import alert
+
+        started = time.monotonic()
+        self.current = job["id"]
+        try:
+            result = selftest.run(lambda f, m: self.db.job_progress(job["id"], f, m),
+                                  self.studio.cfg.analysis.speech_model, self.studio.s.models_dir,
+                                  self.studio.s.render_processes)
+        except Exception as exc:  # noqa: BLE001 - a failed test is a result too
+            result = {"ok": False, "problems": [f"{type(exc).__name__}: {exc}"[:300]]}
+        finally:
+            self.current = None
+        line = selftest.summary(result)
+        self.db.step(job["id"], line[:200])
+        self.db.job_done(job["id"], "done" if result.get("ok") else "failed", None if result.get("ok") else line[:500])
+        alert(self.db, self.studio.s, "cloud", f"{self.name}: {line}", "info" if result.get("ok") else "warning")
+        if self.cloud:
+            self._spend(job, None, None, time.monotonic() - started)
 
     def check(self) -> None:
         """Check in, and drop the running job if the server took it back (its watchdog found it stuck): a stuck step
         can't be stopped from inside, so the whole lane process ends and its supervisor starts it again."""
-        self.db.heartbeat(self.name, {"at": time.time(), "host": platform.node(), "music": self.music})
+        self._beat()
         job = self.current
         if job is None:
             return
@@ -276,12 +323,15 @@ class RemoteWorker:
             except Exception:  # noqa: BLE001 - the next pulse tries again
                 pass
 
-    def run(self, stop=None) -> None:
+    def run(self, stop=None, idle_exit: float | None = None) -> int:
+        """Take jobs until stopped; with `idle_exit` (a cloud renderer), until there has been nothing to do for that
+        many seconds. Returns how many jobs it ran."""
         stop = stop or threading.Event()
         threading.Thread(target=self._pulse, args=(stop,), name="renderer-pulse", daemon=True).start()
         requeued = self.recover()
         if requeued:
             log.warning("put %d interrupted job(s) back in the queue", requeued)
+        done, last = 0, time.monotonic()
         while not stop.is_set():
             try:
                 busy = self.tick()
@@ -292,8 +342,15 @@ class RemoteWorker:
             except Exception:  # noqa: BLE001 - the loop itself must survive anything
                 log.exception("remote worker error")
                 busy = False
+            if busy:
+                done, last = done + 1, time.monotonic()
+            elif idle_exit is not None and time.monotonic() - last > idle_exit:
+                log.info("nothing to do for %.0f s: stopping", idle_exit)
+                break
             if not busy:
-                time.sleep(3.0)
+                time.sleep(3.0 if idle_exit is None else min(3.0, max(0.05, idle_exit / 10)))
+        stop.set()  # the pulse ends with the loop
+        return done
 
 
 def _alive(pid: int) -> bool:
