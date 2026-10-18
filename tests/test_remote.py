@@ -366,6 +366,8 @@ def test_a_cloud_renderer_stops_when_idle_reports_its_self_test_and_its_time_goe
     worker = RemoteWorker(home=tmp_path / "cloud", http=TestClient(create_app(server)), token=TOKEN, name="modal-x1",
                           cloud=True)
     assert worker.run(idle_exit=0.3) == 1  # the test, then nothing for a moment: it stops by itself
+    assert cloud.alive(server.db) == 0  # ... and says so, so the site starts another at once when work comes
+    worker.db.heartbeat("modal-x1", {"cloud": True})
     row = server.db.one("SELECT * FROM jobs WHERE id=?", (test,))
     assert row["status"] == "done" and "passed" in server.db.steps(test)[-1]["message"]
     assert "Cloud test passed" in server.db.one("SELECT message FROM alerts WHERE kind='cloud'")["message"]

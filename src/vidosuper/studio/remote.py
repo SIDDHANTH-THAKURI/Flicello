@@ -327,7 +327,8 @@ class RemoteWorker:
         """Take jobs until stopped; with `idle_exit` (a cloud renderer), until there has been nothing to do for that
         many seconds. Returns how many jobs it ran."""
         stop = stop or threading.Event()
-        threading.Thread(target=self._pulse, args=(stop,), name="renderer-pulse", daemon=True).start()
+        pulse = threading.Thread(target=self._pulse, args=(stop,), name="renderer-pulse", daemon=True)
+        pulse.start()
         requeued = self.recover()
         if requeued:
             log.warning("put %d interrupted job(s) back in the queue", requeued)
@@ -350,6 +351,12 @@ class RemoteWorker:
             if not busy:
                 time.sleep(3.0 if idle_exit is None else min(3.0, max(0.05, idle_exit / 10)))
         stop.set()  # the pulse ends with the loop
+        if self.cloud:  # gone: the site must not count it as running (it would wait instead of starting another)
+            pulse.join(timeout=30)
+            try:
+                self.db.run("DELETE FROM heartbeat WHERE name=?", (self.name,))
+            except Exception:  # noqa: BLE001 - it ages out in a minute anyway
+                pass
         return done
 
 
