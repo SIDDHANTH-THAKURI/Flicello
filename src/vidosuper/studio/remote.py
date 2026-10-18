@@ -113,6 +113,7 @@ class Mirror:
     def _files(self, uid: str, pid: str) -> dict[str, Path]:
         root = user_dir(self.s, uid)
         found = {"profile.json": root / "profile.json"} if (root / "profile.json").is_file() else {}
+        found.update({f"cliplog/{f.name}": f for f in (root / "cliplog").glob("*.json")})
         project = workdir(self.s, uid, pid).root
         if project.exists():
             found.update({f.relative_to(root).as_posix(): f for f in project.rglob("*") if f.is_file()})

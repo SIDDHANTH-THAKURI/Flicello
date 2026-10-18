@@ -63,8 +63,9 @@ class Limits(_Strict):
     chunk_bytes: int = 8 * MB
     retention_days: int = 14  # a project untouched this long is deleted with its footage
     min_free_gb: float = 15.0  # below this much free disk, uploads and new jobs wait
-    monthly_usd: float = 20.0  # AI spend cap per calendar month (real API money only)
-    video_usd: float = 4.0  # AI spend cap for one video, revisions included
+    monthly_usd: float = 60.0  # spend cap per calendar month, everyone's videos together (real money only)
+    video_usd: float = 6.0  # spend cap for one video, revisions included (AI, music, painted looks, cloud rendering)
+    person_day_usd: float = 3.0  # what one person's videos may spend in any 24 hours (the owner is not limited)
     active_jobs_per_user: int = 1
     login_attempts: int = 8  # per 15 minutes per account and per address
 

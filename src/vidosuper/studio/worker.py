@@ -114,6 +114,28 @@ def watch_stages(studio: Studio) -> None:
         maybe_start(studio, reason="; ".join(m for _, m in fresh)[:200])
 
 
+def spend_watch(studio: Studio, now: float | None = None) -> str:
+    """Tell the owner when spending jumps: the last hour against the usual hour of the last week (at least $2,
+    four times the usual), at most once every six hours."""
+    db, s = studio.db, studio.s
+    now = time.time() if now is None else now
+    hour = float(db.value("SELECT COALESCE(SUM(usd), 0) FROM spend WHERE billed=1 AND at > ?", (now - 3600,), 0) or 0)
+    week = float(db.value("SELECT COALESCE(SUM(usd), 0) FROM spend WHERE billed=1 AND at > ? AND at <= ?",
+                          (now - 7 * 86400, now - 3600), 0) or 0)
+    usual = week / (7 * 24 - 1)
+    if hour < max(2.0, 4 * usual):
+        return ""
+    if db.value("SELECT COUNT(*) FROM alerts WHERE kind='spend' AND at > ?", (now - 6 * 3600,), 0):
+        return ""
+    who = db.all("SELECT COALESCE(u.display, u.name, 'someone') AS who, SUM(sp.usd) AS usd FROM spend sp LEFT JOIN users u "
+                 "ON u.id = sp.user_id WHERE sp.billed=1 AND sp.at > ? GROUP BY sp.user_id ORDER BY usd DESC LIMIT 3",
+                 (now - 3600,))
+    top = ", ".join(f"{r['who']} ${r['usd']:.2f}" for r in who)
+    message = f"Spending jumped: ${hour:.2f} in the last hour (usually ${usual:.2f}). Most: {top}."
+    alert(db, s, "spend", message, "warning")
+    return message
+
+
 def maintain(studio: Studio) -> None:
     db, s = studio.db, studio.s
     now = time.time()
@@ -144,6 +166,18 @@ def maintain(studio: Studio) -> None:
         db.run("UPDATE projects SET deleted=1 WHERE id=?", (p["id"],))
         db.run("DELETE FROM clips WHERE project_id=?", (p["id"],))
         log.info("retention: deleted project %s", p["id"])
+    spend_watch(studio, now)
+    from .storage import user_dir
+
+    for u in db.all("SELECT id FROM users"):  # clip logs kept for re-use go when their films would
+        folder = user_dir(s, u["id"]) / "cliplog"
+        if folder.exists():
+            for f in folder.glob("*.json"):
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        f.unlink()
+                except OSError:
+                    pass
     free = free_gb(s)
     if free < s.limits.min_free_gb:
         alert(db, s, "disk", f"Only {free:.0f} GB of disk left: new uploads and jobs wait until there is room.")
@@ -188,6 +222,8 @@ class Worker:
             return False  # remote workers claim the jobs (see remote.py); this one only keeps house
         if free_gb(s) < s.limits.min_free_gb * 0.5:
             return False  # nearly out of disk: renders would fail half-way; wait (the alert is out)
+        if self.studio.paused():
+            return False  # the owner's off switch
         job = db.claim()
         if job is None:
             return False

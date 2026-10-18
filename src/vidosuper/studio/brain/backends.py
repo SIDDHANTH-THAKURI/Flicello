@@ -38,6 +38,15 @@ class BudgetExceeded(BrainError):
     """An AI call would cross a spending cap; the job waits instead."""
 
 
+class PersonLimit(BudgetExceeded):
+    """One person's spending in the last 24 hours reached their daily share: their step carries on by itself once
+    enough of it is more than a day old (`resume_at`)."""
+
+    def __init__(self, message: str, resume_at: float):
+        super().__init__(message)
+        self.resume_at = resume_at
+
+
 @dataclass
 class Usage:
     task: str

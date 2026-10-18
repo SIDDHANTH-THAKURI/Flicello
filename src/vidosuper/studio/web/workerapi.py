@@ -25,10 +25,12 @@ PREFIX = "/api/worker"
 
 
 def manifest(root: Path, pid: str) -> list[dict]:
-    """The files a job may need, relative to the person's folder: their style profile and the project's folder."""
+    """The files a job may need, relative to the person's folder: their style profile, their clip logs (re-used by
+    their next films) and the project's folder."""
     out = []
     prof = root / "profile.json"
     candidates = [prof] if prof.is_file() else []
+    candidates += sorted((root / "cliplog").glob("*.json"))
     project = root / "projects" / pid
     if project.exists():
         candidates += [f for f in project.rglob("*") if f.is_file()]
@@ -41,7 +43,8 @@ def manifest(root: Path, pid: str) -> list[dict]:
 def safe_rel(root: Path, rel: str) -> Path:
     """root/rel, only for the style profile or a file inside one of the person's projects."""
     parts = PurePosixPath(rel or "").parts
-    ok = rel == "profile.json" or (len(parts) >= 3 and parts[0] == "projects")
+    ok = rel == "profile.json" or (len(parts) >= 3 and parts[0] == "projects") or (
+        len(parts) == 2 and parts[0] == "cliplog" and parts[1].endswith(".json"))
     if not ok or "\\" in rel or ":" in rel or any(p in ("..", ".", "") for p in parts) or rel.startswith("/"):
         raise HTTPException(400, "Bad path.")
     path = (root / rel).resolve()
@@ -80,8 +83,8 @@ def mount(app, studio) -> None:
         from ..cloud import pc_only_users
 
         cloud = bool(data.get("cloud"))
-        job = db.claim(lane, str(data.get("worker") or "")[:40] or None, cloud,
-                       tuple(pc_only_users(studio)) if cloud else ())
+        job = None if studio.paused() else db.claim(  # the owner's off switch: nothing new starts
+            lane, str(data.get("worker") or "")[:40] or None, cloud, tuple(pc_only_users(studio)) if cloud else ())
         return json_response({"job": job, "settings": {
             "brain": s.brain, "owner_brain": s.owner_brain,  # money decisions stay the server's
             "limits": s.limits.model_dump(), "models": s.models.model_dump()}})

@@ -835,7 +835,28 @@ def create_app(studio: Studio) -> FastAPI:
                     audit=audit, consents=consents, active="admin", public=s.public_signup, beta=s.beta,
                     requests=requests, tiers=s.tiers, reports=reports, pricing=studio.pricing(),
                     tier_credits=studio.tier_credits(),
-                    balances={u["id"]: studio.credits(u) for u in users if u["role"] != "owner"})
+                    balances={u["id"]: studio.credits(u) for u in users if u["role"] != "owner"},
+                    money=studio.money(), flags={u["id"]: studio.flags(u) for u in users},
+                    day_spend={u["id"]: studio.person_spend(u["id"]) for u in users})
+
+    @app.post("/admin/money")
+    def admin_money(request: Request, csrf: str = Form(""), monthly: float = Form(60.0), video: float = Form(6.0),
+                    person_day: float = Form(3.0)):
+        user, sess = need_owner(request)
+        check_csrf(sess, csrf)
+        try:
+            studio.set_money(monthly, video, person_day)
+        except ActionError as exc:
+            return back("/admin#money", str(exc))
+        return back("/admin#money", "Saved: the new caps count from the next AI call, music or cloud minute.")
+
+    @app.post("/admin/pause")
+    def admin_pause(request: Request, csrf: str = Form(""), on: int = Form(0), why: str = Form("")):
+        user, sess = need_owner(request)
+        check_csrf(sess, csrf)
+        studio.set_paused(bool(on), why)
+        return back("/admin#money", "Paused: nothing new starts; steps already running finish." if on else
+                    "Resumed: waiting steps start again.")
 
     @app.post("/admin/cloud-test")
     def admin_cloud_test(request: Request, csrf: str = Form("")):

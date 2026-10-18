@@ -74,7 +74,7 @@ def wake(studio, now: float | None = None, post=None) -> str:
     import json
 
     s, db = studio.s, studio.db
-    if not configured(s):
+    if not configured(s) or studio.paused():
         return ""
     now = time.time() if now is None else now
     try:

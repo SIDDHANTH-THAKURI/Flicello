@@ -189,3 +189,18 @@ For each beat the router asks: what must be seen? Then it tries sources in order
 1. Use Remotion as the picture engine (recommended)?
 2. Budget: per video for friends, and per month in total?
 3. Start Phase 1 now on the Undertone video?
+
+**Decided 2026-10-18** (the owner asked Claude to decide):
+
+1. **Remotion: yes**, as the motion-graphics layer (titles, kinetic text, designed scenes, transitions) on top of
+   the FFmpeg cutting that works today. Free for Flicello now (Remotion's free licence covers an individual or a
+   company of up to 3 people); past that, its automators tier is $0.01 a render with a $100/month minimum.
+   Generated shots come later from **Higgsfield** (the owner plans to use it): Remotion composes, Higgsfield generates.
+2. **Budget:** $6 per video (AI, music, painted looks and cloud rendering together; a 1-minute film costs about
+   $1-1.50), $60 a month for everyone's films (alerts at 80%), editable on the admin page; and about $40 once for
+   the quality work below (mostly on the owner's Claude plan).
+3. **Phase 1: yes, after the test bench**, so every change is measured: rebuild the Undertone video with Remotion
+   and a real mix until the owner rates it above 8/20.
+
+Build order: money protection (caps, off switch, spend alerts, re-used clip logs, flags) -> test bench -> cheap
+preview + storyboard -> new-ability tracking -> phase 1. Payments and prices wait for the owner (Paddle account).

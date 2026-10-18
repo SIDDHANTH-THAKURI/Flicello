@@ -140,6 +140,24 @@ class Pipeline:
         self.project = Project(work.clips, cfg)
 
     # ------------------------------------------------------------ analyse
+    def cliplog_dir(self) -> Path | None:
+        """Where this person's clip logs are kept for their next films (users/<id>/cliplog), or None outside the
+        studio. Kept as long as their films are (the retention time), and only ever used for the same person."""
+        root = self.work.root
+        return root.parent.parent / "cliplog" if root.parent.name == "projects" else None
+
+    def log_tag(self) -> str | None:
+        """Which brain logged a clip (the analyst's instructions and model): a log is re-used only by the same one.
+        The no-AI brain's logs are free to make again, so they are never kept."""
+        import hashlib
+
+        models = getattr(self.brain, "models", None)
+        if self.brain is None or getattr(self.brain, "kind", "local") == "local" or models is None:
+            return None
+        from .brain.context import prompt
+
+        return hashlib.sha1((prompt("analyst") + models.analyst).encode("utf-8")).hexdigest()[:10]
+
     def analyse(self, length: float = 30.0, pace: str = "balanced") -> dict:
         """Everything the story steps need; finished parts are kept, so a retry only redoes what failed."""
         t0 = time.monotonic()
@@ -155,11 +173,26 @@ class Pipeline:
         by_id = {c.clip_id: c for c in usable}
         todo = [t for t in tasks["clips"] if catalog_check(project, by_id[t["clip_id"]])[1]]
         done = [0]
+        logs, tag = self.cliplog_dir(), self.log_tag()
+        for task in list(todo):  # a clip this person's earlier film already had logged: no new AI call
+            clip = by_id[task["clip_id"]]
+            kept = logs / f"{clip.fingerprint[:24]}-{tag}.json" if logs and tag else None
+            if kept is not None and kept.exists():
+                try:
+                    analysis = ClipAnalysis.model_validate_json(kept.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                analysis.clip_id = clip.clip_id
+                write_text_atomic(analysis_path(project, clip.clip_id), analysis.model_dump_json(indent=1))
+                todo.remove(task)
 
         def watch(task: dict) -> None:
             clip = by_id[task["clip_id"]]
             analysis = self.brain.analyse_clip(clip, brief_text(Path(task["brief"])), [Path(s) for s in task["sheets"]])
             write_text_atomic(analysis_path(project, clip.clip_id), analysis.model_dump_json(indent=1))
+            if logs and tag:
+                logs.mkdir(parents=True, exist_ok=True)
+                write_text_atomic(logs / f"{clip.fingerprint[:24]}-{tag}.json", analysis.model_dump_json(indent=1))
             done[0] += 1
             self.progress(0.35 + 0.5 * done[0] / len(todo), f"Watched {done[0]} of {len(todo)} clips")
 

@@ -117,6 +117,7 @@ process data in the United States. Privacy laws in these countries may differ fr
 | Information | How long |
 |---|---|
 | Projects: footage, songs, recordings, pitches, videos | Deleted with their files {{ retention_days }} days after you last worked on the project, or straight away when you delete it |
+| What the AI noted about each of your clips (kept so a new film from the same clips isn't analysed again; only ever used for your own films) | Deleted {{ retention_days }} days after it was made, or straight away when you delete your account |
 | Account information and style profile | Until you delete your account |
 | Sign-ins | Each one lasts 60 days after you last used Flicello, and ends after a year at most |
 | Email sign-in codes | Expire after 10 minutes; removed within a day |

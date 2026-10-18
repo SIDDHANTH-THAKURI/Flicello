@@ -8,10 +8,10 @@ from pathlib import Path
 
 from ...schemas import ClipSignals
 from ..settings import BrainKind, StudioSettings
-from .backends import ApiBackend, BrainError, BudgetExceeded, ClaudeCodeBackend, SpendFn, Usage
+from .backends import ApiBackend, BrainError, BudgetExceeded, ClaudeCodeBackend, PersonLimit, SpendFn, Usage
 from .core import Brain, LocalBrain, StoryContext
 
-__all__ = ["Brain", "LocalBrain", "StoryContext", "BrainError", "BudgetExceeded", "Usage", "make_brain", "brain_kind_for"]
+__all__ = ["Brain", "LocalBrain", "StoryContext", "BrainError", "BudgetExceeded", "PersonLimit", "Usage", "make_brain", "brain_kind_for"]
 
 
 def brain_kind_for(settings: StudioSettings, owner: bool) -> BrainKind:

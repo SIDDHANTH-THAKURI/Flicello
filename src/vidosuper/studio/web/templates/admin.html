@@ -25,7 +25,9 @@
         <span class="flag plain"><i class="pulse-dot" data-health-dot></i><span data-health="worker">worker…</span></span>
         <span class="flag {{ 'on' if public or beta else 'off' }}">{{ 'Closed beta: anyone may ask, you approve' if beta else ('Sign-up open to everyone' if public else 'Sign-up by invite only') }}</span>
         {% if requests %}<span class="flag off">{{ requests|length }} waiting for access</span>{% endif %}
-        <span class="flag {{ 'on' if health.month_usd < health.cap_usd else 'off' }}">AI budget {{ 'within cap' if health.month_usd < health.cap_usd else 'at cap' }}</span>
+        <span class="flag {{ 'on' if health.month_usd < health.cap_usd else 'off' }}">Spending {{ 'within cap' if health.month_usd < health.cap_usd else 'at cap' }}</span>
+        {% if health.paused %}<a class="flag off" href="#money">Everything is paused</a>{% endif %}
+        {% set flagged = flags.values()|select|list|length %}{% if flagged %}<a class="flag off" href="#people">{{ flagged }} account{{ '' if flagged == 1 else 's' }} to look at</a>{% endif %}
       </div>
     </div>
   </header>
@@ -166,6 +168,30 @@
   </section>
   {% endif %}
 
+  <section class="panel gap-top" id="money">
+    <h2>Money protection</h2>
+    <p class="lead-s">Spending caps (AI, music, painted looks and cloud rendering together). This month so far: ${{ '%.2f'|format(health.month_usd) }} of ${{ '%.2f'|format(money.monthly_usd) }}. A video or a person that reaches its cap waits (a person's carries on by itself a day later); the month's cap pauses everyone and tells you. Your own films are never capped.</p>
+    <form method="post" action="/admin/money" class="credit-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="field"><span>Each month ($)</span><input class="input num-in" type="number" name="monthly" min="1" step="1" value="{{ '%g'|format(money.monthly_usd) }}"></label>
+      <label class="field"><span>Each video ($)</span><input class="input num-in" type="number" name="video" min="0.5" step="0.5" value="{{ '%g'|format(money.video_usd) }}"></label>
+      <label class="field"><span>Each person, a day ($)</span><input class="input num-in" type="number" name="person_day" min="0.5" step="0.5" value="{{ '%g'|format(money.person_day_usd) }}"></label>
+      <button class="btn" type="submit">Save</button>
+    </form>
+    <form method="post" action="/admin/pause" class="gap-top pause-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% if health.paused %}
+      <p class="lead-s"><b>Everything is paused</b> since {{ health.paused.at|ago }}{% if health.paused.why %}: {{ health.paused.why }}{% endif %}. People see a calm note; their videos carry on when you resume.</p>
+      <input type="hidden" name="on" value="0"><button class="btn-sun" type="submit"><span>Resume everything</span></button>
+      {% else %}
+      <input type="hidden" name="on" value="1">
+      <label class="field"><span>Off switch <small class="muted">(why, for you: optional)</small></span><input class="input" name="why" maxlength="200" placeholder="Spending looks wrong"></label>
+      <button class="btn danger" type="submit">Pause everything</button>
+      <p class="help">Nothing new starts (steps already running finish), no cloud renderer starts, and people are told it's a short pause.</p>
+      {% endif %}
+    </form>
+  </section>
+
   {% set c = health.cloud %}
   <section class="panel gap-top" id="cloud">
     <h2>Cloud renderer</h2>
@@ -198,7 +224,7 @@
     <p class="help">A 30 s film from clips uses {{ pricing.per_minute }}; a 2-minute voice video with a painted look uses {{ 2 * pricing.per_minute + pricing.looks }}; a 10-minute film uses {{ 10 * pricing.per_minute }}. Measured costs and pricing ideas: docs/proposals/big-uploads-and-cost.md.</p>
   </section>
 
-  <section class="panel gap-top">
+  <section class="panel gap-top" id="people">
     <h2>People</h2>
     <p class="lead-s">{{ users|length }} account{{ '' if users|length == 1 else 's' }} · {{ consents.yes or 0 }} of {{ consents.n or 0 }} opted in to product emails.</p>
     <div class="people-tools">
@@ -207,11 +233,12 @@
     </div>
     <div class="scroll-x">
       <table class="people people-list">
-        <thead><tr><th>Person</th><th>Joined</th><th>Signs in with</th><th>Films</th><th>Credits</th><th>Access</th><th>Last seen</th><th>AI $</th><th></th></tr></thead>
+        <thead><tr><th>Person</th><th>Joined</th><th>Signs in with</th><th>Films</th><th>Credits</th><th>Access</th><th>Last seen</th><th>Spent $</th><th></th></tr></thead>
         <tbody>
         {% for u in users %}
         <tr class="{{ 'off' if u.disabled }}">
-          <td><b>{{ u.display or u.name }}</b>{% if u.role == 'owner' %} · owner{% endif %}<br><span class="muted">{{ u.email or 'no email' }}</span></td>
+          <td><b>{{ u.display or u.name }}</b>{% if u.role == 'owner' %} · owner{% endif %}<br><span class="muted">{{ u.email or 'no email' }}</span>
+            {% for f in flags.get(u.id, []) %}<br><span class="flag off mini">{{ f }}</span>{% endfor %}</td>
           <td>{{ u.created|ago }}<br><span class="muted">{{ u.joined_by or 'invite' }}</span></td>
           <td><span class="ways">{% if u.google_sub %}<i>Google</i>{% endif %}{% if u.email %}<i>Code</i>{% endif %}{% if u.passkeys %}<i>Passkey</i>{% endif %}{% if u.pw %}<i>Password</i>{% endif %}</span></td>
           <td>{{ u.films }} <span class="muted">/ {{ u.projects }} started</span></td>
@@ -232,7 +259,7 @@
               <button class="link" type="submit">Set</button>
             </form>{% else %}owner{% endif %}</td>
           <td>{{ u.last_seen|ago if u.last_seen else '–' }}</td>
-          <td>{{ '%.2f'|format(u.usd) }}</td>
+          <td>{{ '%.2f'|format(u.usd) }}{% if day_spend.get(u.id) %}<br><span class="muted">{{ '%.2f'|format(day_spend[u.id]) }} today</span>{% endif %}</td>
           <td>{% if u.role != 'owner' %}
             <form method="post" action="/admin/user"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="uid" value="{{ u.id }}">
               {% if u.disabled %}<button class="link" name="action" value="enable" type="submit">Switch on</button>

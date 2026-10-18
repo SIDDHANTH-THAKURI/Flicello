@@ -24,7 +24,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .alerts import alert
-from .brain import BrainError, BudgetExceeded, Usage, brain_kind_for, make_brain
+from .brain import BrainError, BudgetExceeded, PersonLimit, Usage, brain_kind_for, make_brain
 from .brain.context import look_from_note, pace_from_note
 from .brain.schemas import DesignPlan, Direction, StoryPitch
 from .db import DB
@@ -275,6 +275,59 @@ class Studio:
 
     def pricing(self) -> dict:
         return {**self.s.pricing.model_dump(), **self._config("pricing", {})}
+
+    # ------------------------------------------------------------------ money protection: caps and the off switch
+    def money(self) -> dict:
+        """The spending caps in force: the settings' defaults, changed by the owner on the admin page."""
+        lim = self.s.limits
+        base = {"monthly_usd": lim.monthly_usd, "video_usd": lim.video_usd, "person_day_usd": lim.person_day_usd}
+        return {**base, **{k: float(v) for k, v in self._config("money", {}).items() if k in base}}
+
+    def set_money(self, monthly: float, video: float, person_day: float) -> None:
+        for v in (monthly, video, person_day):
+            if not 0 < float(v) <= 10000:
+                raise ActionError("Use amounts between $0.01 and $10,000.")
+        if float(video) > float(monthly):
+            raise ActionError("One video's cap can't be more than the whole month's.")
+        self._set_config("money", {"monthly_usd": round(float(monthly), 2), "video_usd": round(float(video), 2),
+                                   "person_day_usd": round(float(person_day), 2)})
+
+    def paused(self) -> dict | None:
+        """The owner's off switch: while on, no new step starts (running ones finish) and people are told why."""
+        return self._config("paused", None)
+
+    def set_paused(self, on: bool, why: str = "") -> None:
+        if on:
+            self._set_config("paused", {"at": time.time(), "why": " ".join((why or "").split())[:200]})
+            alert(self.db, self.s, "paused", "Everything is paused: no new step starts until you resume.", "warning")
+        else:
+            self.db.run("DELETE FROM config WHERE key='paused'")
+
+    def person_spend(self, user_id: str, hours: float = 24.0) -> float:
+        return float(self.db.value("SELECT COALESCE(SUM(usd), 0) FROM spend WHERE user_id=? AND billed=1 AND at > ?",
+                                   (user_id, time.time() - hours * 3600), 0) or 0)
+
+    def flags(self, user: dict) -> list[str]:
+        """Why an account may need a look (the admin page shows them; switching it off is one click there)."""
+        if user["role"] == "owner":
+            return []
+        out = []
+        day = time.time() - 86400
+        spent = self.person_spend(user["id"])
+        if spent >= self.money()["person_day_usd"] * 2 / 3:
+            out.append(f"spent ${spent:.2f} in a day")
+        failed = self.db.value("SELECT COUNT(*) FROM jobs WHERE user_id=? AND status='failed' AND finished > ?",
+                               (user["id"], day), 0) or 0
+        if failed >= 4:
+            out.append(f"{failed} failed steps in a day")
+        films = self.db.value("SELECT COUNT(*) FROM projects WHERE user_id=? AND created > ?", (user["id"], day), 0) or 0
+        if films >= 6:
+            out.append(f"{films} films started in a day")
+        gb = (self.db.value("SELECT COALESCE(SUM(size), 0) FROM uploads WHERE user_id=? AND created > ? AND status='done'",
+                            (user["id"], day), 0) or 0) / 1e9
+        if gb >= 5:
+            out.append(f"{gb:.1f} GB uploaded in a day")
+        return out
 
     def tier_credits(self) -> dict[str, int]:
         return {**{name: t.credits for name, t in self.s.tiers.items()}, **self._config("tier_credits", {})}
@@ -529,6 +582,8 @@ class Studio:
 
     def _enqueue(self, project: dict, kind: str, params: dict | None = None) -> int:
         user = self.user(project["user_id"])
+        if self.paused() and user and not self.is_owner(user):
+            raise ActionError("Flicello is paused for a moment. Try again a little later: nothing you've made is lost.")
         if kind in JOB_STAGE and user and not self.is_owner(user):
             busy = self.db.value("SELECT COUNT(*) FROM jobs WHERE user_id=? AND status IN ('queued','running','waiting') "
                                  "AND kind != 'learn'", (user["id"],), 0)
@@ -1197,14 +1252,30 @@ class Studio:
                          u.input_tokens, u.output_tokens, u.cache_write, u.cache_read, u.usd, int(u.billed), u.seconds))
             if not u.billed:
                 return
+            money = self.money()
             month = self.db.month_spend()
-            cap = self.s.limits.monthly_usd
+            cap = money["monthly_usd"]
             if month >= 0.8 * cap:
-                alert(self.db, self.s, "budget", f"AI spend this month is ${month:.2f} of the ${cap:.2f} cap.", "warning")
+                alert(self.db, self.s, "budget", f"Spend this month is ${month:.2f} of the ${cap:.2f} cap.", "warning")
             if month >= cap:
-                raise BudgetExceeded(f"the monthly AI budget (${cap:.2f}) is used up")
-            if project and self.db.project_spend(project["id"]) >= self.s.limits.video_usd:
-                raise BudgetExceeded(f"this video reached its AI budget (${self.s.limits.video_usd:.2f})")
+                raise BudgetExceeded(f"the monthly budget (${cap:.2f}) is used up")
+            if project and self.db.project_spend(project["id"]) >= money["video_usd"]:
+                raise BudgetExceeded(f"this video reached its budget (${money['video_usd']:.2f})")
+            person = self.user(user_id) if user_id else None
+            if person and not self.is_owner(person):
+                window = time.time() - 86400
+                spent = self.person_spend(user_id)
+                if spent >= money["person_day_usd"]:
+                    # back once enough of the last day's spending is more than a day old
+                    rows = self.db.all("SELECT at, usd FROM spend WHERE user_id=? AND billed=1 AND at > ? ORDER BY at",
+                                       (user_id, window))
+                    over, resume = spent - money["person_day_usd"] * 0.8, time.time() + 3600
+                    for r in rows:
+                        over -= r["usd"]
+                        if over <= 0:
+                            resume = r["at"] + 86400
+                            break
+                    raise PersonLimit(f"this account's daily share (${money['person_day_usd']:.2f}) is used", resume)
         return spend
 
     def _pipeline(self, job: dict, project: dict, user: dict, lo: float = 0.0, hi: float = 1.0) -> Pipeline:
@@ -1234,12 +1305,25 @@ class Studio:
             self.db.job_done(job["id"], "cancelled", "project or person gone")
             return
         handler = getattr(self, f"_job_{job['kind']}")
+        if project["stage"] == "paused" and job["kind"] in JOB_STAGE:  # carrying on after a wait
+            self.db.set_stage(project["id"], JOB_STAGE[job["kind"]])
         try:
-            if job["kind"] in JOB_STAGE and self.s.limits.monthly_usd <= self.db.month_spend() \
+            if job["kind"] in JOB_STAGE and self.money()["monthly_usd"] <= self.db.month_spend() \
                     and brain_kind_for(self.s, self.is_owner(user)) == "api":
-                raise BudgetExceeded("the monthly AI budget is used up")
+                raise BudgetExceeded("the monthly budget is used up")
             handler(job, project, user)
             self.db.job_done(job["id"])
+        except PersonLimit as exc:
+            wait = max(60.0, exc.resume_at - time.time())
+            self.db.requeue(job["id"], delay=wait, error=str(exc))
+            self.db.step(job["id"], "Waiting: this account's share for today is used")
+            if job["kind"] in JOB_STAGE:
+                hours = wait / 3600
+                when = f"in about {hours:.0f} hour{'s' if round(hours) != 1 else ''}" if hours >= 1.5 else \
+                    f"in about {max(1, int(wait // 60))} minutes"
+                self.db.set_stage(project["id"], "paused", note=(
+                    f"Paused: your account has used today's share of AI and rendering. It carries on by itself {when}; "
+                    "you can leave this page."))
         except BudgetExceeded as exc:
             self.db.run("UPDATE jobs SET status='waiting', error=? WHERE id=?", (str(exc), job["id"]))
             if job["kind"] in JOB_STAGE:
@@ -1814,7 +1898,11 @@ class Studio:
 
     def queued_note(self, job: dict | None) -> str:
         """What a waiting video says while remote rendering is on and no renderer is online."""
-        if not job or job["status"] != "queued" or self.s.jobs != "remote":
+        if not job or job["status"] != "queued":
+            return ""
+        if self.paused():
+            return "Flicello is paused for a moment. Your video carries on by itself when it's back; you can leave this page."
+        if self.s.jobs != "remote":
             return ""
         from . import cloud
 
@@ -1847,7 +1935,8 @@ class Studio:
             "free_gb": round(free_gb(self.s), 1),
             "month_usd": round(self.db.month_spend(), 3),
             "month_usd_all": round(self.db.month_spend(billed_only=False), 3),
-            "cap_usd": self.s.limits.monthly_usd,
+            "cap_usd": self.money()["monthly_usd"],
+            "paused": self.paused(),
             "cloud": cloud_status(self),
         }
 

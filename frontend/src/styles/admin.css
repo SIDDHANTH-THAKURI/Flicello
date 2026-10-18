@@ -156,3 +156,9 @@
 .credit-form .num-in { width: 7rem; }
 .people .give { display: inline-flex; gap: .35rem; align-items: center; margin-top: .3rem; }
 .people .give .num { width: 4.2rem; }
+
+/* money protection: the off switch, and accounts to look at */
+.pause-form { display: grid; gap: .6rem; justify-items: start; }
+.pause-form .field { width: min(28rem, 100%); }
+.flag.mini { font-size: .72rem; padding: .12rem .5rem; margin-top: .25rem; }
+a.flag { text-decoration: none; }

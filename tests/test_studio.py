@@ -1535,3 +1535,107 @@ def test_credits_from_an_earlier_month_come_back_as_extra_ones(studio, monkeypat
     studio.delete_project(studio.db.project(p["id"]))
     c = studio.credits(studio.user(friend["id"]))
     assert c["monthly_left"] == 3 and c["extra"] == 1  # September's credit isn't lost
+
+
+def test_money_protection_caps_a_persons_day_pauses_everything_and_flags_accounts(studio, media, monkeypatch):
+    import time as _t
+
+    from vidosuper.studio.brain import Usage
+    from vidosuper.studio.service import ActionError
+    from vidosuper.studio.worker import spend_watch
+
+    friend = _friend(studio, "Mia")
+    owner = _owner(studio)
+    assert studio.money() == {"monthly_usd": 60.0, "video_usd": 6.0, "person_day_usd": 3.0}
+    with pytest.raises(ActionError):
+        studio.set_money(10, 20, 3)  # a video's cap above the month's
+    studio.set_money(100, 5, 2)
+    assert studio.money()["person_day_usd"] == 2.0
+    # a person's daily share: the step waits and carries on by itself, the page says when
+    p = studio.create_project(friend, "Busy", "9:16", 15, "")
+    job_id = studio.db.enqueue("pitch", p["id"], friend["id"])
+    studio.db.set_stage(p["id"], "pitching")
+    spend = studio._spender(p, friend["id"], job_id)
+    spend(Usage("pitch", "m", "api", usd=1.5))
+    job = studio.db.claim()
+
+    def costly(job, project, user):
+        studio._spender(project, user["id"], job["id"])(Usage("pitch", "m", "api", usd=0.8))
+
+    monkeypatch.setattr(studio, "_job_pitch", costly)
+    studio.run_job(job)
+    row = studio.db.one("SELECT * FROM jobs WHERE id=?", (job_id,))
+    p = studio.db.project(p["id"])
+    assert row["status"] == "queued" and row["after"] > _t.time() + 3600 and p["stage"] == "paused"
+    assert "carries on by itself" in p["note"] and studio.flags(studio.user(friend["id"]))
+    # the owner is never capped
+    o = studio.create_project(owner, "Mine", "9:16", 15, "")
+    studio._spender(o, owner["id"], 0)(Usage("pitch", "m", "api", usd=4.0))
+    # when it runs again, the video shows its step again
+    studio.db.run("UPDATE jobs SET after=NULL WHERE id=?", (job_id,))
+    studio.db.run("DELETE FROM spend WHERE user_id=?", (friend["id"],))
+    monkeypatch.setattr(studio, "_job_pitch", lambda job, project, user: None)
+    studio.run_job(studio.db.claim())
+    assert studio.db.project(p["id"])["stage"] == "pitching"
+    # the off switch: nothing new starts, people are told, the owner still can
+    studio.set_paused(True, "checking the bill")
+    with pytest.raises(ActionError, match="paused"):
+        studio._enqueue(studio.db.project(p["id"]), "sample")
+    queued = studio.db.one("SELECT * FROM jobs WHERE id=?", (studio.db.enqueue("learn", p["id"], friend["id"]),))
+    assert "paused for a moment" in studio.queued_note(queued)
+    studio._enqueue(studio.db.project(o["id"]), "learn")
+    studio.set_paused(False)
+    assert studio.paused() is None
+    # a jump in spending is told once
+    now = _t.time()
+    studio.db.run("INSERT INTO spend(at, user_id, task, model, backend, usd, billed) VALUES (?,?,?,?,?,?,1)",
+                  (now - 60, friend["id"], "pitch", "m", "api", 5.0))
+    assert "Spending jumped" in spend_watch(studio, now) and spend_watch(studio, now) == ""
+
+
+def test_the_admin_page_sets_the_caps_and_the_off_switch(studio):
+    _owner(studio)
+    admin = TestClient(create_app(studio))
+    admin.post("/login", data={"name": "owner", "password": "a long password 1"})
+    page = admin.get("/admin").text
+    assert "Money protection" in page and "Pause everything" in page
+    csrf = _csrf(page)
+    admin.post("/admin/money", data={"csrf": csrf, "monthly": 80, "video": 7, "person_day": 4})
+    assert studio.money() == {"monthly_usd": 80.0, "video_usd": 7.0, "person_day_usd": 4.0}
+    admin.post("/admin/pause", data={"csrf": csrf, "on": 1, "why": "test"})
+    assert studio.paused()["why"] == "test" and "Everything is paused" in admin.get("/admin").text
+    admin.post("/admin/pause", data={"csrf": csrf, "on": 0})
+    assert studio.paused() is None
+
+
+def test_a_persons_next_film_from_the_same_clips_reuses_their_clip_logs(studio, media, monkeypatch):
+    from vidosuper.studio.brain.core import LocalBrain
+    from vidosuper.studio.pipeline import Pipeline
+
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    monkeypatch.setattr(Pipeline, "log_tag", lambda self: "t1")  # as if an AI logged them
+    calls: list = []
+    real = LocalBrain.analyse_clip
+
+    def counted(self, clip, brief, sheets):
+        calls.append(clip.clip_id)
+        return real(self, clip, brief, sheets)
+
+    monkeypatch.setattr(LocalBrain, "analyse_clip", counted)
+    friend = _friend(studio, "Lou")
+    client, csrf = _signed_in(studio, "Lou")
+    for k in range(2):
+        r = client.post("/new", data={"csrf": csrf, "title": f"Film {k}", "shapes": "9:16", "length": 15, "intent": ""},
+                        follow_redirects=False)
+        pid = r.headers["location"].rsplit("/", 1)[1]
+        for name in ("a_stable.mp4", "c_pan.mp4"):
+            _upload(client, csrf, pid, media / "clips" / name, "clip")
+        client.post(f"/p/{pid}/start", data={"csrf": csrf})
+        _drain(studio)
+        assert studio.db.project(pid)["stage"] == "understood", studio.db.all("SELECT * FROM events")
+        assert len(calls) == 2  # the second film logged nothing again
+    logs = list((studio.s.users_dir / friend["id"] / "cliplog").glob("*.json"))
+    assert len(logs) == 2
+    from vidosuper.studio.web.workerapi import manifest
+
+    assert any(f["path"].startswith("cliplog/") for f in manifest(studio.s.users_dir / friend["id"], pid))
