@@ -36,9 +36,28 @@ export const useLevels = (file?: string): number[] => {
   return levels;
 };
 
-export const gradeFilter = (g: Plan['grade']) =>
-  `contrast(${g.contrast}) saturate(${g.saturate}) brightness(${g.brightness}) sepia(${Math.max(0, g.warmth)})` +
-  (g.warmth < 0 ? ` hue-rotate(${g.warmth * 40}deg)` : '');
+// One grade for everything (his room, his cut-out, the scenes, the screens), as an SVG filter: colour pulled down,
+// then per-channel curves: an S for contrast, shadows cooled, highlights warmed (skin stays warm, rooms go moody).
+export const GradeDefs: React.FC<{ g: Plan['grade'] }> = ({ g }) => {
+  const curve = (lift: number, gain: number) => {
+    const pts = [0, 0.1, 0.25, 0.42, 0.6, 0.78, 0.92, 1];
+    const s = (x: number) => x - (g.contrast - 1) * 0.35 * Math.sin(2 * Math.PI * x); // an S around the middle
+    return pts.map((x) => Math.min(1, Math.max(0, lift * (1 - x) + s(x) * gain * g.brightness)).toFixed(3)).join(' ');
+  };
+  const w = g.warmth;
+  return (
+    <svg width="0" height="0" style={{ position: 'absolute' }}>
+      <filter id="grade" colorInterpolationFilters="sRGB" x="0" y="0" width="100%" height="100%">
+        <feColorMatrix type="saturate" values={String(g.saturate)} />
+        <feComponentTransfer>
+          <feFuncR type="table" tableValues={curve(0.0, 1 + 0.04 * w)} />
+          <feFuncG type="table" tableValues={curve(0.012, 1)} />
+          <feFuncB type="table" tableValues={curve(0.05, 1 - 0.05 * w)} />
+        </feComponentTransfer>
+      </filter>
+    </svg>
+  );
+};
 
 export const Grain: React.FC<{ amount: number }> = ({ amount }) => {
   const frame = useCurrentFrame();
@@ -57,12 +76,13 @@ export const Grain: React.FC<{ amount: number }> = ({ amount }) => {
   );
 };
 
+// darker edges, and the top of the frame held down a little (a bright ceiling or sky pulls the eye off a face)
 export const Vignette: React.FC<{ amount: number }> = ({ amount }) =>
   amount <= 0 ? null : (
     <AbsoluteFill
       style={{
         pointerEvents: 'none',
-        background: `radial-gradient(ellipse 75% 62% at 50% 46%, rgba(0,0,0,0) 55%, rgba(0,0,0,${amount}) 100%)`,
+        background: `radial-gradient(ellipse 72% 58% at 50% 50%, rgba(0,0,0,0) 48%, rgba(0,0,0,${amount}) 100%), linear-gradient(180deg, rgba(0,0,0,${amount * 0.8}) 0%, rgba(0,0,0,0) 30%)`,
       }}
     />
   );
