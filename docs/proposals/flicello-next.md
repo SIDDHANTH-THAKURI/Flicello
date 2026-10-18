@@ -182,3 +182,7 @@ Agreed order (2026-10-17): 1 PC renderer (done), 2 abuse limits + payments, 3 un
 - Music made for each film (ElevenLabs), read back, heard and changed before anything is cut.
 - Still open on item 8: a daily AI cap per person, an admin kill switch, alerts on spend jumps, re-use of an
   already analysed clip, a flag for unusual accounts.
+- Item 2 done 2026-10-18: the cloud renderer on Modal (deploy/modal_app.py, studio/cloud.py, docs/studio.md). Auto
+  mode: the PC first, the cloud while it is off or busy; the owner's own films stay on the PC. Measured live with
+  the self-test: a designed talk draws at 10-15 frames/s in the cloud (the PC: ~4.5); about $0.50 an hour while
+  working, nothing while idle. Next if designed talks grow: a GPU for the cut-out (274-322 ms a frame on CPU).
