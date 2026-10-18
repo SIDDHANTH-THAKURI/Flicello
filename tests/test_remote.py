@@ -343,6 +343,12 @@ def test_the_site_starts_cloud_renderers_only_for_work_the_pc_isnt_taking(server
     server.db.run("DELETE FROM heartbeat WHERE name='cloud-wake'")
     assert cloud.wake(server, post=failing) == ""
     assert server.db.one("SELECT * FROM alerts WHERE kind='cloud'")  # the owner is told
+    # a cloud test is for the cloud only: it starts one at once, even with the PC online and idle
+    server.db.run("DELETE FROM jobs")
+    server.db.run("DELETE FROM heartbeat WHERE name='cloud-wake'")
+    server.db.heartbeat("renderer", {})
+    cloud.request_test(server)
+    assert cloud.wake(server, post=posts).startswith("started 1")
     server.s.modal_mode = "off"
     assert cloud.wake(server, post=posts) == ""
 

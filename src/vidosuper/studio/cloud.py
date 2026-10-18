@@ -81,7 +81,8 @@ def wake(studio, now: float | None = None, post=None) -> str:
         jobs = cloud_jobs(studio, now)
         if not jobs:
             return ""
-        if s.modal_mode == "auto" and pc_online(db, now):
+        cloud_only = any(j["kind"] == "selftest" for j in jobs)  # no PC ever takes these: no point waiting for one
+        if s.modal_mode == "auto" and pc_online(db, now) and not cloud_only:
             waited = now - min(max(j["created"], j["after"] or 0.0) for j in jobs)
             if waited < s.modal_wait:
                 return ""  # the PC is online and takes it in a moment
