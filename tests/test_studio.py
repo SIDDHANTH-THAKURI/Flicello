@@ -830,7 +830,7 @@ def test_a_video_needs_no_song_and_the_note_picks_one_shot_per_beat(studio, medi
     pid = r.headers["location"].rsplit("/", 1)[1]
     assert studio.db.project(pid)["pace"] == "every"  # the note said so, the default chip didn't
     page = client.get(f"/p/{pid}").text
-    assert "How I read your note" in page and "one shot per hit" in page and "optional" in page
+    assert "How I read your note" in page and "one shot per hit" in page and "music made for your film, or none" in page
     assert "Takes" in page  # the estimate for the whole video
     for name in ("a_stable.mp4", "c_pan.mp4"):
         _upload(client, csrf, pid, media / "clips" / name, "clip")
@@ -1261,7 +1261,7 @@ def test_a_talk_with_clean_labels_checks_what_was_heard_then_makes_a_sample_and_
     client.post(f"/p/{pid}/start", data={"csrf": csrf})
     _drain(studio)
     page = client.get(f"/p/{pid}").text
-    assert "make a sample" in page and "Understood" in page, studio.db.all("SELECT * FROM events")
+    assert "make a sample" in page and studio.db.project(pid)["stage"] == "understood", studio.db.all("SELECT * FROM events")
     client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": "Sleep is the secret to a strong memory",
                                               "terms_more": "secret = Secret\nPeople"})
     terms = json.loads(studio.db.project(pid)["brief"])["terms"]

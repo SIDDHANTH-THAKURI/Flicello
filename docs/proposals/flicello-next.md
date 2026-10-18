@@ -170,3 +170,15 @@ Agreed order (2026-10-17): 1 PC renderer (done), 2 abuse limits + payments, 3 un
   person (profile taste); painted backdrops with camera moves; painted props in the look; a frosted text backing.
   Needs GEMINI_API_KEY on the renderer (Tier 1, prepaid).
 - An allow-list for sign-in (three emails); the owner account linked to Google.
+
+## Done 2026-10-18
+
+- The owner's 10-point list: closed beta with approvals, renderer lanes, a watchdog, a live step log, problem reports,
+  faster designed talks, more freedom on a new film, going back, lighter uploads (see config/lessons.md).
+- Item 7, first half: "check what I understood" before any idea, for every kind of film (clips; talking and voice
+  videos with their parts and the names spelt their way). Still open: the cheap preview before the full render.
+- Item 4, first half: credits (per minute of film, monthly per access level, extra ones from the owner, refunds),
+  editable on the admin page. Still open: Paddle checkout, plans, billing page (needs the owner's Paddle account).
+- Music made for each film (ElevenLabs), read back, heard and changed before anything is cut.
+- Still open on item 8: a daily AI cap per person, an admin kill switch, alerts on spend jumps, re-use of an
+  already analysed clip, a flag for unusual accounts.
