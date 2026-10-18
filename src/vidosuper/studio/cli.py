@@ -148,6 +148,32 @@ def digest(days: float = typer.Option(None, help="Look back this many days (defa
     console.print(f"Saved: {escape(str(path))}")
 
 
+@studio_app.command("testbench")
+def testbench(case: list[str] = typer.Option(None, "--case", help="Only these cases (repeat it); default: all"),
+              brain: str = typer.Option("local", help="local (free: the structure) or claude_code (your Claude plan)"),
+              spend: bool = typer.Option(False, help="Allow paid services (painted looks, ElevenLabs, the API)")) -> None:
+    """Make the test bench's videos with today's code and score them (testbench.py). Open the report after."""
+    from .testbench import run
+
+    if brain not in ("local", "claude_code", "api"):
+        raise typer.BadParameter("local, claude_code or api")
+    _logging()
+    folder = run(brain, case or None, spend, say=lambda m: console.print(escape(m)))
+    console.print(f"Report: {escape(str(folder.parent / 'index.html'))}")
+
+
+@studio_app.command("testbench-rate")
+def testbench_rate(run_name: str = typer.Argument(..., help="The run's folder name (see the report)"),
+                   case: str = typer.Argument(..., help="The case id"),
+                   score: float = typer.Argument(..., help="Out of 20"),
+                   note: str = typer.Option("", help="The owner's words")) -> None:
+    """Log the owner's rating of one test bench video; the report shows it over time."""
+    from .testbench import rate
+
+    rate(run_name, case, score, note)
+    console.print(f"[green]Logged[/] {score:g}/20 for {escape(case)} in {escape(run_name)}")
+
+
 @studio_app.command("bench")
 def bench(project: str = typer.Option(None, help="Only this project id")) -> None:
     """Plan every finished video again with today's code (no AI, no render) and record the numbers next to the git

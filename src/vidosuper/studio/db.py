@@ -95,6 +95,10 @@ CREATE TABLE IF NOT EXISTS credits(
   note TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS credits_user ON credits(user_id, month);
 CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT NOT NULL, at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS gaps(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, user_id TEXT, project_id TEXT, ability TEXT NOT NULL,
+  words TEXT NOT NULL DEFAULT '', notify INTEGER NOT NULL DEFAULT 0, told REAL);
+CREATE INDEX IF NOT EXISTS gaps_ability ON gaps(ability, at);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, project_id TEXT, job_id INTEGER, level TEXT NOT NULL,
   message TEXT NOT NULL);
@@ -174,6 +178,8 @@ class DB:
             con.execute("ALTER TABLE jobs ADD COLUMN worker TEXT")
         if "abort" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:  # the watchdog took it back
             con.execute("ALTER TABLE jobs ADD COLUMN abort REAL")
+        if "board" not in {r[1] for r in con.execute("PRAGMA table_info(plans)")}:  # the storyboard of a plan (board.py)
+            con.execute("ALTER TABLE plans ADD COLUMN board TEXT")
         if "style" not in {r[1] for r in con.execute("PRAGMA table_info(renders)")}:  # how a voice/talk video was drawn
             con.execute("ALTER TABLE renders ADD COLUMN style TEXT")
         # public sign-up: people are found by email or Google account; `name` stays the unique handle

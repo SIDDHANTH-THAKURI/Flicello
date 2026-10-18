@@ -1639,3 +1639,119 @@ def test_a_persons_next_film_from_the_same_clips_reuses_their_clip_logs(studio, 
     from vidosuper.studio.web.workerapi import manifest
 
     assert any(f["path"].startswith("cliplog/") for f in manifest(studio.s.users_dir / friend["id"], pid))
+
+
+def test_the_test_bench_makes_scores_and_reports_its_videos_and_reuses_what_it_measured(tmp_path, media, monkeypatch):
+    import yaml
+
+    from vidosuper.studio import testbench
+
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    monkeypatch.setenv("VIDO_BENCH_HOME", str(tmp_path / "bench"))
+    (tmp_path / "bench").mkdir()
+    (tmp_path / "bench" / "cases.yaml").write_text(yaml.safe_dump([
+        {"id": "synthetic", "clips": str(media / "clips"), "length": 10, "why": "the test clips"},
+        {"id": "synthetic-fast", "clips": str(media / "clips"), "length": 10, "pace": "fast", "why": "same clips"},
+    ]), encoding="utf-8")
+    monkeypatch.setattr(testbench, "_studio", lambda home, brain, spend: _bench_studio(home))
+    folder = testbench.run("local", say=lambda m: None)
+    run = json.loads((folder / "run.json").read_text(encoding="utf-8"))
+    assert [r["case"] for r in run["results"]] == ["synthetic", "synthetic-fast"]
+    assert all(r["ok"] for r in run["results"]), run["results"]
+    assert (folder / "synthetic.mp4").exists() and 0 <= run["results"][0]["score"] <= 100
+    studio = _bench_studio(tmp_path / "bench" / "home")
+    assert studio.db.value("SELECT COUNT(*) FROM projects", (), 0) == 1  # one project for the shared footage
+    testbench.rate(folder.name, "synthetic", 11, "fine, a bit flat")
+    page = (tmp_path / "bench" / "runs" / "index.html").read_text(encoding="utf-8")
+    assert "11/20" in page and "synthetic-fast" in page and "<svg" in page
+    with pytest.raises(SystemExit):
+        testbench.rate(folder.name, "synthetic", 25)
+
+
+def _bench_studio(home):
+    s = load_settings(home, {"brain": "local", "owner_brain": "local", "render_preset": "ultrafast", "render_processes": 1})
+    s.limits.min_free_gb = 0.0
+    return Studio(s)
+
+
+def test_storyboard_changes_are_made_by_code_and_only_notes_go_to_the_ai():
+    from vidosuper.studio.board import apply_edits, shot_beats
+
+    plan = _plan([PlanShot(kind="cut", beats=8, key="k1"), PlanShot(kind="stutter", beats=0.5, count=8, key="k2"),
+                  PlanShot(kind="cut", beats=4, key="k3"), PlanShot(kind="hit", beats=8, key="k4"),
+                  PlanShot(kind="hold", beats=8, key="k5")])
+    ctx = _ctx()
+    total = sum(shot_beats(s) for s in plan.plan)
+    moved, notes = apply_edits(plan, ctx, {"move": {"0": 1}})
+    assert [s.key for s in moved.plan][:2] == ["k2", "k1"] and [s.kind for s in moved.plan][:2] == ["stutter", "cut"]
+    assert notes == [] and sum(shot_beats(s) for s in moved.plan) == total  # each shot keeps its length
+    dropped, _ = apply_edits(plan, ctx, {"drop": [2]})
+    assert len(dropped.plan) == 4 and sum(shot_beats(s) for s in dropped.plan) == total and "k3" not in {m.key for m in dropped.pool}
+    swapped, _ = apply_edits(plan, ctx, {"swap": {"4": "c01#1"}})
+    assert swapped.plan[4].key == "c01_1_swap" and any(m.key == "c01_1_swap" and m.clip == "c01" for m in swapped.pool)
+    _, notes = apply_edits(plan, ctx, {"notes": {"3": "too dark"}})
+    assert len(notes) == 1 and notes[0].startswith("Shot 4") and "too dark" in notes[0]
+
+
+def test_the_sample_comes_with_a_storyboard_and_a_rough_cut_and_changes_to_it_make_a_new_sample(studio, media, monkeypatch):
+    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
+    friend = _friend(studio, "Sky")
+    client, csrf = _signed_in(studio, "Sky")
+    r = client.post("/new", data={"csrf": csrf, "title": "Board", "shapes": "9:16", "length": 15, "intent": ""},
+                    follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    for name in ("a_stable.mp4", "c_pan.mp4"):
+        _upload(client, csrf, pid, media / "clips" / name, "clip")
+    client.post(f"/p/{pid}/start", data={"csrf": csrf})
+    _drain(studio)
+    _agree(client, csrf, pid, studio)
+    pitch_id = studio.pitches(studio.db.project(pid))[0]["id"]
+    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": pitch_id})
+    _drain(studio)
+    p = studio.db.project(pid)
+    assert p["stage"] == "review", studio.db.all("SELECT * FROM events")
+    board = studio.board(p, studio.renders(p, "sample")[0]["plan_id"])
+    assert board and board["cards"] and board["rough"] and all(c["thumb"] for c in board["cards"])
+    work = studio.s.users_dir / friend["id"] / "projects" / pid
+    assert (work / "out" / board["rough"]).exists() and (work / "stills" / board["cards"][0]["thumb"]).exists()
+    page = client.get(f"/p/{pid}").text
+    assert "The storyboard" in page and "The whole film, rough" in page and board["rough"] in page
+    before = json.loads(studio.latest_plan(p)["data"])
+    n = len(board["cards"])
+    assert client.post(f"/p/{pid}/board", data={"csrf": csrf}, follow_redirects=True).text.count("Mark at least one shot") == 1
+    client.post(f"/p/{pid}/board", data={"csrf": csrf, "move_0": "1"})
+    _drain(studio)
+    p = studio.db.project(pid)
+    after = json.loads(studio.latest_plan(p)["data"])
+    assert p["stage"] == "review" and studio.latest_plan(p)["kind"] == "board"
+    if n > 1:
+        assert [s["key"] for s in after["plan"]][:2] == [s["key"] for s in before["plan"]][1::-1], (
+            studio.db.all("SELECT message FROM events WHERE message LIKE 'storyboard%'"), before["plan"][:3])
+    assert "Moved shot 1 later" in client.get(f"/p/{pid}").text
+    assert p["sample_tries"] == 0  # moving shots is free
+
+
+def test_what_cant_be_done_yet_is_said_plainly_counted_for_the_owner_and_told_when_ready(studio):
+    from vidosuper.studio import abilities
+
+    friend = _friend(studio, "Gia")
+    client, csrf = _signed_in(studio, "Gia")
+    r = client.post("/new", data={"csrf": csrf, "title": "Gig", "shapes": "9:16", "length": 30,
+                                  "intent": "Put the lyrics on screen and a split screen for the chorus"}, follow_redirects=False)
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    page = client.get(f"/p/{pid}").text
+    assert "Not possible yet" in page and "song&#39;s words on screen" in page and "split screen" in page.lower()
+    assert [g["ability"] for g in abilities.for_project(studio.db, studio.db.project(pid))] == ["lyrics", "split"]
+    client.post(f"/p/{pid}/gap", data={"csrf": csrf, "ability": "lyrics"})
+    assert "tell you when it can" in client.get(f"/p/{pid}").text
+    assert not abilities.find("A calm walk, cut on the beat", "montage")
+    assert not abilities.find("subtitles please", "talk")  # talking videos have captions
+    _owner(studio)
+    admin = TestClient(create_app(studio))
+    admin.post("/login", data={"name": "owner", "password": "a long password 1"})
+    page = admin.get("/admin").text
+    assert "Asked for, not possible yet" in page and "ready: tell them" in page
+    studio.s.mail_outbox = True
+    assert studio.tell_gap("lyrics") in (0, 1)
+    assert studio.db.one("SELECT told FROM gaps WHERE ability='lyrics'")["told"]
+    assert studio.export(studio.user(friend["id"]))["asked_for_not_possible_yet"][0]["ability"] == "lyrics"

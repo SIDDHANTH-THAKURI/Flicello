@@ -156,6 +156,8 @@ def maintain(studio: Studio) -> None:
         alert(db, s, "stuck", f"A job {why} and was stopped.")
     sweep_uploads(db, s)
     db.run("DELETE FROM heartbeat WHERE name LIKE 'modal-%' AND at < ?", (now - 86400,))  # cloud renderers come and go
+    # what was asked for stays counted, but the request's words go when the film would have
+    db.run("UPDATE gaps SET words='', project_id=NULL WHERE at < ? AND words != ''", (now - s.limits.retention_days * 86400,))
     cutoff = now - s.limits.retention_days * 86400
     old = db.all("SELECT p.* FROM projects p JOIN users u ON u.id = p.user_id WHERE p.deleted=0 AND p.updated < ? "
                  "AND u.role != 'owner'", (cutoff,))

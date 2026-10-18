@@ -88,6 +88,19 @@
       <p class="help">Not right? Start a new film with a different note or cutting style.</p>
     </section>
     {% endif %}
+    {% if gaps %}
+    <section class="panel notice rise d3">
+      <h2>Not possible yet</h2>
+      {% for g in gaps %}
+      <div class="gap-row">
+        <p class="lead-s"><b>{{ g.name|capitalize }}</b>: Flicello can't do that yet, so this film won't have it. Instead: {{ g.closest }}.</p>
+        {% if g.notify %}<p class="help">✓ We'll tell you when it can.</p>{% else %}
+        <form method="post" action="/p/{{ p.id }}/gap"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="ability" value="{{ g.ability }}">
+          <button class="link" type="submit">Tell me when it can</button></form>{% endif %}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
 
     {% if p.song_seconds and p.song_seconds < p.length - 1 and p.kind == 'montage' %}
     <section class="panel notice rise d3">
@@ -435,13 +448,19 @@
 
 {# ------------------------------------------------------------------ check the sample #}
 {% elif p.stage == 'review' and sample %}
-<p class="page-sub rise d2">A short sample, to check the feel before the whole film is made.{% if info and info.changes %} It starts at the part that changed.{% endif %}</p>
+<p class="page-sub rise d2">{% if board and board.rough %}The whole film, rough, and a short part at full quality: check the story and the feel before the whole film is made.{% else %}A short sample, to check the feel before the whole film is made.{% endif %}{% if info and info.changes %} The sample starts at the part that changed.{% endif %}</p>
 {% if info and info.changes %}
 <section class="panel notice rise"><h2>What I changed</h2><div class="rows">{% for line in info.changes %}<div><span class="v">{{ line }}</span></div>{% endfor %}</div></section>
 {% endif %}
 <div class="screens gap-top rise d2">
+  {% if board and board.rough %}
   <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}"><div class="frame">
-    <video src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video></div></figure>
+    <video src="/m/{{ p.id }}/out/{{ board.rough }}" controls playsinline preload="metadata"></video></div>
+    <figcaption>The whole film, rough · {{ board.seconds|mmss }}</figcaption></figure>
+  {% endif %}
+  <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}"><div class="frame">
+    <video src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video></div>
+    {% if board and board.rough %}<figcaption>A short part, at full quality</figcaption>{% endif %}</figure>
 </div>
 <div class="split gap-top">
   <form method="post" action="/p/{{ p.id }}/sample" class="panel start">
@@ -464,6 +483,39 @@
     {% endif %}
   </section>
 </div>
+{% if board and board.cards %}
+<section class="panel gap-top storyboard rise d3" id="storyboard">
+  <h2>The storyboard</h2>
+  <p class="lead-s">Every shot of the film, in order. Drop one, move it, swap it for another moment, or say what's wrong with it: only those shots change, and you get a new sample.</p>
+  <form method="post" action="/p/{{ p.id }}/board">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <ol class="sb-grid {{ 'tall' if sample.shape == '9:16' else 'wide' }}">
+      {% for c in board.cards %}
+      <li class="sb-card{% if c.drop %} on-drop{% endif %}">
+        {% if c.thumb %}<img src="/m/{{ p.id }}/stills/{{ c.thumb }}" alt="Shot {{ loop.index }}" loading="lazy">{% endif %}
+        <div class="sb-meta"><b>{{ loop.index }}</b><span>{{ c.start|mmss }}–{{ c.end|mmss }}</span>{% if c.drop %}<i>the drop</i>{% endif %}</div>
+        <p class="sb-what">{{ c.what|noids }}</p>
+        <details class="sb-edit"><summary>Change</summary>
+          <label class="tick"><input type="checkbox" name="drop_{{ c.k }}" value="1"><span>Drop it</span></label>
+          <div class="sb-move"><span>Move</span>
+            {% if not loop.first %}<label><input type="radio" name="move_{{ c.k }}" value="-1"> earlier</label>{% endif %}
+            {% if not loop.last %}<label><input type="radio" name="move_{{ c.k }}" value="1"> later</label>{% endif %}</div>
+          {% if board.alternatives %}<label class="field"><span>Swap for</span><select class="input" name="swap_{{ c.k }}"><option value="">Keep it</option>{% for a in board.alternatives %}<option value="{{ a.id }}">{{ a.id }}: {{ a.what|noids|truncate(48) }}</option>{% endfor %}</select></label>{% endif %}
+          <label class="field"><span>What's wrong with it?</span><input class="input" name="note_{{ c.k }}" maxlength="300" placeholder="Too dark / a later moment"></label>
+        </details>
+      </li>
+      {% endfor %}
+    </ol>
+    <button class="btn-sun wide gap-top" type="submit"><span>Remake the sample with my changes</span></button>
+    <p class="help">Dropping, moving and swapping are free; a note goes to the AI for that shot only.</p>
+  </form>
+  {% if board.alternatives %}
+  <details class="more gap-top"><summary>Other moments you could swap in ({{ board.alternatives|length }})</summary>
+    <ul class="sb-alts {{ 'tall' if sample.shape == '9:16' else 'wide' }}">{% for a in board.alternatives %}<li><img src="/m/{{ p.id }}/stills/{{ a.thumb }}" alt="" loading="lazy"><b>{{ a.id }}</b><span>{{ a.what|noids }}</span></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
 
 {# ------------------------------------------------------------------ done #}
 {% elif p.stage == 'done' %}

@@ -491,7 +491,11 @@ class Studio:
                      pace, kind, "none" if kind != "montage" or requirements.wants_no_music(intent) else "made", style,
                      " ".join((cut_note or "").split())[:400], max(0, min(100, int(improvise))), "natural", routed))
         workdir(self.s, user["id"], pid).ensure()
-        return self.db.project(pid)
+        project = self.db.project(pid)
+        from . import abilities
+
+        abilities.note(self.db, project, " ".join([intent, cut_note or "", describe or ""]))
+        return project
 
     def shapes(self, project: dict) -> list[str]:
         return ["9:16", "16:9"] if project["shapes"] == "both" else [project["shapes"]]
@@ -531,7 +535,7 @@ class Studio:
         self.db.run("DELETE FROM projects WHERE user_id=?", (user["id"],))
         self.db.run("UPDATE spend SET user_id=NULL, project_id=NULL WHERE user_id=?", (user["id"],))
         self.db.run("UPDATE audit SET user_id=NULL, ip=NULL, detail='' WHERE user_id=?", (user["id"],))
-        for table in ("sessions", "devices", "passkeys", "challenges", "consents", "jobs", "credits"):
+        for table in ("sessions", "devices", "passkeys", "challenges", "consents", "jobs", "credits", "gaps"):
             self.db.run(f"DELETE FROM {table} WHERE user_id=?", (user["id"],))
         if user.get("email"):
             self.db.run("DELETE FROM login_codes WHERE email=?", (user["email"],))
@@ -570,6 +574,8 @@ class Studio:
             "ai_spend_usd": round(self.db.value("SELECT SUM(usd) FROM spend WHERE user_id=?", (user["id"],), 0) or 0, 4),
             "credits": self.db.all("SELECT at, kind, monthly, extra, project_id, note FROM credits WHERE user_id=? "
                                    "ORDER BY id", (user["id"],)),
+            "asked_for_not_possible_yet": self.db.all("SELECT at, ability, words, notify FROM gaps WHERE user_id=? "
+                                                      "ORDER BY id", (user["id"],)),
             "exported": time.time(),
         }
 
@@ -1190,6 +1196,63 @@ class Studio:
         self.db.set_stage(project["id"], to)
         self.db.event(project["id"], f"Stopped the {job['kind']} step; back to '{to}'.", "info", job["id"])
 
+    def edit_board(self, project: dict, form: dict) -> None:
+        """Their changes to the storyboard (drop, move, swap, a note on a shot): a new sample with them."""
+        self._guard(project, "review")
+        if project["kind"] != "montage":
+            raise ActionError("That can't be done for this video.")
+        edits: dict = {"drop": [], "move": {}, "swap": {}, "notes": {}}
+        for key, value in form.items():
+            kind, _, k = key.partition("_")
+            if not k.isdigit() or value in (None, "", "0"):
+                continue
+            if kind == "drop":
+                edits["drop"].append(int(k))
+            elif kind == "move" and str(value) in ("-1", "1"):
+                edits["move"][k] = int(value)
+            elif kind == "swap" and "#" in str(value):
+                edits["swap"][k] = str(value)[:20]
+            elif kind == "note" and str(value).strip():
+                edits["notes"][k] = " ".join(str(value).split())[:300]
+        if not any(edits.values()):
+            raise ActionError("Mark at least one shot to change.")
+        if edits["notes"]:  # a note costs an AI call: the same limit as notes on the sample
+            if project["sample_tries"] >= MAX_SAMPLE_TRIES:
+                raise ActionError("Let's try a different story instead: go back and pick another idea.")
+            self.db.run("UPDATE projects SET sample_tries=sample_tries+1 WHERE id=?", (project["id"],))
+        self._enqueue(project, "sample", {"pitch": project["chosen"], "edits": edits})
+
+    def want_gap(self, project: dict, ability: str) -> None:
+        """They want to hear when an ability they asked for exists (the owner tells them from the admin page)."""
+        if not self.db.one("SELECT id FROM gaps WHERE project_id=? AND ability=?", (project["id"], ability)):
+            raise ActionError("That wasn't something this film asked for.")
+        self.db.run("UPDATE gaps SET notify=1 WHERE project_id=? AND ability=?", (project["id"], ability))
+
+    def tell_gap(self, ability: str) -> int:
+        """The owner says an ability has shipped: everyone who asked to hear is emailed (once). Returns how many."""
+        from . import mail
+        from .abilities import BY_ID
+
+        rows = self.db.all("SELECT g.id, u.email, COALESCE(u.display, u.name) AS who FROM gaps g JOIN users u ON "
+                           "u.id = g.user_id WHERE g.ability=? AND g.notify=1 AND g.told IS NULL", (ability,))
+        name = BY_ID[ability].name if ability in BY_ID else ability
+        sent = 0
+        for r in rows:
+            if r["email"] and mail.available(self.s):
+                site = (self.s.site_url or "").rstrip("/")
+                try:
+                    mail.send(self.s, r["email"], *mail.notice_email(self.s, "Flicello can do it now", [
+                        f"You asked Flicello for {name}. It can do that now.", f"Make a film with it: {site}/new"]))
+                    sent += 1
+                except Exception:  # noqa: BLE001 - marked as told anyway; the owner sees the count
+                    log.warning("could not email about a new ability")
+            self.db.run("UPDATE gaps SET told=? WHERE id=?", (time.time(), r["id"]))
+        return sent
+
+    def board(self, project: dict, plan_id: int | None) -> dict | None:
+        row = self.db.one("SELECT board FROM plans WHERE id=? AND project_id=?", (plan_id, project["id"])) if plan_id else None
+        return json.loads(row["board"]) if row and row["board"] else None
+
     def back_to_ideas(self, project: dict) -> None:
         self._guard(project, "review")
         if project["kind"] != "montage" and not self.pitches(project):
@@ -1743,6 +1806,9 @@ class Studio:
                     terms.append({"heard": heard[:80], "written": (written or heard)[:80]})
             brief["terms"] = terms[:24]
         self.db.run("UPDATE projects SET brief=?, updated=? WHERE id=?", (json.dumps(brief), time.time(), project["id"]))
+        from . import abilities
+
+        abilities.note(self.db, project, " ".join([brief["story"], *brief["must"], brief.get("music", "")]))
         self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
         self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0 WHERE id=?", (project["id"],))
         if project["kind"] == "montage" or uses_looks(project):  # stories, or looks to pick from
@@ -1778,18 +1844,46 @@ class Studio:
     def _job_sample(self, job, project, user):
         if project["kind"] != "montage":
             return self._job_explainer(job, project, user, "sample")
+        from . import board
+        from .brain.core import check_plan
+
         pipe = self._pipeline(job, project, user)
         ctx = self._context(pipe, project, user)
         pid, pitch = self._chosen(project, job["params"].get("pitch"))
         note = job["params"].get("note", "")
-        plan = pipe.design(ctx, pitch, note)
+        edits = job["params"].get("edits")
+        changes: list[str] = []
+        row = self.latest_plan(project) if edits else None
+        if edits and row is not None:  # their storyboard changes: by code, and the AI only for the shots with a note
+            plan, notes = board.apply_edits(DesignPlan.model_validate_json(row["data"]), ctx, edits)
+            changes = edit_lines(edits)
+            problems = check_plan(plan, ctx, taste=False)  # their choices win over the rules of taste
+            if problems:
+                self.db.event(project["id"], "storyboard: their changes left " + "; ".join(problems)[:500], "info", job["id"])
+            if notes or problems:
+                self.db.job_progress(job["id"], 0.1, "Changing the shots you marked")
+                plan = pipe.revise(ctx, pitch, plan, "\n".join(
+                    ["The person changed the storyboard themselves; keep their changes."] + notes
+                    + [f"Fix only this, which their changes left: {p}" for p in problems]
+                    + ["Keep every other shot exactly as it is."]))
+                changes += [f"Shot change you asked for: {n.split(': ', 1)[-1]}" for n in notes]
+        else:
+            plan = pipe.design(ctx, pitch, note)
         plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
-                              (project["id"], "design", pid, plan.model_dump_json(), time.time()))
+                              (project["id"], "board" if edits else "design", pid, plan.model_dump_json(), time.time()))
         if note:  # shown with the new sample, so a change they asked for can be checked at once
+            changes = [f"You said: {note}", *[x.strip() for x in plan.notes.split(";") if x.strip()][:4]]
+        if changes:
             info = json.loads(project["info"] or "{}")
-            info["changes"] = [f"You said: {note}", *[x.strip() for x in plan.notes.split(";") if x.strip()][:4]]
+            info["changes"] = changes
             self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
         shape = self.shapes(project)[0]
+        self.db.job_progress(job["id"], 0.2, "Drawing the storyboard and a rough cut of the whole film")
+        try:
+            sb = board.build(pipe, ctx, plan, shape, f"p{plan_id}")
+            self.db.run("UPDATE plans SET board=? WHERE id=?", (json.dumps(sb), plan_id))
+        except Exception as exc:  # noqa: BLE001 - the storyboard helps; the sample still comes
+            self.db.event(project["id"], f"storyboard skipped: {type(exc).__name__}: {exc}"[:300], "warn", job["id"])
         self._note_requirements(project, self._montage_requirements(project, user, ctx, plan, None), "sample")
         info = pipe.sample(ctx, plan, shape, f"sample-{plan_id}", look=look_from_note(project["intent"], self.profile(user).look))
         self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, created) "
@@ -1945,6 +2039,14 @@ def cloud_status(studio) -> dict:
     from .cloud import status
 
     return status(studio)
+
+
+def edit_lines(edits: dict) -> list[str]:
+    """What they changed on the storyboard, in their words (shown with the new sample)."""
+    lines = [f"Dropped shot {int(k) + 1}" for k in sorted(edits.get("drop") or [])]
+    lines += [f"Moved shot {int(k) + 1} {'later' if int(v) > 0 else 'earlier'}" for k, v in (edits.get("move") or {}).items()]
+    lines += [f"Shot {int(k) + 1} now uses {v}" for k, v in (edits.get("swap") or {}).items()]
+    return lines
 
 
 def stage_label(stage: str) -> str:

@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from ..outro.tail import Tail
 
 
-EncodedPeakCeiling = -0.5  # dBFS: decoded AAC peaks above this risk clipping in some players
+EncodedPeakCeiling = -1.2  # dBTP: platforms ask for true peaks under -1 dB (their own re-encode clips above it)
 
 
 def resolve_sound(source: str, clips: dict, project: Project) -> Path:
@@ -43,11 +43,27 @@ def resolve_sound(source: str, clips: dict, project: Project) -> Path:
     return decode_music(source, project.music)
 
 
+def true_peak(data: np.ndarray, chunk: int = 480_000) -> float:
+    """The highest peak between samples too (4x oversampled, as BS.1770 measures it): an encoded file whose samples
+    stay under a ceiling can still swing over it between them, and that is what clips on a phone."""
+    from scipy.signal import resample_poly
+
+    peak = 0.0
+    for c in range(data.shape[1]):
+        x = data[:, c]
+        for a in range(0, len(x), chunk):
+            seg = x[max(0, a - 64): a + chunk + 64]
+            if seg.size:
+                peak = max(peak, float(np.abs(resample_poly(seg, 4, 1)).max()))
+    return peak
+
+
 def decoded_peak_db(video: Path, scratch: Path) -> float:
+    """The true peak of the encoded file's sound, in dB."""
     run_ffmpeg(["-i", str(video), "-vn", "-c:a", "pcm_f32le", str(scratch)], what="Could not decode audio for checking")
     data, _ = sf.read(str(scratch), dtype="float32", always_2d=True)
     scratch.unlink(missing_ok=True)
-    peak = float(np.abs(data).max()) if data.size else 0.0
+    peak = true_peak(data) if data.size else 0.0
     return 20 * np.log10(peak) if peak > 0 else -120.0
 
 
@@ -164,9 +180,12 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
                     "-movflags", "+faststart", str(out_path)], what="Could not write the final file")
 
     mux(mix_path)
-    # AAC encoding can overshoot the limiter's ceiling on spiky material; check the decoded result.
-    peak_db = decoded_peak_db(out_path, work / "check.wav")
-    if peak_db > EncodedPeakCeiling:
+    # AAC encoding can overshoot the limiter's ceiling on spiky material (a beat's sharp kicks): check the decoded
+    # result's true peak, and bring the whole mix down until it is under the ceiling (twice at most).
+    for _ in range(2):
+        peak_db = decoded_peak_db(out_path, work / "check.wav")
+        if peak_db <= EncodedPeakCeiling:
+            break
         mix *= float(10 ** ((EncodedPeakCeiling - 0.2 - peak_db) / 20))
         write_wav(mix_path, mix)
         mux(mix_path)

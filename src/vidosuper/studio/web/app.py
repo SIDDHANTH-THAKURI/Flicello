@@ -102,6 +102,9 @@ class Redirect(Exception):
         self.url = url
 
 
+from .. import abilities  # noqa: E402 - what people ask for that can't be done yet
+
+
 def create_app(studio: Studio) -> FastAPI:
     s = studio.s
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -472,6 +475,8 @@ def create_app(studio: Studio) -> FastAPI:
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
                     note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
+                    board=studio.board(p, samples[0]["plan_id"]) if samples and p["kind"] == "montage" else None,
+                    gaps=abilities.for_project(studio.db, p),
                     info=json.loads(p["info"]) if p["info"] else None,
                     revisions_left=None if studio.is_owner(user) else max(0, s.limits.revisions_per_video - p["revisions"]),
                     chunk=s.limits.chunk_bytes)
@@ -558,6 +563,23 @@ def create_app(studio: Studio) -> FastAPI:
     @app.post("/p/{pid}/stop")
     def stop(request: Request, pid: str, csrf: str = Form("")):
         return act(request, csrf, pid, lambda u, p: studio.stop(p))
+
+    @app.post("/p/{pid}/gap")
+    def gap(request: Request, pid: str, csrf: str = Form(""), ability: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.want_gap(p, ability))
+
+    @app.post("/admin/gap")
+    def admin_gap(request: Request, csrf: str = Form(""), ability: str = Form("")):
+        user, sess = need_owner(request)
+        check_csrf(sess, csrf)
+        n = studio.tell_gap(ability)
+        return back("/admin#gaps", f"Told {n} {'person' if n == 1 else 'people'} it's ready.")
+
+    @app.post("/p/{pid}/board")
+    async def board_edit(request: Request, pid: str):
+        form = await request.form()
+        data = {k: form.get(k) for k in form.keys()}
+        return act(request, str(form.get("csrf", "")), pid, lambda u, p: studio.edit_board(p, data))
 
     @app.post("/p/{pid}/sample")
     def sample(request: Request, pid: str, csrf: str = Form(""), verdict: str = Form(""), note: str = Form("")):
@@ -837,6 +859,7 @@ def create_app(studio: Studio) -> FastAPI:
                     tier_credits=studio.tier_credits(),
                     balances={u["id"]: studio.credits(u) for u in users if u["role"] != "owner"},
                     money=studio.money(), flags={u["id"]: studio.flags(u) for u in users},
+                    gaps=abilities.summary(db),
                     day_spend={u["id"]: studio.person_spend(u["id"]) for u in users})
 
     @app.post("/admin/money")

@@ -329,3 +329,25 @@ remote worker (`src/vidosuper/studio/remote.py`, `cloud=True`), started by the s
   with no one's footage and reports its speed in Alerts.
 - **After a code change:** `modal deploy deploy/modal_app.py` again (the code is mounted, so it's quick), as well
   as the server deploy.
+
+## Money protection, the storyboard, the test bench, what can't be done yet (2026-10-18)
+
+- **Money protection** (admin, "Money protection"): caps for the month (everyone's films), each video, and each person
+  per 24 hours (AI, music, painted looks and cloud rendering together; the owner's films are never capped). A person
+  over their share waits and carries on by itself; the page says when. "Pause everything": nothing new starts, no
+  cloud renderer starts, people see a calm note. Spending jumps (the last hour against the usual hour) alert the
+  owner, and accounts that spend fast, fail a lot, start many films or upload a lot are flagged on the admin page.
+  What the AI noted about a clip is kept per person (users/<id>/cliplog, for the retention time) so their next film
+  from the same clips doesn't pay for it again.
+- **Storyboard and rough cut** (films from clips, on the sample page): one frame per shot with its time, plus the whole
+  film as those frames on the real beats with the song. Drop, move (whole shots trade places) and swap are done by
+  code and keep the person's choice even against the rules of taste (`check_plan(taste=False)` only fixes what would
+  break the film); a note on a shot goes to the AI for that shot only and counts as a sample try.
+- **Test bench** (`vido studio testbench`, `vido studio testbench-rate`, studio/testbench.py): the owner's own footage
+  (never a person's) through the real flow, scored by the automatic checks and by the owner out of 20, with a report
+  and a chart over runs at %LOCALAPPDATA%/VidoSuper/bench/runs/index.html. Free unless --spend; the AI only through the
+  owner's Claude plan (--brain claude_code). One project per footage source is kept and reused, so a run measures
+  each clip once.
+- **Not possible yet** (studio/abilities.py): requests for missing abilities (lyrics, split screen, logos, maps,
+  photos, generated shots, ...) are told plainly with the closest thing that works, may ask to hear when it's ready,
+  and are counted on the admin page, most asked first. Remove an entry from GAPS the day its ability ships.

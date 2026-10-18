@@ -35,3 +35,8 @@ Thumbs.db
 # front end: installs stay local; the landing page's own footage is part of the site
 frontend/node_modules/
 !src/vidosuper/studio/web/static/media/*.mp4
+
+# the story engine (Remotion): its packages, the media it is given, its renders
+story/node_modules/
+story/public/
+story/out/

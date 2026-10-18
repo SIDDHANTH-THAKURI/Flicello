@@ -24,3 +24,4 @@ frontend/tools
 src/vidosuper/studio/web/static/dist
 # the landing page's own media is part of the site
 !src/vidosuper/studio/web/static/media/*
+story

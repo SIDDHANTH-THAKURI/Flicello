@@ -327,3 +327,30 @@ details.danger-zone form { margin-top: 1rem; }
 .cost-line.short, .cost-note.short { color: #ffb4c8; }
 a.allowance { text-decoration: none; transition: border-color .2s; }
 a.allowance:hover, a.allowance:focus-visible { border-color: var(--paper-2); }
+
+/* the storyboard: every shot in order, each changeable */
+.sb-grid { list-style: none; margin: .8rem 0 0; padding: 0; display: grid; gap: .7rem; }
+.sb-grid.tall { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.sb-grid.wide { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.sb-card { display: grid; gap: .35rem; align-content: start; padding: .5rem; border: 1px solid var(--line); border-radius: 14px; background: rgba(255, 255, 255, .02); }
+.sb-card.on-drop { border-color: rgba(255, 46, 126, .45); }
+.sb-card img { width: 100%; border-radius: 9px; display: block; background: #000; }
+.sb-grid.tall .sb-card img { aspect-ratio: 9 / 16; object-fit: cover; }
+.sb-grid.wide .sb-card img { aspect-ratio: 16 / 9; object-fit: cover; }
+.sb-meta { display: flex; gap: .45rem; align-items: baseline; font-size: .8rem; color: var(--muted); flex-wrap: wrap; }
+.sb-meta b { color: var(--paper); font-size: .9rem; }
+.sb-meta i { font-style: normal; color: #ff9cc0; }
+.sb-what { margin: 0; font-size: .84rem; color: var(--paper-2); line-height: 1.35; }
+.sb-edit summary { cursor: pointer; font-size: .82rem; color: var(--muted); }
+.sb-edit[open] { display: grid; gap: .45rem; }
+.sb-edit .field { margin: 0; }
+.sb-edit .field span { font-size: .78rem; }
+.sb-edit .input, .sb-edit select { font-size: .82rem; padding: .4rem .5rem; width: 100%; }
+.sb-move { display: flex; gap: .6rem; flex-wrap: wrap; font-size: .8rem; color: var(--paper-2); align-items: center; }
+.sb-move span { color: var(--muted); }
+.sb-alts { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .6rem; }
+.sb-alts.tall { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.sb-alts.wide { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.sb-alts li { display: grid; gap: .2rem; font-size: .8rem; }
+.sb-alts img { width: 100%; border-radius: 8px; }
+.sb-alts span { color: var(--muted); }

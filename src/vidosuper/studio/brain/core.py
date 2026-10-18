@@ -354,7 +354,10 @@ def _overlapping_windows(plan: DesignPlan, pool: dict[str, PoolMoment], uses: di
     return out
 
 
-def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
+def check_plan(plan: DesignPlan, ctx: StoryContext, taste: bool = True) -> list[str]:
+    """What is wrong with a shot plan. `taste` False: only what would break the film (the beats, the footage, the
+    shot lengths the renderer needs), not the rules of taste (the hook, reuse, hits, the drop, pace): a person's own
+    storyboard changes win over those."""
     problems: list[str] = []
     facts, beats = ctx.facts, ctx.beats
     keys = [m.key for m in plan.pool]
@@ -372,7 +375,7 @@ def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
             continue
         if m.peak is not None and not m.start <= m.peak <= m.end:
             problems.append(f"pool '{m.key}': peak {m.peak} is outside its window {m.start}-{m.end}")
-        bad = [(a, b) for a, b in f.avoid if min(b, m.end) - max(a, m.start) > 0.25]
+        bad = [(a, b) for a, b in f.avoid if min(b, m.end) - max(a, m.start) > 0.25] if taste else []
         if bad:
             problems.append(f"pool '{m.key}': {m.clip} {m.start}-{m.end} overlaps a range to avoid "
                             f"({', '.join(f'{a:.1f}-{b:.1f}' for a, b in bad)})")
@@ -409,6 +412,8 @@ def check_plan(plan: DesignPlan, ctx: StoryContext) -> list[str]:
         uses.setdefault(s.key, []).append(i)
         pos += s.beats * (s.count if s.kind == "stutter" else 1)
     last = len(plan.plan) - 1
+    if not taste:
+        return problems
     if plan.plan:  # pacing a short video needs: a quick hook and no stalls
         first = plan.plan[0].beats * (plan.plan[0].count if plan.plan[0].kind == "stutter" else 1) * beats.period
         if first > 4.5:

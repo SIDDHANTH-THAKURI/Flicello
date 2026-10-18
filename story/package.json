@@ -1,0 +1,21 @@
+{
+  "name": "flicello-story",
+  "private": true,
+  "description": "Flicello's story engine: a narrator and the scenes that act out what they say, composed with Remotion.",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Story"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.536",
+    "@remotion/transitions": "4.0.536",
+    "@remotion/media-utils": "4.0.536",
+    "remotion": "4.0.536",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.8",
+    "typescript": "5.8.3"
+  }
+}

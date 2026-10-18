@@ -142,3 +142,14 @@ def test_stabiliser_jumps_finds_a_thrown_frame_but_not_a_flash(tmp_path):
     seg = Segment(id="s1", clip_id="c", src_in=0.0, src_out=2.0, fx=[Fx(type="flash", at=40 / 30, duration=0.15)])
     jumps = stabiliser_jumps(path, 30, seg)
     assert jumps and all(abs(t - 20 / 30) < 0.05 or abs(t - 21 / 30) < 0.05 for t in jumps), jumps
+
+
+def test_the_true_peak_counts_the_swing_between_samples():
+    import numpy as np
+
+    from vidosuper.render.render import true_peak
+
+    n = np.arange(48000)
+    x = np.sin(2 * np.pi * 12000 * n / 48000 + np.pi / 4).astype(np.float32)  # every sample at 0.707, peaks between
+    data = np.stack([x, x], axis=1)
+    assert float(np.abs(data).max()) < 0.72 and true_peak(data) > 0.95
