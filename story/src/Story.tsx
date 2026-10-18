@@ -62,7 +62,8 @@ const Captions: React.FC<{ words: Word[]; plan: Plan }> = ({ words, plan }) => {
   const { fps } = useVideoConfig();
   const t = frame / fps;
   const shot = plan.shots.find((s) => s.start <= t && t < s.end);
-  if (!shot || shot.type === 'card' || shot.type === 'ui' || (shot.type === 'narrator' && shot.title)) return null;
+  // (the arc is the exception: there his words name each part as it is drawn)
+  if (!shot || (shot.type === 'card' && shot.kind !== 'arc') || shot.type === 'ui' || (shot.type === 'narrator' && (shot.title || shot.rating !== undefined))) return null;
   // a page ends at three words, at a pause, at a full stop, or where the picture changes
   const starts = plan.shots.map((s) => s.start);
   const pages: Word[][] = [];
@@ -74,7 +75,8 @@ const Captions: React.FC<{ words: Word[]; plan: Plan }> = ({ words, plan }) => {
     else page.push(w);
   }
   const page = pages.find((p) => p[0].t - 0.05 <= t && t < p[p.length - 1].end + 0.2);
-  if (!page) return null;
+  // a page begun under a title (where captions are hidden) is not shown late after it
+  if (!page || page[0].t < shot.start - 0.3) return null;
   const aside = shot.type === 'scene' && shot.pip;
   const left = aside ? CORNER.faceX + CORNER.width * 0.42 : 60;
   return (
@@ -84,7 +86,7 @@ const Captions: React.FC<{ words: Word[]; plan: Plan }> = ({ words, plan }) => {
           const lit = w.t <= t;
           const pop = interpolate(t, [w.t, w.t + 0.12], [0.86, 1], clamp);
           return (
-            <span key={k} style={{ color: lit ? '#fff' : 'rgba(255,255,255,.45)', transform: `scale(${lit ? pop : 0.9})`, display: 'inline-block', textShadow: '0 4px 26px rgba(0,0,0,.85), 0 0 3px rgba(0,0,0,.9)' }}>
+            <span key={k} style={{ color: lit ? (w.hot ? '#ff3b5c' : '#fff') : 'rgba(255,255,255,.45)', transform: `scale(${lit ? pop : 0.9})`, display: 'inline-block', textShadow: '0 4px 26px rgba(0,0,0,.85), 0 0 3px rgba(0,0,0,.9)' }}>
               {w.text.replace(/[.,!?]+$/, '')}
             </span>
           );
@@ -136,7 +138,8 @@ export const Story: React.FC<{ plan: Plan }> = ({ plan }) => {
           volume={(f) => {
             const tail = fadeOut ? interpolate(f, [durationInFrames - fadeOut, durationInFrames - 1], [1, 0], clamp) : 1;
             const head = interpolate(f, [0, 12], [0, 1], clamp);
-            return music.gain * (1 - music.duck * (levels[f] ?? 0)) * tail * head;
+            const shape = music.shape && music.shape.length > 1 ? interpolate(f / fps, music.shape.map((p) => p[0]), music.shape.map((p) => p[1]), clamp) : 1;
+            return music.gain * (1 - music.duck * (levels[f] ?? 0)) * tail * head * shape;
           }}
         />
       ) : null}

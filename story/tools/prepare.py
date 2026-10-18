@@ -417,6 +417,10 @@ def main() -> None:
     words = [w for u in json.loads(a.speech.read_text(encoding="utf-8"))["utterances"] for w in u.get("words") or []]
     work = PUBLIC.parent / "work"  # in-between files: kept out of public (Remotion copies all of public per render)
     work.mkdir(parents=True, exist_ok=True)
+    # whose talk this is, and that it is in use: these copies are deleted with it once untouched for the retention
+    # time (studio/legacy.py), and working on it now keeps it
+    (work / "source.json").write_text(json.dumps({"talk": str(a.talk.resolve())}), encoding="utf-8")
+    os.utime(a.talk)
     full = work / "narrator-full.mp4"
     if not full.exists():
         print("his picture, constant rate", flush=True)

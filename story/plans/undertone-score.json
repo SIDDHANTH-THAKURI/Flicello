@@ -1,0 +1,14 @@
+{
+  "taste": "music/taste2.json",
+  "extra": ["the same cello and piano throughout"],
+  "avoid": ["upbeat", "happy", "major key"],
+  "sections": [
+    {"name": "intro", "seconds": 8, "words": ["piano and cello enter softly", "quiet"]},
+    {"name": "main", "seconds": 22, "words": ["a slow heartbeat pulse", "leaves room for a speaking voice"]},
+    {"name": "verse", "seconds": 23, "words": ["the heartbeat continues", "a second cello line joins", "leaves room for a speaking voice"]},
+    {"name": "break", "seconds": 5, "words": ["almost silent", "one held cello note", "suspense"]},
+    {"name": "build", "seconds": 28, "words": ["tension rising slowly", "the heartbeat gets faster", "string tremolo builds", "darker", "leaves room for a speaking voice"]},
+    {"name": "climax", "seconds": 3, "words": ["a deep cinematic hit", "full and dark", "the peak of the track"]},
+    {"name": "outro", "seconds": 5, "words": ["the pulse stops", "the cello holds one note and fades out"]}
+  ]
+}

@@ -1,6 +1,6 @@
 // Each kind of shot. A shot is drawn from its own first frame (its Sequence starts where it is first seen).
 import React from 'react';
-import { AbsoluteFill, Easing, Img, interpolate, OffthreadVideo, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AbsoluteFill, Easing, Img, interpolate, OffthreadVideo, random, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
 import { DISPLAY, MONO } from '../look';
 import type { CardShot, NarratorShot, Plan, SceneShot, Shot, UiShot } from '../plan';
 
@@ -79,6 +79,7 @@ export const Narrator: React.FC<{ shot: NarratorShot; plan: Plan; first: number;
       );
     }
   }
+  if (shot.rating !== undefined && plan.narrator.alpha) return <RatingBehind shot={shot} plan={plan} first={first} frames={frames} pose={pose} />;
   if (shot.title && plan.narrator.alpha) return <TitleBehind shot={shot} plan={plan} first={first} frames={frames} pose={pose} />;
   return (
     <AbsoluteFill>
@@ -90,12 +91,17 @@ export const Narrator: React.FC<{ shot: NarratorShot; plan: Plan; first: number;
 // The lights go out on the film's name: his room drops to dark with a flicker, the name rises behind him with a red
 // glow behind his head; the lights come back at the end.
 const FLICKER = [1, 0.3, 0.85, 0.12, 0.55, 0.07, 0.32, 0.1, 0.18];
+const DARK = 0.17;
+// how lit his room is: the lights flicker out at the start (or it is dark already), and come back at the end
+const lights = (frame: number, frames: number, dark?: boolean) =>
+  frame > frames - 6 ? interpolate(frame, [frames - 6, frames - 1], [DARK, 1], clamp) : !dark && frame < FLICKER.length ? Math.max(DARK, FLICKER[frame]) : DARK;
+
 const TitleBehind: React.FC<{ shot: NarratorShot; plan: Plan; first: number; frames: number; pose: Pose }> = ({ shot, plan, first, frames, pose }) => {
   const { fps, width: W } = useVideoConfig();
   const frame = useCurrentFrame();
-  const DARK = 0.17;
-  const lit = frame < FLICKER.length ? Math.max(DARK, FLICKER[frame]) : frame > frames - 6 ? interpolate(frame, [frames - 6, frames - 1], [DARK, 1], clamp) : DARK;
+  const lit = lights(frame, frames, shot.dark);
   const glow = (1 - lit) / (1 - DARK);
+  const rise = Math.round(((shot.at ?? shot.start) - shot.start) * fps) + 3;
   const out = interpolate(frame, [frames - 7, frames - 1], [1, 0], clamp);
   const n = (shot.title ?? '').length;
   const size = Math.min(210, (W * 0.86) / (n * 0.74 + (n - 1) * 0.04)); // wide caps: about 0.74 em each
@@ -105,7 +111,7 @@ const TitleBehind: React.FC<{ shot: NarratorShot; plan: Plan; first: number; fra
       <AbsoluteFill style={{ background: `radial-gradient(ellipse 60% 34% at 46% 34%, rgba(255,40,70,${0.3 * glow}) 0%, rgba(0,0,0,0) 70%)` }} />
       <div style={{ position: 'absolute', top: 612 - 0.86 * size, left: 0, right: 0, display: 'flex', justifyContent: 'center', fontFamily: DISPLAY, fontWeight: 800, fontSize: size, lineHeight: 1, letterSpacing: 0.04 * size, color: '#f3efe8', textShadow: `0 0 50px rgba(255,59,92,${0.55 * glow})` }}>
         {(shot.title ?? '').split('').map((ch, k) => {
-          const a = spring({ frame: frame - 3 - k * 1.5, fps, config: { damping: 15, stiffness: 150 } });
+          const a = spring({ frame: frame - rise - k * 1.5, fps, config: { damping: 15, stiffness: 150 } });
           return (
             <span key={k} style={{ display: 'inline-block', transform: `translateY(${(1 - a) * 120}px)`, opacity: a * out, filter: `blur(${(1 - a) * 10}px)` }}>
               {ch === ' ' ? ' ' : ch}
@@ -118,7 +124,62 @@ const TitleBehind: React.FC<{ shot: NarratorShot; plan: Plan; first: number; fra
   );
 };
 
+// The verdict as a gauge behind his head: the lights go out, a ring around his head fills to the score as he says it,
+// with ten ticks round it, and the number stands above him.
+const RatingBehind: React.FC<{ shot: NarratorShot; plan: Plan; first: number; frames: number; pose: Pose }> = ({ shot, plan, first, frames, pose }) => {
+  const { fps, width: W, height: H } = useVideoConfig();
+  const frame = useCurrentFrame();
+  const lit = lights(frame, frames, shot.dark);
+  const glow = (1 - lit) / (1 - DARK);
+  const value = shot.rating ?? 0;
+  const from = Math.round(((shot.at ?? shot.start) - shot.start) * fps);
+  const fill = interpolate(frame, [from, from + fps], [0, value / 10], { ...clamp, easing: ease });
+  const landed = spring({ frame: frame - from - fps, fps, config: { damping: 12, stiffness: 170 } });
+  const out = interpolate(frame, [frames - 7, frames - 1], [1, 0], clamp);
+  const cx = pose.tx + pose.k * FACE[0] * W;
+  const cy = pose.ty + pose.k * (FACE[1] - 0.04) * H;
+  const r = 0.36 * W * pose.k;
+  const ring = fill * 2 * Math.PI * r;
+  const shown = fill * 10;
+  return (
+    <AbsoluteFill style={{ background: '#000' }}>
+      <Room plan={plan} first={first} pose={pose} style={{ filter: `brightness(${lit}) saturate(${0.6 + 0.4 * lit})` }} />
+      <AbsoluteFill style={{ background: `radial-gradient(ellipse 60% 34% at 46% 40%, rgba(255,40,70,${0.26 * glow}) 0%, rgba(0,0,0,0) 70%)` }} />
+      <svg width={W} height={H} style={{ position: 'absolute', opacity: out }}>
+        <circle cx={cx} cy={cy} r={r} stroke="rgba(255,255,255,.14)" strokeWidth={18} fill="none" />
+        <circle cx={cx} cy={cy} r={r} stroke={RED} strokeWidth={18} fill="none" strokeLinecap="round" strokeDasharray={`${ring} 4000`} transform={`rotate(-90 ${cx} ${cy})`} style={{ filter: 'drop-shadow(0 0 18px rgba(255,59,92,.7))' }} />
+        {Array.from({ length: 10 }).map((_, k) => {
+          const a = (k / 10) * 2 * Math.PI - Math.PI / 2;
+          const on = k / 10 < fill - 1e-6;
+          return <line key={k} x1={cx + Math.cos(a) * (r + 22)} y1={cy + Math.sin(a) * (r + 22)} x2={cx + Math.cos(a) * (r + 46)} y2={cy + Math.sin(a) * (r + 46)} stroke={on ? RED : 'rgba(255,255,255,.3)'} strokeWidth={6} strokeLinecap="round" />;
+        })}
+      </svg>
+      <div style={{ position: 'absolute', top: cy - r - 300, left: 0, right: 0, textAlign: 'center', fontFamily: DISPLAY, fontWeight: 800, fontSize: 200, lineHeight: 1, color: '#f3efe8', letterSpacing: -4, opacity: out * Math.min(1, fill * 4), transform: `scale(${1 + 0.12 * landed * (1 - landed)})`, textShadow: `0 0 50px rgba(255,59,92,${0.5 * glow})` }}>
+        {shown.toFixed(1)}
+        <span style={{ fontSize: 80, color: 'rgba(243,239,232,.55)', letterSpacing: 0 }}>/10</span>
+      </div>
+      <Host plan={plan} first={first} pose={pose} shadow={false} />
+    </AbsoluteFill>
+  );
+};
+
 // ---- the scenes -----------------------------------------------------------------------------------------------------
+// a lit sign in the scene (the podcast's name): it flickers on, and buzzes with light
+const Sign: React.FC<{ text: string; on: number }> = ({ text, on }) => {
+  const frame = useCurrentFrame();
+  const f = frame - on;
+  if (f < 0) return null;
+  const flick = [1, 0, 0.8, 0, 0, 1, 0.4, 1];
+  const level = f < flick.length ? flick[f] : 0.92 + 0.08 * Math.sin(frame * 1.7);
+  return (
+    <div style={{ position: 'absolute', top: 250, left: 0, right: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, opacity: level }}>
+      <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 30, letterSpacing: 8, color: '#fff', background: RED, padding: '8px 22px', borderRadius: 10, boxShadow: '0 0 30px rgba(255,59,92,.8)' }}>● ON AIR</div>
+      <div style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 110, letterSpacing: 10, color: '#ffe9ee', textShadow: '0 0 10px #ff3b5c, 0 0 30px #ff3b5c, 0 0 70px rgba(255,59,92,.7)' }}>{text}</div>
+    </div>
+  );
+};
+
+
 // a slow move over the whole shot: zoom from a to b around `focus`
 const Move: React.FC<{ frames: number; zoom?: [number, number]; focus?: [number, number]; children: React.ReactNode }> = ({ frames, zoom = [1, 1.06], focus = [0.5, 0.45], children }) => {
   const frame = useCurrentFrame();
@@ -150,7 +211,8 @@ export const Scene: React.FC<{ shot: SceneShot; plan: Plan; first: number; frame
   return (
     <AbsoluteFill style={{ background: '#000' }}>
       <Move frames={frames} zoom={shot.zoom} focus={shot.focus}>
-        <OffthreadVideo src={staticFile(shot.file)} muted startFrom={from} playbackRate={shot.rate ?? 1} style={cover} />
+        <OffthreadVideo src={staticFile(shot.file)} muted startFrom={from} playbackRate={shot.rate ?? 1}
+          style={{ ...cover, objectPosition: shot.frame ? `${shot.frame[0] * 100}% ${shot.frame[1] * 100}%` : undefined, filter: shot.exposure ? `brightness(${shot.exposure})` : undefined }} />
       </Move>
       {shot.dark ? <AbsoluteFill style={{ background: `rgba(0,0,0,${shot.dark})` }} /> : null}
       {label ? (
@@ -159,6 +221,7 @@ export const Scene: React.FC<{ shot: SceneShot; plan: Plan; first: number; frame
           <span style={{ opacity: frame % 20 < 10 ? 1 : 0 }}>▌</span>
         </div>
       ) : null}
+      {shot.sign ? <Sign text={shot.sign} on={Math.round(((shot.signAt ?? shot.start) - shot.start) * fps) + lead} /> : null}
       {host}
     </AbsoluteFill>
   );
@@ -174,9 +237,48 @@ const Wave: React.FC<{ levels: number[]; at: number; width: number; height: numb
   return <div style={{ display: 'flex', alignItems: 'center', gap: 4, height, width }}>{bars}</div>;
 };
 
+// How the film goes, drawn as a sound: a line across the dark, calm where it starts, bending as it turns, tearing into
+// spikes at the climax. The pen moves with time, so each part arrives as he names it.
+const Arc: React.FC<{ shot: CardShot; first: number; frames: number }> = ({ shot, first, frames }) => {
+  const { fps, width: W, height: H } = useVideoConfig();
+  const frame = useCurrentFrame();
+  const t = (first + frame) / fps;
+  const [m0, m1, m2] = shot.marks ?? [shot.start, (shot.start + shot.end) / 2, shot.end];
+  const x0 = 70, x1 = W - 70, y = H * 0.47;
+  const at = (x: number) => shot.start + ((x - x0) / (x1 - x0)) * (shot.end - shot.start);
+  const amp = (tt: number) => (tt < m0 ? 6 : tt < m1 ? 6 + 74 * ((tt - m0) / Math.max(0.1, m1 - m0)) : tt < m2 ? 80 + 150 * ((tt - m1) / Math.max(0.1, m2 - m1)) ** 1.5 : 420);
+  const xOf = (tt: number) => x0 + ((tt - shot.start) / (shot.end - shot.start)) * (x1 - x0);
+  const pen = Math.min(x1, x0 + ((t - shot.start) / (shot.end - shot.start)) * (x1 - x0));
+  const pts: string[] = [];
+  for (let x = x0; x <= pen; x += 5) {
+    const tt = at(x);
+    const wild = tt >= m2 ? (random(`a${Math.round(x)}`) - 0.5) * 2 : Math.sin(x * (tt < m1 ? 0.05 : 0.11));
+    pts.push(`${x.toFixed(0)},${(y - amp(tt) * wild).toFixed(1)}`);
+  }
+  const hot = t >= m2;
+  const fade = interpolate(frame, [frames - 8, frames - 1], [1, 0], clamp);
+  const head = pts.length ? pts[pts.length - 1].split(',').map(Number) : [x0, y];
+  return (
+    <AbsoluteFill style={{ background: `radial-gradient(circle at 50% 47%, rgba(120,20,40,${hot ? 0.55 : 0.18 + 0.2 * Math.min(1, (t - m0) / Math.max(0.1, m2 - m0))}) 0%, #050407 68%)`, opacity: fade }}>
+      <svg width={W} height={H} style={{ position: 'absolute' }}>
+        <line x1={x0} y1={y} x2={x1} y2={y} stroke="rgba(255,255,255,.1)" strokeWidth={3} />
+        {[m0, m1, m2].map((m, k) => {
+          const reached = t >= m;
+          return <circle key={k} cx={xOf(m)} cy={y + 330} r={reached ? 13 : 9} fill={reached ? (k === 2 ? RED : '#f3efe8') : 'rgba(255,255,255,.18)'} style={{ filter: reached ? 'drop-shadow(0 0 12px rgba(255,255,255,.6))' : undefined }} />;
+        })}
+        <line x1={x0} y1={y + 330} x2={x1} y2={y + 330} stroke="rgba(255,255,255,.12)" strokeWidth={3} />
+        <line x1={x0} y1={y + 330} x2={Math.min(x1, pen)} y2={y + 330} stroke={hot ? RED : 'rgba(255,255,255,.6)'} strokeWidth={4} />
+        <polyline points={pts.join(' ')} fill="none" stroke={hot ? RED : '#f3efe8'} strokeWidth={hot ? 10 : 7} strokeLinejoin="round" strokeLinecap="round" style={{ filter: hot ? 'drop-shadow(0 0 26px rgba(255,59,92,.95))' : 'drop-shadow(0 0 14px rgba(255,255,255,.45))' }} />
+        <circle cx={head[0]} cy={head[1]} r={hot ? 14 : 10} fill={hot ? RED : '#fff'} style={{ filter: 'drop-shadow(0 0 16px rgba(255,255,255,.8))' }} />
+      </svg>
+    </AbsoluteFill>
+  );
+};
+
 export const Card: React.FC<{ shot: CardShot; frames: number; levels: number[]; first: number }> = ({ shot, frames, levels, first }) => {
   const { fps } = useVideoConfig();
   const frame = useCurrentFrame();
+  if (shot.kind === 'arc') return <Arc shot={shot} first={first} frames={frames} />;
   const pop = spring({ frame, fps, config: { damping: 14, stiffness: 140 } });
   const fadeOut = interpolate(frame, [frames - 8, frames], [1, 0.0], clamp);
   if (shot.kind === 'rating') {
@@ -342,47 +444,97 @@ const Phone: React.FC<{ shot: UiShot; first: number }> = ({ shot, first }) => {
   );
 };
 
+// An anonymous email: the sender and subject arrive, then the attachments one by one, then they are played in turn
+// (the playing one lit, its sound drawn; the played ones dimmed).
+const Email: React.FC<{ shot: UiShot; first: number; frames: number }> = ({ shot, first, frames }) => {
+  const { fps } = useVideoConfig();
+  const frame = useCurrentFrame();
+  const t = (first + frame) / fps;
+  const n = shot.count ?? 10;
+  const lift = spring({ frame, fps, config: { damping: 18, stiffness: 110 } });
+  const head = spring({ frame: frame - Math.round(((shot.showAt ?? shot.start) - shot.start) * fps), fps, config: { damping: 18, stiffness: 140 } });
+  const [l0, l1] = shot.listAt ?? [shot.start + 0.5, shot.start + 2];
+  const playing = shot.playAt !== undefined && t >= shot.playAt ? Math.floor((t - shot.playAt) / 0.42) : -1;
+  const fade = interpolate(frame, [frames - 6, frames - 1], [1, 0], clamp);
+  return (
+    <AbsoluteFill style={{ background: 'radial-gradient(circle at 50% 30%, #17131d 0%, #07060a 75%)', alignItems: 'center', justifyContent: 'center', opacity: fade }}>
+      <div style={{ width: 920, borderRadius: 44, background: '#141219', border: '2px solid #2a2633', boxShadow: '0 40px 120px rgba(0,0,0,.65)', padding: '48px 50px 30px', transform: `translateY(${(1 - lift) * 160}px)`, opacity: lift }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 26, opacity: head }}>
+          <div style={{ width: 96, height: 96, borderRadius: 48, background: '#26222f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: DISPLAY, fontWeight: 800, fontSize: 52, color: '#8c86a0' }}>?</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 48, color: '#f3efe8' }}>Anonymous</div>
+            <div style={{ fontFamily: MONO, fontSize: 28, color: '#8c86a0' }}>no reply address</div>
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 28, color: '#8c86a0' }}>03:12</div>
+        </div>
+        <div style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 60, color: '#fff', margin: '34px 0 6px', opacity: head }}>{shot.title ?? 'listen.'}</div>
+        <div style={{ fontFamily: MONO, fontSize: 30, color: RED, marginBottom: 22, opacity: head }}>{n} attachments</div>
+        {Array.from({ length: n }).map((_, k) => {
+          const arrive = l0 + ((l1 - l0) * k) / Math.max(1, n - 1);
+          const a = spring({ frame: frame - Math.round((arrive - shot.start) * fps), fps, config: { damping: 18, stiffness: 190 } });
+          const now = k === playing;
+          const done = k < playing;
+          const bars = [];
+          for (let b = 0; b < 18; b++) {
+            const h = now ? 8 + 34 * Math.abs(Math.sin(frame * 0.9 + b * 1.3)) * random(`e${k}-${b}-${frame}`) : 6 + 14 * Math.abs(Math.sin(b * 1.7 + k));
+            bars.push(<div key={b} style={{ width: 7, height: h, borderRadius: 3, background: now ? RED : done ? '#4a4556' : '#6b6580' }} />);
+          }
+          return (
+            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 22, padding: '11px 16px', margin: '0 -16px', borderRadius: 16, borderTop: k ? '1px solid #24212c' : 'none', background: now ? 'rgba(255,59,92,.14)' : 'transparent', opacity: a * (done ? 0.55 : 1), transform: `translateX(${(1 - a) * 70}px)` }}>
+              <div style={{ width: 52, height: 52, borderRadius: 14, background: now ? RED : '#26222f', color: now ? '#fff' : RED, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>{now ? '❚❚' : '▶'}</div>
+              <div style={{ fontFamily: MONO, fontSize: 32, color: now ? '#fff' : '#d8d3e6', flex: 1 }}>clip_{String(k + 1).padStart(2, '0')}.wav</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 44 }}>{bars}</div>
+            </div>
+          );
+        })}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+// After the end: the lights are out, and a notification drops in — one more clip, sent to him.
+const Notify: React.FC<{ shot: UiShot; first: number; frames: number }> = ({ shot, first, frames }) => {
+  const { fps, width: W } = useVideoConfig();
+  const frame = useCurrentFrame();
+  const drop = spring({ frame: frame - Math.round(((shot.at ?? shot.start) - shot.start) * fps), fps, config: { damping: 15, stiffness: 160 } });
+  const gone = frame >= frames - 4;
+  const bars = [];
+  for (let b = 0; b < 40; b++) bars.push(<div key={b} style={{ width: 9, height: 6 + 46 * Math.abs(Math.sin(b * 0.7 + frame * 0.6)) * random(`n${b}-${frame}`), borderRadius: 4, background: RED, opacity: 0.85 }} />);
+  return (
+    <AbsoluteFill style={{ background: '#000' }}>
+      {!gone && drop > 0.001 ? (
+        <div style={{ position: 'absolute', left: 60, width: W - 120, top: interpolate(drop, [0, 1], [-260, 170]), borderRadius: 44, background: 'rgba(28,26,34,.97)', border: '1px solid rgba(255,255,255,.08)', padding: '34px 38px', boxShadow: '0 30px 90px rgba(0,0,0,.8)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
+            <div style={{ width: 104, height: 104, borderRadius: 52, background: '#26222f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: DISPLAY, fontWeight: 800, fontSize: 56, color: '#8c86a0' }}>?</div>
+            <div>
+              <div style={{ fontFamily: MONO, fontSize: 30, color: '#a7a1b8' }}>{shot.note ?? 'Anonymous'}</div>
+              <div style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 64, color: '#fff' }}>{shot.title}</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 60, marginTop: 26 }}>{bars}</div>
+        </div>
+      ) : null}
+    </AbsoluteFill>
+  );
+};
+
 export const Ui: React.FC<{ shot: UiShot; plan: Plan; first: number; frames: number; levels: number[] }> = ({ shot, plan, first, frames, levels }) => {
   const { fps, width: W, height: H } = useVideoConfig();
   const frame = useCurrentFrame();
   if (shot.kind === 'phone') return <Phone shot={shot} first={first} />;
+  if (shot.kind === 'email') return <Email shot={shot} first={first} frames={frames} />;
+  if (shot.kind === 'notify') return <Notify shot={shot} first={first} frames={frames} />;
   const lift = spring({ frame, fps, config: { damping: 18, stiffness: 110 } });
-  const n = shot.count ?? (shot.lines?.length ?? 0);
   return (
     <AbsoluteFill style={{ background: 'linear-gradient(180deg, #0b0a10 0%, #121019 100%)', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: 860, borderRadius: 48, background: '#17151f', border: '2px solid #2c2838', boxShadow: '0 40px 120px rgba(0,0,0,.6)', padding: '56px 56px 40px', transform: `translateY(${(1 - lift) * 140}px) scale(${0.94 + 0.06 * lift})`, opacity: lift }}>
-        {shot.kind === 'email' ? (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 26 }}>
-              <div style={{ width: 92, height: 92, borderRadius: 46, background: '#2a2636', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: DISPLAY, fontSize: 48, color: '#8c86a0' }}>?</div>
-              <div>
-                <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 44, color: '#f3efe8' }}>Anonymous</div>
-                <div style={{ fontFamily: MONO, fontSize: 28, color: '#8c86a0' }}>no reply address</div>
-              </div>
-            </div>
-            <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 52, color: '#fff', margin: '40px 0 10px' }}>{shot.title ?? 'listen.'}</div>
-            <div style={{ fontFamily: MONO, fontSize: 28, color: RED, marginBottom: 28 }}>{n} attachments</div>
-            {Array.from({ length: n }).map((_, k) => {
-              const at = 8 + k * Math.max(2, Math.floor((frames - 20) / Math.max(1, n)));
-              const a = spring({ frame: frame - at, fps, config: { damping: 18, stiffness: 160 } });
-              return (
-                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 22, padding: '14px 0', borderTop: '1px solid #2a2636', opacity: a, transform: `translateX(${(1 - a) * 60}px)` }}>
-                  <div style={{ width: 54, height: 54, borderRadius: 14, background: '#2a2636', color: RED, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26 }}>▶</div>
-                  <div style={{ fontFamily: MONO, fontSize: 30, color: '#d8d3e6', flex: 1 }}>clip_{String(k + 1).padStart(2, '0')}.wav</div>
-                  <Wave levels={levels} at={first + frame - k * 7} width={220} height={40} color={RED} count={16} />
-                </div>
-              );
-            })}
-          </>
-        ) : (
-          <>
+        <>
             <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 50, color: '#fff', marginBottom: 24 }}>{shot.title}</div>
             {(shot.lines ?? []).map((line, k) => {
               const a = spring({ frame: frame - 6 - k * 6, fps, config: { damping: 18, stiffness: 150 } });
               return <div key={k} style={{ fontFamily: MONO, fontSize: 32, color: '#d8d3e6', padding: '14px 0', borderTop: '1px solid #2a2636', opacity: a }}>{line}</div>;
             })}
-          </>
-        )}
+        </>
       </div>
       {shot.pip ? <Host plan={plan} first={first} pose={cornerPose(W, H)} fade={1} /> : null}
     </AbsoluteFill>
