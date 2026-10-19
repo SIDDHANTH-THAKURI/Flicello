@@ -1422,7 +1422,11 @@ class Studio:
             elif job["kind"] in JOB_STAGE:
                 message = str(exc) if user_fixable else "Something went wrong on our side. The owner has been told; you can try again."
                 self.db.set_stage(project["id"], "failed", error=message[:300])
-            alert(self.db, self.s, "job", f"{job['kind']} failed for a video: {type(exc).__name__}: {str(exc)[:200]}")
+            if type(exc).__name__ == "AuthenticationError" or "invalid x-api-key" in str(exc):
+                alert(self.db, self.s, "key", "The AI key was refused (401, invalid x-api-key): people's videos can't "
+                      "use the AI until it is replaced in .env, the server's .env.studio and the Modal secret.")
+            else:
+                alert(self.db, self.s, "job", f"{job['kind']} failed for a video: {type(exc).__name__}: {str(exc)[:200]}")
 
     # the job handlers -------------------------------------------------
     def _save_pitches(self, project: dict, pitches: list[dict], rnd: int) -> None:
