@@ -37,7 +37,8 @@ def _logging() -> None:
 @studio_app.command("serve")
 def serve(host: str = typer.Option(None, help="Address to listen on (default from the settings: 127.0.0.1)"),
           port: int = typer.Option(None, help="Port (default 8765)"),
-          worker: bool = typer.Option(True, "--worker/--no-worker", help="Run the job worker in this process too")) -> None:
+          worker: bool = typer.Option(True, "--worker/--no-worker", help="Run the job worker in this process too"),
+          reload: bool = typer.Option(False, "--reload", help="Local testing: restart by itself when the code changes")) -> None:
     """The web app (and, by default, the worker). Listens on 127.0.0.1 only unless told otherwise: put it
     behind Tailscale (`tailscale serve`) rather than opening a port to the internet."""
     import uvicorn
@@ -47,6 +48,15 @@ def serve(host: str = typer.Option(None, help="Address to listen on (default fro
     from .web.app import create_app
     from .worker import Worker
 
+    if reload:  # dev.cmd: the app is made (and remade after each code change) by devapp.make
+        from pathlib import Path
+
+        s = studio_settings()
+        console.print(f"[green]{escape(s.name)}[/] (auto-reload) on http://{host or s.host}:{port or s.port}")
+        uvicorn.run("vidosuper.studio.web.devapp:make", factory=True, reload=True,
+                    reload_dirs=[str(Path(__file__).resolve().parents[1])], host=host or s.host, port=port or s.port,
+                    server_header=False, proxy_headers=False, log_level="warning")
+        return
     _logging()
     s = studio_settings()
     studio = Studio(s)
