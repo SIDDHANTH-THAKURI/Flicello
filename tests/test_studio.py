@@ -271,7 +271,7 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     assert "My trip, ending on the boats" in ask and "the boats at the end" in ask and u["clips"][0]["short"] in ask
     _drain(studio)
     page = client.get(f"/p/{pid}").text
-    assert "Make this one" in page, studio.db.all("SELECT * FROM events")
+    assert "Make a sample of this one" in page, studio.db.all("SELECT * FROM events")
     pitch_id = int(re.search(r'name="pitch" value="(\d+)"', page).group(1))
     # one more idea, then pick
     client.post(f"/p/{pid}/another", data={"csrf": csrf, "reason": "funnier"})
@@ -840,7 +840,7 @@ def test_a_video_needs_no_song_and_the_note_picks_one_shot_per_beat(studio, medi
     _drain(studio)
     _agree(client, csrf, pid, studio)
     page = client.get(f"/p/{pid}").text
-    assert "Make this one" in page, studio.db.all("SELECT * FROM events")
+    assert "Make a sample of this one" in page, studio.db.all("SELECT * FROM events")
     work = studio.s.users_dir / friend["id"] / "projects" / pid
     assert (work / "music" / "song.wav").exists()  # no upload: a beat was made
     pitch_id = int(re.search(r'name="pitch" value="(\d+)"', page).group(1))
@@ -1009,7 +1009,7 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     assert "'memory' is 'MEMORY'" in ask_text(studio.db.project(pid))
     _drain(studio)
     page = client.get(f"/p/{pid}").text
-    assert "Pick a look" in page and "Make it in this look" in page, studio.db.all("SELECT * FROM events")
+    assert "Pick a look" in page and "Make a sample in this look" in page, studio.db.all("SELECT * FROM events")
     looks = studio.pitches(studio.db.project(pid))
     assert len(looks) == 3 and len({x["pitch"]["title"] for x in looks}) == 3
     client.post(f"/p/{pid}/another", data={"csrf": csrf, "base": looks[1]["id"], "reason": "warmer colours"})
@@ -1389,7 +1389,7 @@ def test_music_made_for_the_film_is_read_heard_changed_and_picked_before_anythin
     assert p["stage"] == "understood" and studio.understanding(p)["music"].startswith("Your new track")
     assert studio.beats_left(p) == 0
     r = client.post(f"/p/{pid}/beat", data={"csrf": csrf, "base": beats[1]["id"], "change": "again"}, follow_redirects=True)
-    assert "all the tracks this film can have" in r.text
+    assert "the most it can have made" in r.text
 
 
 def test_a_long_film_hears_a_taste_first_and_its_full_track_is_made_from_it(studio, media, monkeypatch):

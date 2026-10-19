@@ -137,6 +137,7 @@ class Pipeline:
         self.owner = owner
         self.no_music = False  # set by the studio when the person chose no music
         self.natural_sound = False  # ... and that the clips keep their own sound (else the film is silent)
+        self.mute_clips = False  # they asked for no sound from the clips: every shot muted, music or not
         self.project = Project(work.clips, cfg)
 
     # ------------------------------------------------------------ analyse
@@ -367,6 +368,9 @@ class Pipeline:
                 if self.natural_sound:  # each shot with the sound it was filmed with (faded at the cuts)
                     for seg in edl.segments:
                         seg.audio = seg.audio.model_copy(update={"mode": "original"})
+            if self.mute_clips:  # whatever the plan chose, no shot plays the sound it was filmed with
+                for seg in edl.segments:
+                    seg.audio = seg.audio.model_copy(update={"mode": "mute"})
             clips = self.project.clips()
             signals = {cid: s for cid in clips if (s := self.project.load_signals(cid)) is not None}
             short = {i.segment for i in validate_edl(edl, clips, signals, repair=False)

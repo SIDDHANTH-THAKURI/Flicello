@@ -8,6 +8,7 @@ shared craft rules live in config/studio/craft.md and only the owner changes tho
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import date
@@ -43,6 +44,27 @@ QUESTIONS: list[tuple[str, str, list[tuple[str, str]]]] = [
     ("look", "Colour?", [("vivid", "Vivid and bright"), ("natural", "Natural, as shot"), ("warm", "Warm"),
                          ("film", "Filmic")]),
 ]
+
+# their own words for the colour, to the nearest grade the renderer has (first match wins; none: the default)
+OWN_LOOKS = [
+    (r"black\s*(?:and|&|n)\s*white|\bb\s*&\s*w\b|\bmono(?:chrome)?\b|gr[ae]y\s*scale|no colou?r", "mono"),
+    (r"\bteal\b|blockbuster|hollywood", "teal-orange"),
+    (r"\bfaded\b|washed|vintage|retro|muted|pastel|soft colou?rs?", "faded"),
+    (r"\b(?:cool|cold|icy|blue)\b", "cool"),
+    (r"\b(?:warm|golden|sunny|sunset)\b", "warm"),
+    (r"\bfilm(?:ic|y)?\b|cinematic|grain", "film"),
+    (r"\bpunchy\b|high contrast|\bbold\b|moody", "punchy"),
+    (r"\b(?:natural|as shot|true to life|realistic|untouched)\b", "natural"),
+    (r"\b(?:bright|vivid|colou?rful|saturated|pop)\b", "vivid"),
+]
+
+
+def own_look(words: str) -> str | None:
+    for pattern, look in OWN_LOOKS:
+        if re.search(pattern, words or "", re.I):
+            return look
+    return None
+
 
 ANSWER_RULES = {
     ("pace", "calm"): "Calm, cinematic pacing: shots of 2-3 s or longer; fast cuts only at the drop.",
@@ -91,7 +113,14 @@ class Profile:
 
     @property
     def look(self) -> str:
-        return self.answers.get("look") or "vivid"
+        """The colour grade for their films. Only a real look ever reaches the renderer: "Decide for each film" keeps
+        the adaptive default, and their own words pick the nearest grade when they name one (they are a rule too)."""
+        from ..render.looks import LOOKS
+
+        v = self.answers.get("look")
+        if v == "other":
+            v = own_look(self.answers.get("look_other", ""))
+        return v if v in LOOKS else "vivid"
 
     def add(self, text: str, why: str = "", source: str = "feedback", scope: str = "all") -> str | None:
         text = " ".join(str(text).split())[:240]
@@ -131,15 +160,27 @@ class Profile:
         self.rules = [r for r in self.rules if r["id"] != rid]
         return len(self.rules) < before
 
-    def set_answers(self, answers: dict[str, str], never: str = "") -> None:
-        """Answers to the starting questions become rules (replacing earlier answer rules)."""
-        valid = {q: {v for v, _ in opts} for q, _, opts in QUESTIONS}
+    def set_answers(self, answers: dict[str, str], never: str = "", others: dict[str, str] | None = None) -> None:
+        """Answers to the starting questions become rules (replacing earlier answer rules). Every question also takes
+        'other' (their own words, kept as their rule) and 'any' (no rule: decided for each film), so nothing they
+        didn't really choose is fixed in their style."""
+        valid = {q: {v for v, _ in opts} | {"any", "other"} for q, _, opts in QUESTIONS}
         clean = {k: v for k, v in answers.items() if k in valid and v in valid[k]}
         self.rules = [r for r in self.rules if r["source"] != "answer"]
-        self.answers = clean
+        self.answers = {}
         for (q, v), text in ANSWER_RULES.items():
             if clean.get(q) == v:
                 self.add(text, "your answer", "answer")
+        for q, question, _ in QUESTIONS:
+            v = clean.get(q)
+            if v == "other":
+                own = " ".join(str((others or {}).get(q, "")).split())[:200]
+                if not own:
+                    continue  # 'other' with nothing written is no answer
+                self.answers[f"{q}_other"] = own
+                self.add(f"{question.rstrip('?')}: {own}", "your answer", "answer")
+            if v:
+                self.answers[q] = v
         never = " ".join(never.split())[:200]
         if never:
             self.answers["never"] = never

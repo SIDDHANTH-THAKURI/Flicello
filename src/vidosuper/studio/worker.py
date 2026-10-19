@@ -190,6 +190,8 @@ class Worker:
         self.studio = studio
         self.name = name
         self.stop = threading.Event()
+        if studio.s.jobs == "local":  # steps run in this process: a stopped step ends at its next progress update
+            studio.db.stop_local = True
         self._last_maintenance = 0.0
         self._last_watch = 0.0
         self._last_wake = 0.0

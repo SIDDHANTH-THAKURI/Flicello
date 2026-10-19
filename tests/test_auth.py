@@ -372,12 +372,13 @@ def test_in_the_beta_a_stranger_asks_for_access_and_can_only_make_videos_once_th
     assert eve.get("/account").status_code == 200  # their account (export, delete) works while waiting
     page = eve.get("/access").text
     assert "invite-only" in page
-    # asking tells the owner once, by email
+    # asking tells the owner once, by email (at the owner's alert address, not each owner account)
+    studio.s.alert_emails = ["alerts@example.com"]
     before = len(mail.outbox(studio.s))
     csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
     eve.post("/access", data={"csrf": csrf, "note": "Reels from my trips"})
     sent = mail.outbox(studio.s)[before:]
-    assert [m["to"] for m in sent] == ["boss@example.com"] and "Reels from my trips" in sent[0]["text"]
+    assert [m["to"] for m in sent] == ["alerts@example.com"] and "Reels from my trips" in sent[0]["text"]
     assert "on the list" in eve.get("/access").text
     # the owner sees the request and approves it as special: Eve is told, and may make long films
     admin = boss.get("/admin").text

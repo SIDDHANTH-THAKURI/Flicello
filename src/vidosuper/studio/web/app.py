@@ -38,6 +38,16 @@ HERE = Path(__file__).parent
 COOKIE = "vs_session"
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 DEVICE = "vs_device"  # a browser the person has signed in from before (login throttling)
+def note_read(p: dict) -> list[str]:
+    """'How I read your note': what was taken from their words, so a miss is visible before anything starts."""
+    lines = read_note(p["intent"], p["pace"]) if p["intent"] else []
+    if (p.get("cut_note") or "").strip():
+        lines.append(f"Cutting your way: {p['cut_note']}")
+    if p["kind"] == "montage" and p.get("sound") == "silent":
+        lines.append("No sound from your clips" + (": only the music" if p.get("music") != "none" else ""))
+    return lines
+
+
 def eta_text(seconds) -> str:
     """'about 3 min' for the progress card; nothing when unknown."""
     if seconds is None:
@@ -378,7 +388,8 @@ def create_app(studio: Studio) -> FastAPI:
         form = await request.form()
         check_csrf(sess, form.get("csrf"))
         profile = studio.profile(user)
-        profile.set_answers({q: str(form.get(q, "")) for q, _, _ in QUESTIONS}, str(form.get("never", "")))
+        profile.set_answers({q: str(form.get(q, "")) for q, _, _ in QUESTIONS}, str(form.get("never", "")),
+                            {q: str(form.get(f"{q}_other", "")) for q, _, _ in QUESTIONS})
         profile.save()
         studio.db.run("UPDATE users SET onboarded=1 WHERE id=?", (user["id"],))
         if form.get("next") == "/style":
@@ -419,8 +430,9 @@ def create_app(studio: Studio) -> FastAPI:
     @app.get("/new", response_class=HTMLResponse)
     def new_page(request: Request):
         user, sess = need_user(request)
-        return page(request, "new.html", user, sess,
-                    default_pace=studio.profile(user).answers.get("pace", "balanced"), **new_ctx(user))
+        pace = studio.profile(user).answers.get("pace", "balanced")  # their style's pace ("their own words" is a rule)
+        return page(request, "new.html", user, sess, default_pace=pace if pace in ("calm", "fast") else "balanced",
+                    form={}, **new_ctx(user))
 
     @app.post("/new")
     def new_post(request: Request, csrf: str = Form(""), title: str = Form(""), shapes: str = Form("9:16"),
@@ -430,18 +442,20 @@ def create_app(studio: Studio) -> FastAPI:
                  describe: str = Form("")):
         user, sess = need_user(request)
         check_csrf(sess, csrf)
+        sent = {"kind": kind, "describe": describe, "title": title, "style": style, "shapes": shapes, "length": length,
+                "length_custom": length_custom, "length_unit": length_unit, "pace": pace, "cut_note": cut_note,
+                "improvise": improvise, "intent": intent}  # shown again if something needs fixing: nothing is lost
         try:
-            if length == "custom":  # their own length, in seconds or minutes
-                try:
-                    seconds = float(length_custom.replace(",", ".")) * (60 if length_unit == "min" else 1)
-                except ValueError:
-                    raise ActionError("Type the length as a number.") from None
-            else:
-                seconds = float(length or 30)
+            try:  # their own length, in seconds or minutes, or one of the chips
+                seconds = (float(length_custom.replace(",", ".")) * (60 if length_unit == "min" else 1)
+                           if length == "custom" else float(length or 30))
+            except ValueError:
+                raise ActionError("Type the length as a number.") from None
             project = studio.create_project(user, title, shapes, seconds, intent, pace, kind, style, cut_note,
                                             improvise, describe)
         except ActionError as exc:
-            return page(request, "new.html", user, sess, error=str(exc), default_pace=pace, **new_ctx(user))
+            return page(request, "new.html", user, sess, error=str(exc), default_pace=sent["pace"], form=sent,
+                        **new_ctx(user))
         return back(f"/p/{project['id']}")
 
     def owned(user: dict, pid: str) -> dict:
@@ -456,6 +470,20 @@ def create_app(studio: Studio) -> FastAPI:
         p = owned(user, pid)
         job = studio.db.active_job(pid)
         clips = studio.db.all("SELECT * FROM clips WHERE project_id=? ORDER BY created", (pid,))
+        clip_thumbs = set()
+        if p["stage"] == "setup" and clips:  # a frame per clip (made at upload; older clips get theirs in the background)
+            from ..storage import clip_thumb
+            work = workdir(s, p["user_id"], pid)
+            missing = []
+            for c in clips:
+                if (work.stills / f"clip-{c['id']}.jpg").exists():
+                    clip_thumbs.add(c["id"])
+                elif (work.clips / c["file"]).exists():
+                    missing.append(c)
+            if missing:
+                import threading
+                threading.Thread(target=lambda: [clip_thumb(work.clips / c["file"], work.stills, c["id"], c["seconds"] or 0)
+                                                 for c in missing[:20]], daemon=True).start()
         pitches = studio.pitches(p)
         samples = studio.renders(p, "sample")
         finals = studio.renders(p, "final")
@@ -464,6 +492,7 @@ def create_app(studio: Studio) -> FastAPI:
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
+                    clip_thumbs=clip_thumbs,
                     joblog=steps_of(job or (studio.db.one("SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
                                                           (pid,)) if p["stage"] == "failed" else None)),
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
@@ -473,12 +502,15 @@ def create_app(studio: Studio) -> FastAPI:
                     names=clip_names(p) if p["stage"] == "understood" else {},
                     lengths=studio.lengths_for(user),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
-                    note_lines=read_note(p["intent"], p["pace"]) if p["intent"] else [],
+                    render_eta=studio.typical_seconds("render"),
+                    note_lines=note_read(p),
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
                     board=studio.board(p, samples[0]["plan_id"]) if samples and p["kind"] == "montage" else None,
                     gaps=abilities.for_project(studio.db, p),
                     info=json.loads(p["info"]) if p["info"] else None,
                     revisions_left=None if studio.is_owner(user) else max(0, s.limits.revisions_per_video - p["revisions"]),
+                    ideas_left=studio.ideas_left(p), sample_tries_left=studio.sample_tries_left(p),
+                    polish_left=studio.polish_left(p) if p["stage"] == "understood" else 0,
                     chunk=s.limits.chunk_bytes)
 
     def act(request: Request, csrf: str, pid: str, fn) -> RedirectResponse:
@@ -501,6 +533,39 @@ def create_app(studio: Studio) -> FastAPI:
         except ActionError as exc:
             return back(f"/p/{pid}", str(exc))
         return back(f"/p/{pid}", f"Done: the song now runs {info['seconds']:.0f} s (it repeats its strongest {info['loop_bars']} bars).")
+
+    @app.post("/p/{pid}/settings")
+    def settings_edit(request: Request, pid: str, csrf: str = Form(""), shapes: str = Form("9:16"),
+                      length: str = Form(""), length_custom: str = Form(""), length_unit: str = Form("s")):
+        said: list[str] = []
+
+        def go(u, p):
+            seconds = None
+            try:
+                if length == "custom":
+                    seconds = float(length_custom.replace(",", ".")) * (60 if length_unit == "min" else 1)
+                elif length:
+                    seconds = float(length)
+            except ValueError:
+                raise ActionError("Type the length as a number.") from None
+            said.append(studio.set_settings(p, shapes, seconds))
+        done = act(request, csrf, pid, go)
+        return back(f"/p/{pid}", said[0]) if said else done
+
+    @app.post("/p/{pid}/note")
+    def add_note(request: Request, pid: str, csrf: str = Form(""), note: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.add_note(p, note))
+
+    @app.post("/p/{pid}/understood/polish")
+    async def understood_polish(request: Request, pid: str):
+        form = await request.form()
+        data = {k: form.get(k) for k in form.keys()}
+        return await run_in_threadpool(act, request, str(form.get("csrf", "")), pid,
+                                       lambda u, p: studio.polish_understanding(p, data))
+
+    @app.post("/p/{pid}/understood/undo")
+    def understood_undo(request: Request, pid: str, csrf: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.undo_understanding(p))
 
     @app.post("/p/{pid}/music")
     def music(request: Request, pid: str, csrf: str = Form(""), choice: str = Form("made")):

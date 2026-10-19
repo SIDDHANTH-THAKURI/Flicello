@@ -1,0 +1,16 @@
+{# The starting questions: each with its options, "Decide for each film", and "Other" with their own words. #}
+{% macro answers(profile) %}
+{% for key, question, options in QUESTIONS %}
+<fieldset class="group" data-other-group>
+  <legend>{{ question }}</legend>
+  <div class="choices">
+    {% for value, label in options %}
+    <label class="choice"><input type="radio" name="{{ key }}" value="{{ value }}" {% if profile.answers.get(key) == value %}checked{% endif %}><span>{{ label }}</span></label>
+    {% endfor %}
+    <label class="choice"><input type="radio" name="{{ key }}" value="any" {% if profile.answers.get(key) in (none, 'any') %}checked{% endif %}><span>Decide for each film <i>nothing fixed</i></span></label>
+    <label class="choice"><input type="radio" name="{{ key }}" value="other" {% if profile.answers.get(key) == 'other' %}checked{% endif %}><span>Other <i>in my words</i></span></label>
+  </div>
+  <input class="input gap-top" name="{{ key }}_other" maxlength="200" data-other-for="{{ key }}" value="{{ profile.answers.get(key ~ '_other', '') }}" placeholder="Describe it your way" {% if profile.answers.get(key) != 'other' %}hidden{% endif %}>
+</fieldset>
+{% endfor %}
+{% endmacro %}

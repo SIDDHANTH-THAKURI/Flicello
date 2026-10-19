@@ -30,7 +30,7 @@ from ...explainer.script import VoiceScript
 DESIGNED_TEXT = '# Style: DESIGNED (designer animations)\nThe person picked designer animations. talk: they are cut out of their room and stand in front of a stage; your callouts are drawn BEHIND them, above and around their head.\n- The backbone is `scene` callouts: one designer animation for what is being said right now, about every 3-6 seconds, each starting on the word that brings it. `visual` says in a few concrete words what the animation should show ("two people podcasting at a table", "an email arriving with a notification", "a ghost floating"), `topics` gives 1-3 simple search words for an animation library ("podcast", "email", "ghost"). Think like a motion designer illustrating the story, not a subtitle writer. `text` on a scene is an optional 1-3 word label.\n- `title` for the name of the thing being talked about, once, early (typed on letter by letter).\n- `stack` when a number of things is said ("10 audio clips", "3 reasons"): `count`, a `visual` for one of them ("an audio waveform") and `text` ("10 audio clips"); it flies out of the scene that is up.\n- `stat` for a rating or a figure (value as said). `pill` rarely.\n- `ambient`: one looping animation behind their head for the whole video that suits the subject ("a circular sound visualizer" for audio/music/podcasts, "soft floating particles", "film reel") with `ambient_topics`.\n- Set `punch` on the single strongest moment.\n- voice mode: give every scene a `visual` and `topics` too, so it gets a real animation instead of an emoji.\n'
 from .schemas import Direction, Directions, VisualIdeas, VisualPicks
 from .schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StoryBeat, StoryPitch, StyleRule
-from .schemas import BeatIdea, TalkPart, TalkUnderstanding, Term, Understanding
+from .schemas import BeatIdea, PolishedBrief, TalkPart, TalkUnderstanding, Term, Understanding
 
 SLOWMO_FPS = 47.0  # real slow motion only from 50/60 fps footage
 
@@ -700,11 +700,24 @@ class Brain:
                            f"(the parts: {', '.join(names)}).")
         if before:
             parts.append("# The track they heard\n" + json.dumps(before, indent=1) + "\n\n# What they want changed\n"
-                         + (change.strip() or "(they want something different: change the sound clearly)"))
+                         + (change.strip() or "(they want something different: change the sound clearly)")
+                         + "\n\nThey heard that track and asked for a change, so the new one must sound clearly "
+                           "different in exactly what they asked: change the styles, instruments, tempo or mood that "
+                           "the request points at (not just the wording), and keep only what they did not ask to "
+                           "change. Start `reading` by saying in plain words what is different from the last track.")
         parts.append("Return the track as JSON.")
         req = Request("beat", prompt("beat"), "\n\n".join(parts), BeatIdea, self.models.analyst, effort="low",
                       max_tokens=1500)
         return self._ask(req, check_beat_idea)
+
+    def polish_understanding(self, fields: dict, kind: str) -> dict:
+        """Their brief on 'what I understood', reworded clearly (nothing added, nothing lost)."""
+        text = (f"# The kind of video\n{kind}\n\n# Their brief\n" + json.dumps(fields, indent=1, ensure_ascii=False)
+                + "\n\nReturn the polished brief as JSON.")
+        req = Request("polish", prompt("polish"), text, PolishedBrief, self.models.analyst, effort="low", max_tokens=1500)
+        out = self._ask(req)
+        return {"story": out.story.strip(), "feel": [w.strip() for w in out.feel if w.strip()][:6],
+                "must": [x.strip() for x in out.must if x.strip()][:12], "avoid": [x.strip() for x in out.avoid if x.strip()][:12]}
 
     # -- 2 pitch
     def understand(self, ctx: StoryContext) -> Understanding:
@@ -871,6 +884,19 @@ class LocalBrain:
 
     def _free(self, task: str) -> None:
         self.spend(Usage(task, "local", "local", billed=False))
+
+    def polish_understanding(self, fields: dict, kind: str) -> dict:
+        """Without the AI: tidy spacing and capitals, drop empty and repeated lines."""
+        self._free("polish")
+
+        def tidy(x: str) -> str:
+            x = " ".join(str(x).split()).strip(" -•")
+            return x[:1].upper() + x[1:]
+
+        def uniq(items) -> list[str]:
+            return list(dict.fromkeys(tidy(i) for i in items if str(i).strip()))[:12]
+        return {"story": tidy(fields.get("story", "")), "feel": uniq(fields.get("feel", []))[:6],
+                "must": uniq(fields.get("must", [])), "avoid": uniq(fields.get("avoid", []))}
 
     def analyse_clip(self, clip: ClipInfo, brief: str, sheets: list[Path]) -> ClipAnalysis:
         self._free("analyse")

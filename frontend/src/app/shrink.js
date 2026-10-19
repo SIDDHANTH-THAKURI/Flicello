@@ -148,7 +148,11 @@ export async function convertAndSend(p, chunkBytes, put, progress, originalBytes
   const t0 = performance.now();
   conversion.onProgress = (f) => {
     done = f;
-    progress(Math.min(0.99, f), produced);
+    try { progress(Math.min(0.99, f), produced); } catch (err) { // the person cancelled this upload: stop at once
+      stop = (err && err.message) || 'cancelled';
+      conversion.cancel().catch(() => {});
+      return;
+    }
     if (stop || f < 0.12) return;
     if (tooBig()) stop = 'the lighter copy was coming out too big';
     // what is left of making the lighter copy, against sending the original from the start over this connection

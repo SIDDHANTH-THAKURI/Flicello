@@ -130,6 +130,11 @@ button { font: inherit; color: inherit; }
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  /* italic letters lean past their box: give the gradient room so the last one isn't cut off */
+  padding: 0 .16em .08em 0;
+  margin-right: -.16em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 

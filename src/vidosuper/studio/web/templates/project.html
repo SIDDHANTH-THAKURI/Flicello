@@ -4,6 +4,7 @@
 {% block title %}{{ p.title }} · {{ app_name }}{% endblock %}
 {% block body_attrs %} data-project="{{ p.id }}" data-stage="{{ p.stage }}" data-busy="{{ 1 if p.stage in BUSY else 0 }}" data-chunk="{{ chunk }}" data-shapes="{{ p.shapes }}" data-kind="{{ p.kind }}"{% endblock %}
 {% block content %}
+{% set ideas_left = ideas_left|default(0) %}{% set sample_tries_left = sample_tries_left|default(0) %}{% set polish_left = polish_left|default(0) %}{% set clip_thumbs = clip_thumbs|default([]) %}
 {% set busy = p.stage in BUSY %}
 {% if p.kind == 'montage' %}
   {% set steps = [('setup', 'Clips'), ('preparing', 'Watching'), ('understood', 'Under­stood'), ('choose', 'Story'), ('review', 'Sample'), ('done', 'Film')] %}
@@ -28,9 +29,38 @@
       {% else %}<span>{{ p.shapes|shapes }}</span><span>{{ p.length|span }}</span>{% endif %}
       {% if p.song and p.kind == 'montage' %}<span>♪ {{ p.song }}</span>{% endif %}
       {% if p.intent %}<span><q>{{ p.intent }}</q></span>{% endif %}
+      {% if p.kind != 'talk' %}{% if p.stage == 'setup' %}<a class="meta-edit" href="#settings-edit">Change</a>
+      {% elif 'setup' in backs and p.stage not in BUSY %}<a class="meta-edit" href="#back-zone">Change</a>{% endif %}{% endif %}
     </div>
   </div>
 </header>
+{% if p.stage == 'setup' and p.kind != 'talk' %}
+<details class="panel settings-edit rise d2" id="settings-edit">
+  <summary>Change the shape{% if p.kind == 'montage' %} or the length{% endif %}</summary>
+  <form method="post" action="/p/{{ p.id }}/settings" class="gap-top">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <fieldset class="group"><legend>Shape</legend><div class="choices">
+      {% for v, label in [('9:16', 'Vertical 9:16'), ('16:9', 'Widescreen 16:9'), ('both', 'Both')] %}
+      <label class="choice"><input type="radio" name="shapes" value="{{ v }}" {% if p.shapes == v %}checked{% endif %}><span>{{ label }}</span></label>{% endfor %}
+    </div></fieldset>
+    {% if p.kind == 'montage' %}
+    <fieldset class="group"><legend>Length</legend><div class="choices">
+      {% for n in lengths %}<label class="choice"><input type="radio" name="length" value="{{ n }}" {% if p.length|int == n %}checked{% endif %}><span>{{ n|span }}</span></label>{% endfor %}
+      <label class="choice"><input type="radio" name="length" value="custom" {% if p.length|int not in lengths %}checked{% endif %}><span>My own length</span></label>
+    </div>
+    <div class="inline-fields" data-when="length=custom">
+      <input class="input num-in" name="length_custom" inputmode="decimal" maxlength="5" value="{{ p.length|int if p.length|int not in lengths else '' }}" placeholder="e.g. 40" aria-label="Length">
+      <select class="input" name="length_unit" aria-label="Unit"><option value="s">seconds</option>{% if lengths[-1] >= 120 %}<option value="min">minutes</option>{% endif %}</select>
+      <small class="muted">up to {{ lengths[-1]|span }}</small>
+    </div>
+    {% if p.song_seconds %}<p class="help">Your song is {{ p.song_seconds|int }} s long; a longer film needs a longer song (or it can be extended below).</p>{% endif %}
+    <p class="help">Longer films take longer to make{% if credits %} and use more credits{% endif %}.</p>
+    </fieldset>
+    {% endif %}
+    <button class="btn" type="submit">Save</button>
+  </form>
+</details>
+{% endif %}
 
 {% if here >= 0 %}
 <ol class="track rise d2" aria-label="Progress">
@@ -73,11 +103,34 @@
       </label>
       <ul class="files" id="clip-list">
         {% for c in clips %}
-        <li data-clip="{{ c.id }}" class="ok"><span class="thumb" aria-hidden="true"></span><span class="name">{{ c.name }}</span><span class="sub">{{ c.seconds|mmss }}</span>
-          <button class="link" type="button" data-delete="{{ c.id }}">Remove</button></li>
+        <li data-clip="{{ c.id }}" class="ok clip-row">
+          {% if c.id in clip_thumbs %}<img class="thumb" src="/m/{{ p.id }}/stills/clip-{{ c.id }}.jpg" alt="" loading="lazy">
+          {% else %}<span class="thumb thumb-film" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></svg></span>{% endif %}
+          <span class="name">{{ c.name }}</span>
+          <span class="sub">{% if c.height and c.width %}<i class="q">{{ '4K' if [c.width, c.height]|min >= 2000 else ('HD' if [c.width, c.height]|min >= 1000 else (([c.width, c.height]|min)|string ~ 'p')) }}</i>{% endif %}{{ c.seconds|mmss }}</span>
+          <button class="clip-remove" type="button" data-delete="{{ c.id }}" aria-label="Remove {{ c.name }}" title="Remove this clip">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Remove</span></button></li>
         {% endfor %}
       </ul>
       <ul class="files" id="upload-list"></ul>
+      {% if p.kind == 'montage' %}
+      <div class="alt-sources">
+        <button class="alt-card" type="button" disabled aria-disabled="true">
+          <b>No footage for it? Generate shots from words</b>
+          <small>Made with Higgsfield AI video · <span class="soon">coming soon</span></small>
+        </button>
+      </div>
+      {% endif %}
+      <details class="more gap-top"><summary>Something else? Tell us what you want</summary>
+        <form method="post" action="/p/{{ p.id }}/note" class="gap-top">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label class="field"><span>In your words: what should this film be, or have?</span>
+            <textarea name="note" rows="2" maxlength="400" required placeholder="Start on the sunset / keep my dog in every part / end on the group hug"></textarea></label>
+          <button class="btn" type="submit">Add to my film</button>
+          <p class="help">It's added to your request; the next step shows how it was understood, so you can correct it.</p>
+        </form>
+      </details>
     </section>
     {% endif %}
 
@@ -180,12 +233,14 @@
       {% endif %}
     </section>
     {% endif %}
-    <form method="post" action="/p/{{ p.id }}/start" class="panel start rise d4">
+    {% set need = (cost - (p.credits or 0)) if cost is not none else 0 %}
+    {% set short = credits and need > credits.total %}
+    <form method="post" action="/p/{{ p.id }}/start" class="panel start rise d4" data-confirm="Start making this film? {% if p.kind == 'montage' %}It watches your clips and works out the story{% else %}It listens and works out what to show{% endif %}{% if total_eta %}, {{ total_eta|eta }} to the finished film{% endif %}{% if credits and need > 0 %}, and it uses {{ need }} credit{{ '' if need == 1 else 's' }}{% endif %}. You can still change things after it." data-confirm-yes="Start">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      {% set need = (cost - (p.credits or 0)) if cost is not none else 0 %}
-      {% set short = credits and need > credits.total %}
       <button class="btn-sun wide" type="submit" id="start-btn" {% if (p.kind == 'voice' and not p.song) or (p.kind != 'voice' and not clips) or short %}disabled{% endif %}>
         <span>{% if p.kind == 'voice' %}Make my animation{% elif p.kind == 'talk' %}Add my motion graphics{% else %}Start: watch my clips{% endif %}</span></button>
+      {% if p.kind == 'voice' and not p.song %}<p class="cost-note">Add your recording first, then you can start.</p>
+      {% elif p.kind != 'voice' and not clips %}<p class="cost-note">Add {{ 'your video' if p.kind == 'talk' else 'at least one clip' }} first, then you can start.</p>{% endif %}
       {% if credits and cost is not none %}
       <p class="cost-note{{ ' short' if short }}">{% if short %}This film uses {{ cost }} credit{{ '' if cost == 1 else 's' }}{% if p.credits %} ({{ need }} more than it has used){% endif %} and you have {{ credits.total }}. {% if p.kind == 'montage' %}A shorter length uses fewer{% else %}A shorter recording uses fewer{% endif %}{% if credits.monthly %}; more come on {{ credits.resets }}{% endif %}.
       {% elif need <= 0 %}Already counted: no more credits needed.
@@ -193,7 +248,7 @@
       {% elif credits and p.kind != 'montage' %}
       <p class="cost-note">Uses credits by the length of your {{ 'recording' if p.kind == 'voice' else 'video' }}: shown once it's added.</p>
       {% endif %}
-      <p class="eta">Takes {{ total_eta|eta }} in all. You can close the page meanwhile.</p>
+      <p class="eta">Takes {{ total_eta|eta }} in all (longer films take longer). You can close the page meanwhile.</p>
     </form>
   </aside>
 </div>
@@ -213,7 +268,7 @@
   <details class="stop">
     <summary>Stop this step</summary>
     <form method="post" action="/p/{{ p.id }}/stop"><input type="hidden" name="csrf" value="{{ csrf }}">
-      <p class="help">It stops now and goes back to where you were, so you can change something.</p>
+      <p class="help">It stops now and goes back one step, so you can change something. What this step made so far is not kept.</p>
       <button class="btn" type="submit">Stop it</button></form>
   </details>
 </section>
@@ -282,7 +337,12 @@
   {% else %}<p class="help">A soft original beat sits under your voice.</p>{% endif %}
 </section>
 {% endif %}
-<button class="btn-sun wide gap-top" type="submit" form="understood-form"><span>{{ "That's right: show me looks" if looks else "That's right: make a sample" }}</span></button>
+<div class="u-tools rise d4">
+  {% if (polish_left or 0) > 0 %}<button class="btn" type="submit" form="understood-form" formaction="/p/{{ p.id }}/understood/polish" data-confirm="Let the AI reword this so it's clear? It keeps your meaning and adds nothing; you can undo it. ({{ polish_left }} left for this film)" data-confirm-yes="Polish it"><span>✦ Polish my words with AI</span></button>{% endif %}
+  {% if understood.get('_history') %}<form method="post" action="/p/{{ p.id }}/understood/undo" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn quiet" type="submit">↶ Undo the last polish</button></form>{% endif %}
+  <span class="help">{% if (polish_left or 0) > 0 %}Write it roughly: the AI can make it clear ({{ polish_left }} left).{% else %}Edit the words above yourself.{% endif %} Nothing is made until you press the button below.</span>
+</div>
+<button class="btn-sun wide gap-top" type="submit" form="understood-form" data-confirm="{{ "Paint three looks from this?" if looks else "Make a sample from this?" }} It takes a few minutes and uses AI. You can still change it after." data-confirm-yes="Go"><span>{{ "That's right: show me looks" if looks else "That's right: make a sample" }}</span></button>
 
 {% elif p.stage == 'understood' and understood %}
 {% set u = understood %}
@@ -344,7 +404,12 @@
   {{ beat_block(p, csrf, beats, beats_left, can_compose, track_seconds) }}
 </section>
 {% endif %}
-<button class="btn-sun wide gap-top" type="submit" form="understood-form"><span>That's right: show me story ideas</span></button>
+<div class="u-tools rise d4">
+  {% if (polish_left or 0) > 0 %}<button class="btn" type="submit" form="understood-form" formaction="/p/{{ p.id }}/understood/polish" data-confirm="Let the AI reword this so it's clear? It keeps your meaning and adds nothing; you can undo it. ({{ polish_left }} left for this film)" data-confirm-yes="Polish it"><span>✦ Polish my words with AI</span></button>{% endif %}
+  {% if understood.get('_history') %}<form method="post" action="/p/{{ p.id }}/understood/undo" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn quiet" type="submit">↶ Undo the last polish</button></form>{% endif %}
+  <span class="help">{% if (polish_left or 0) > 0 %}Write it roughly: the AI can make it clear ({{ polish_left }} left).{% else %}Edit the words above yourself.{% endif %} Nothing is made until you press the button below.</span>
+</div>
+<button class="btn-sun wide gap-top" type="submit" form="understood-form" data-confirm="Write three story ideas from this? It takes a minute or two and uses AI. You can still go back and change it." data-confirm-yes="Show me ideas"><span>That's right: show me story ideas</span></button>
 
 {# ------------------------------------------------------------------ choose a look (voice and designed talking videos) #}
 {% elif p.stage == 'choose' and looks %}
@@ -364,39 +429,43 @@
         <dt>Camera</dt><dd>{{ d.camera }}</dd>
         {% if d.music and p.kind == 'voice' %}<dt>Music</dt><dd>{{ d.music }}</dd>{% endif %}
       </dl>
-      <form method="post" action="/p/{{ p.id }}/pick">
+      <form method="post" action="/p/{{ p.id }}/pick" data-confirm="Make a sample in &ldquo;{{ d.title }}&rdquo;? It takes a few minutes. You can still pick another look after you see it." data-confirm-yes="Make the sample">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pitch" value="{{ item.id }}">
-        <button class="btn-sun wide" type="submit"><span>Make it in this look</span></button>
+        <button class="btn-sun wide" type="submit"><span>Make a sample in this look</span></button>
       </form>
+      {% if ideas_left > 0 %}
       <details class="more"><summary>Change something</summary>
-        <form method="post" action="/p/{{ p.id }}/another" class="gap-top">
+        <form method="post" action="/p/{{ p.id }}/another" class="gap-top" data-confirm="Repaint this look with your change? It uses one of the {{ ideas_left }} new looks this film can still have." data-confirm-yes="Repaint">
           <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="base" value="{{ item.id }}">
           <label class="field"><span>What should change?</span><input name="reason" maxlength="300" required placeholder="Warmer colours / more playful / a forest, not a city"></label>
           <button class="btn" type="submit">Repaint it</button>
         </form>
       </details>
+      {% endif %}
     </div>
   </article>
   {% endfor %}
 </div>
 <section class="panel gap-top rise">
-  <h2>None of these?</h2>
-  <form method="post" action="/p/{{ p.id }}/another" class="row-form">
+  <h2>None of these? <small class="count">{{ ideas_left }} new look{{ '' if ideas_left == 1 else 's' }} left</small></h2>
+  {% if ideas_left > 0 %}
+  <form method="post" action="/p/{{ p.id }}/another" class="row-form" data-confirm="Paint another look? It uses one of the {{ ideas_left }} this film can still have." data-confirm-yes="Paint it">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label class="field"><span>What's missing? <small class="muted">(optional)</small></span><input name="reason" maxlength="300" placeholder="Brighter / more serious / hand-drawn"></label>
     <button class="btn" type="submit">Another look</button>
   </form>
-  <form method="post" action="/p/{{ p.id }}/another">
+  <form method="post" action="/p/{{ p.id }}/another" data-confirm="Paint your idea as a look? It uses one of the {{ ideas_left }} this film can still have." data-confirm-yes="Paint my idea">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="field"><span>Or describe your own</span><textarea name="own" rows="2" maxlength="600" placeholder="Like a 90s cartoon / chalk on a blackboard / a cosy café at night"></textarea></label>
+    <label class="field"><span>Or describe your own</span><textarea name="own" rows="2" maxlength="600" required placeholder="Like a 90s cartoon / chalk on a blackboard / a cosy café at night"></textarea></label>
     <button class="btn" type="submit">Paint my idea</button>
   </form>
+  {% else %}<p class="help">That's all the looks this film can have: pick one above. To start over, go back to your {{ 'recording' if p.kind == 'voice' else 'video' }} and settings below.</p>{% endif %}
 </section>
 
 {# ------------------------------------------------------------------ choose a story #}
 {% elif p.stage == 'choose' %}
 {% if info and info.notes %}<section class="panel notice rise">{% for n in info.notes %}<p class="lead-s">{{ n }}</p>{% endfor %}</section>{% endif %}
-<p class="page-sub rise d2">Three ways to tell it. Pick the one you'd post.</p>
+<p class="page-sub rise d2">Three ways to tell it. Pick the one you'd post: it makes a short sample first, so you can check it before the whole film is made.</p>
 <div class="posters gap-top">
   {% for item in pitches if not item.rejected %}
   {% set d = item.pitch %}
@@ -414,27 +483,29 @@
       <details class="more"><summary>Part by part</summary>
         <ol class="beats">{% for b in d.beats %}<li>{{ b.what|noids }}{% if b.music %} <span class="muted">· {{ b.music }}</span>{% endif %}</li>{% endfor %}</ol>
       </details>
-      <form method="post" action="/p/{{ p.id }}/pick">
+      <form method="post" action="/p/{{ p.id }}/pick" data-confirm="Make a sample of &ldquo;{{ d.title }}&rdquo;? It takes a few minutes. You can still pick another story after you see the sample." data-confirm-yes="Make the sample">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pitch" value="{{ item.id }}">
-        <button class="btn-sun wide" type="submit"><span>Make this one</span></button>
+        <button class="btn-sun wide" type="submit"><span>Make a sample of this one</span></button>
       </form>
     </div>
   </article>
   {% endfor %}
 </div>
-<section class="panel gap-top rise">
-  <h2>None of these?</h2>
-  <form method="post" action="/p/{{ p.id }}/another" class="row-form">
+<section class="panel gap-top rise ideas-more">
+  <h2>Not one of these? Get a different idea <small class="count">{{ ideas_left }} more idea{{ '' if ideas_left == 1 else 's' }} for this film</small></h2>
+  <p class="lead-s">These don't change the stories above: each one adds a new story card.</p>
+  {% if ideas_left > 0 %}
+  <form method="post" action="/p/{{ p.id }}/another" class="row-form" data-confirm="Write another story idea? It uses one of the {{ ideas_left }} left for this film." data-confirm-yes="Write it">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label class="field"><span>What's missing? <small class="muted">(optional)</small></span><input name="reason" maxlength="300" placeholder="Something funnier / more about the food / calmer"></label>
     <button class="btn" type="submit">Another idea</button>
   </form>
-  <form method="post" action="/p/{{ p.id }}/another">
+  <form method="post" action="/p/{{ p.id }}/another" data-confirm="Shape your idea into a story card? It uses one of the {{ ideas_left }} left for this film." data-confirm-yes="Use my idea">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="field"><span>Or describe your own idea</span><textarea name="own" rows="2" maxlength="600" placeholder="Start with the sunset, then rewind the day…"></textarea></label>
+    <label class="field"><span>Or describe your own idea</span><textarea name="own" rows="2" maxlength="600" required placeholder="Start with the sunset, then rewind the day…"></textarea></label>
     <button class="btn" type="submit">Use my idea</button>
   </form>
-  <form method="post" action="/p/{{ p.id }}/another" class="improvise-form">
+  <form method="post" action="/p/{{ p.id }}/another" class="improvise-form" data-confirm="Let it improvise a new story? It uses one of the {{ ideas_left }} left for this film." data-confirm-yes="Improvise">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="slider">
       <label for="improvise"><b>Or let it improvise</b></label>
@@ -444,6 +515,7 @@
     </div>
     <button class="btn" type="submit">Improvise one</button>
   </form>
+  {% else %}<p class="help">That's all the ideas this film can have: pick one of the stories above. To start over, go back to the clips and settings below.</p>{% endif %}
 </section>
 
 {# ------------------------------------------------------------------ check the sample #}
@@ -452,29 +524,36 @@
 {% if info and info.changes %}
 <section class="panel notice rise"><h2>What I changed</h2><div class="rows">{% for line in info.changes %}<div><span class="v">{{ line }}</span></div>{% endfor %}</div></section>
 {% endif %}
+{% if board and board.rough %}
+<section class="panel notice preview-key rise d2">
+  <p><b>Two previews, both finished: nothing is stuck.</b> 1: the whole film, quickly made in low quality, to check the story and the timing. 2: a short part at full quality, to check how it will look. Neither is the final film yet.</p>
+</section>
+{% endif %}
 <div class="screens gap-top rise d2">
   {% if board and board.rough %}
-  <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}"><div class="frame">
-    <video src="/m/{{ p.id }}/out/{{ board.rough }}" controls playsinline preload="metadata"></video></div>
-    <figcaption>The whole film, rough · {{ board.seconds|mmss }}</figcaption></figure>
+  <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}">
+    <figcaption class="cap-top"><span class="cap-n">1</span><span><b>The whole story</b><small>rough, low quality · {{ board.seconds|mmss }}</small></span></figcaption>
+    <div class="frame"><video src="/m/{{ p.id }}/out/{{ board.rough }}" controls playsinline preload="metadata"></video></div></figure>
   {% endif %}
-  <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}"><div class="frame">
-    <video src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video></div>
-    {% if board and board.rough %}<figcaption>A short part, at full quality</figcaption>{% endif %}</figure>
+  <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}">
+    {% if board and board.rough %}<figcaption class="cap-top"><span class="cap-n">2</span><span><b>How it will look</b><small>a short part, full quality</small></span></figcaption>{% endif %}
+    <div class="frame"><video src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video></div></figure>
 </div>
 <div class="split gap-top">
-  <form method="post" action="/p/{{ p.id }}/sample" class="panel start">
+  <form method="post" action="/p/{{ p.id }}/sample" class="panel start" data-confirm="Make the whole film now, at full quality? This is the long step{% if render_eta %} ({{ render_eta|eta }} as a rule; longer films take longer){% endif %}." data-confirm-yes="Make the whole film">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="ok">
     <h2>Looks right?</h2>
     <button class="btn-sun wide" type="submit"><span>Make the whole film</span></button>
   </form>
   <section class="panel">
     <h2>Not quite?</h2>
-    <form method="post" action="/p/{{ p.id }}/sample">
+    {% if sample_tries_left > 0 %}
+    <form method="post" action="/p/{{ p.id }}/sample" data-confirm="Make a new sample with your change? It takes a few minutes." data-confirm-yes="Make a new sample">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="no">
       <label class="field"><span>What should change?</span><textarea name="note" rows="2" maxlength="600" required placeholder="Slower start / more of the dog / a different shot on the drop"></textarea></label>
       <button class="btn" type="submit">Try again with this</button>
     </form>
+    {% else %}<p class="help">That's all the samples for this film. Make the whole film and ask for changes after, or go back to the {{ 'looks' if looks else 'story ideas' }}.</p>{% endif %}
     {% if p.kind == 'montage' or looks %}
     <form method="post" action="/p/{{ p.id }}/sample" class="gap-top">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="verdict" value="ideas">
@@ -487,7 +566,7 @@
 <section class="panel gap-top storyboard rise d3" id="storyboard">
   <h2>The storyboard</h2>
   <p class="lead-s">Every shot of the film, in order. Drop one, move it, swap it for another moment, or say what's wrong with it: only those shots change, and you get a new sample.</p>
-  <form method="post" action="/p/{{ p.id }}/board">
+  <form method="post" action="/p/{{ p.id }}/board" data-confirm="Remake the sample with your storyboard changes? It takes a few minutes." data-confirm-yes="Remake the sample">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <ol class="sb-grid {{ 'tall' if sample.shape == '9:16' else 'wide' }}">
       {% for c in board.cards %}
@@ -536,7 +615,7 @@
 <section class="panel gap-top rise d3">
   <h2>How did it turn out?</h2>
   <p class="lead-s">Your answer teaches Flicello your taste: your next film starts from it.</p>
-  <form method="post" action="/p/{{ p.id }}/rate">
+  <form method="post" action="/p/{{ p.id }}/rate" data-confirm-if="fix" data-confirm="Make a new version with your changes? It makes the film again (several minutes) and uses one of this film's free changes{% if revisions_left is not none %} ({{ revisions_left }} left){% endif %}. Later, extra versions will use credits." data-confirm-yes="Make a new version">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <fieldset class="group"><legend>Did it do what you asked?</legend>
       <div class="scale">{% for n in range(1, 6) %}<label class="choice"><input type="radio" name="match" value="{{ n }}" required><span>{{ n }}</span></label>{% endfor %}</div>
@@ -549,7 +628,7 @@
       <div class="choices">{% for t in TAGS %}<label class="choice"><input type="checkbox" name="tags" value="{{ t }}"><span>{{ t }}</span></label>{% endfor %}</div>
     </fieldset>
     <label class="field"><span>In your words <small class="muted">(optional)</small></span><textarea name="text" rows="2" maxlength="1000"></textarea></label>
-    <label class="field"><span>What should change? <small class="muted">(optional: we'll make a new version{% if revisions_left is not none %}; {{ revisions_left }} left{% endif %})</small></span>
+    <label class="field"><span>What should change? <small class="muted">(optional: we'll make a new version, which takes time and uses one of your changes{% if revisions_left is not none %}; {{ revisions_left }} left{% endif %})</small></span>
       <textarea name="fix" rows="2" maxlength="1000" placeholder="Leave it empty if it's done"></textarea></label>
     <button class="btn-sun wide" type="submit"><span>Send</span></button>
   </form>
@@ -559,12 +638,14 @@
   <h2>Thanks for rating it {{ rated.liked }}/10</h2>
   <p class="lead-s">Your style profile has learned from it.</p>
   {% if revisions_left is none or revisions_left > 0 %}
-  <form method="post" action="/p/{{ p.id }}/rate">
+  <form method="post" action="/p/{{ p.id }}/rate" data-confirm="Make a new version with your changes? It makes the film again (several minutes) and uses one of this film's free changes{% if revisions_left is not none %} ({{ revisions_left }} left){% endif %}. Later, extra versions will use credits." data-confirm-yes="Make a new version">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="match" value="{{ rated.match }}"><input type="hidden" name="liked" value="{{ rated.liked }}">
     <label class="field"><span>Want changes?</span><textarea name="fix" rows="2" maxlength="1000" required placeholder="What should change"></textarea></label>
     <button class="btn" type="submit">Make a new version</button>
+    <p class="help">A new version makes the film again: it takes several minutes and uses one of your changes{% if revisions_left is not none %} ({{ revisions_left }} left){% endif %}.</p>
   </form>
+  {% else %}<p class="help">That was the last round of changes for this film.</p>
   {% endif %}
 </section>
 {% endif %}
@@ -582,17 +663,17 @@
   <h2>Something went wrong</h2>
   <p class="msg">{{ p.error or "We've been told and are looking at it." }}</p>
   {% if joblog %}<ol class="steps" aria-label="What it did">{% for st in joblog %}<li class="done"><span>{{ st.m }}</span><time>{{ st.s|ago_s }}</time></li>{% endfor %}</ol>{% endif %}
-  <form method="post" action="/p/{{ p.id }}/retry"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <form method="post" action="/p/{{ p.id }}/retry" data-confirm="Try this step again?" data-confirm-yes="Try again"><input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="btn-sun" type="submit"><span>Try again</span></button></form>
   <p class="help"><a href="#report">Tell us what happened</a>: it helps us fix it for everyone.</p>
 </section>
 {% endif %}
 
 {% if 'setup' in backs and p.stage not in BUSY %}
-<section class="panel gap-top back-zone">
+<section class="panel gap-top back-zone" id="back-zone">
   <h2>Change something?</h2>
   <div class="choices">
-    <form method="post" action="/p/{{ p.id }}/back"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="to" value="setup">
+    <form method="post" action="/p/{{ p.id }}/back" data-confirm="Go back to the {{ 'clips' if p.kind == 'montage' else ('recording' if p.kind == 'voice' else 'video') }} and settings? Your uploads stay, but the story ideas and samples made so far are cleared." data-confirm-yes="Go back"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="to" value="setup">
       <button class="btn" type="submit">Back to {{ 'clips' if p.kind == 'montage' else 'your ' ~ ('recording' if p.kind == 'voice' else 'video') }} and settings</button></form>
   </div>
   <p class="help">Your uploads stay. Add or remove {{ 'clips' if p.kind == 'montage' else 'files' }}, change the music or the length, then start again: what's already been measured is reused.</p>
@@ -605,14 +686,14 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label class="field"><span>What went wrong, or what did you expect?</span>
       <textarea name="note" rows="3" maxlength="1500" required placeholder="It's been stuck on the same step for 20 minutes / the music cuts off / the text is hard to read"></textarea></label>
-    <p class="help">We'll see this video's steps and settings with your note, so you don't need to explain those.</p>
+    <p class="help">We'll see this video's steps and settings with your note, so you don't need to explain those. One report per video an hour is plenty: we read every one.</p>
     <button class="btn" type="submit">Send report</button>
   </form>
 </details>
 
 <details class="danger-zone">
   <summary>Delete this film</summary>
-  <form method="post" action="/p/{{ p.id }}/delete">
+  <form method="post" action="/p/{{ p.id }}/delete" data-confirm="Delete &ldquo;{{ p.title }}&rdquo; with all its clips and versions? This can't be undone." data-confirm-yes="Delete it" data-confirm-danger>
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label class="tick"><input type="checkbox" name="sure" value="yes" required><span><b>Yes, delete it with all its clips and versions</b><small>This can't be undone.</small></span></label>
     <button class="btn danger gap-top" type="submit">Delete</button>

@@ -225,6 +225,7 @@ def test_a_reported_problem_is_kept_with_what_happened_and_the_owner_is_told(ser
     import re as _re
 
     server.s.mail_outbox = True
+    server.s.alert_emails = ["alerts@example.com"]  # where the owner's emails go
     user, p = _project(server)
     server.db.run("UPDATE users SET email='me@example.com' WHERE id=?", (user["id"],))
     job = server.db.enqueue("prepare", p["id"], user["id"])
@@ -242,7 +243,7 @@ def test_a_reported_problem_is_kept_with_what_happened_and_the_owner_is_told(ser
     assert rep["note"] == "stuck for ages" and ctx["job"]["id"] == job and ctx["steps"][-1]["message"] == "Watching 2 clips"
     from vidosuper.studio import mail
 
-    assert any("stuck for ages" in m["text"] and m["to"] == "me@example.com" for m in mail.outbox(server.s))
+    assert any("stuck for ages" in m["text"] and m["to"] == "alerts@example.com" for m in mail.outbox(server.s))
     assert "stuck for ages" in client.get("/admin").text
 
 

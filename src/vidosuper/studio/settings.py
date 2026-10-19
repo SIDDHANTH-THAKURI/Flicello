@@ -131,6 +131,8 @@ class StudioSettings(_Strict):
         "people the owner invited); everyone else is told it is by invitation. Env: comma-separated."))
     signups_per_day: int = Field(100, description="New accounts a day; past it, people join a waiting list.")
     mail_from: str = "Flicello <hello@flicello.com>"
+    alert_emails: list[str] = Field(default_factory=lambda: ["zenithvelocitylabs@gmail.com"], description=(
+        "Where the owner's emails go (problem reports, access requests). Env VIDO_STUDIO_ALERT_EMAILS: comma-separated."))
     mail_outbox: bool = Field(False, description="Write emails to <home>/outbox instead of sending them (local tests).")
     improve_every: int = Field(5, description="Start the improvement routine after this many new ratings.")
     render_processes: int = Field(2, description="Processes that draw a designed talking video at once. Measured on "
@@ -244,6 +246,8 @@ def load_settings(home: Path | None = None, overrides: dict | None = None) -> St
     if os.environ.get("VIDO_STUDIO_ALLOWED_EMAILS"):
         data["allowed_emails"] = [e.strip().lower() for e in os.environ["VIDO_STUDIO_ALLOWED_EMAILS"].split(",")
                                   if e.strip()]
+    if os.environ.get("VIDO_STUDIO_ALERT_EMAILS"):
+        data["alert_emails"] = [e.strip() for e in os.environ["VIDO_STUDIO_ALERT_EMAILS"].split(",") if e.strip()]
     if os.environ.get("VIDO_STUDIO_MONTHLY_USD"):
         data.setdefault("limits", {})["monthly_usd"] = float(os.environ["VIDO_STUDIO_MONTHLY_USD"])
     data.update(overrides or {})

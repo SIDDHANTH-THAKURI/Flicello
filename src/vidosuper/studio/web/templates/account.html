@@ -52,7 +52,7 @@
     {% for k in passkeys %}
     <div><span class="k">Passkey · {{ k.name }}</span>
       <span class="v">added {{ k.created|ago }}{% if k.last_used %}, used {{ k.last_used|ago }}{% endif %}
-        <form method="post" action="/account/passkeys/{{ k.id }}/delete" class="inline-form" data-confirm="Remove this passkey?">
+        <form method="post" action="/account/passkeys/{{ k.id }}/delete" class="inline-form" data-confirm="Remove this passkey? You won't be able to sign in with it any more." data-confirm-yes="Remove it" data-confirm-danger>
           <input type="hidden" name="csrf" value="{{ csrf }}"><button class="link" type="submit">Remove</button>
         </form></span></div>
     {% endfor %}

@@ -56,6 +56,14 @@ class Understanding(BaseModel):
     questions: list[Question] = Field(default_factory=list, description="0-3 genuinely open questions.")
 
 
+class PolishedBrief(BaseModel):
+    """Their brief, reworded clearly by the AI with nothing added or lost."""
+    story: str = Field(..., description="What the film is about, 1-2 clear sentences, their meaning exactly.")
+    feel: list[str] = Field(default_factory=list, description="2-4 words for the tone.")
+    must: list[str] = Field(default_factory=list, description="What they asked to have, one per item.")
+    avoid: list[str] = Field(default_factory=list, description="What to leave out, one per item.")
+
+
 class TalkPart(BaseModel):
     at: float = Field(..., description="When this part starts, in seconds into the recording (from the transcript).")
     what: str = Field(..., description="What this part says, in under 12 words ('Why most diets fail').")

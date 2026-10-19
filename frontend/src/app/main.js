@@ -4,6 +4,9 @@ import '../styles/tokens.css';
 import '../styles/components.css';
 import '../styles/app.css';
 import '../styles/studio.css';
+import '../styles/extras.css';
+import '../styles/light.css';
+import { confirms, openTargets, otherChoices, showWhen, themeToggle } from './asks.js';
 import { footageWall } from './wall.js';
 import { passkeySignIn, passkeyAdd, passkeysSupported } from './passkeys.js';
 import { studio } from './studio.js';
@@ -98,19 +101,16 @@ function legalToc() {
   $$('.prose h2[id]').forEach((h) => io.observe(h));
 }
 
-// ---- dangerous buttons ask first (the server still checks)
-function confirms() {
-  $$('form[data-confirm]').forEach((f) => f.addEventListener('submit', (e) => {
-    if (!window.confirm(f.dataset.confirm)) e.preventDefault();
-  }));
-}
-
 function main() {
   toasts();
   codeBoxes();
   passkeys();
   legalToc();
   confirms();
+  themeToggle();
+  otherChoices();
+  openTargets();
+  showWhen();
   studio();
   const wall = $('.auth-stage canvas');
   if (wall) footageWall(wall, $('#auth-video'), reduced);

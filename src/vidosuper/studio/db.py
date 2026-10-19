@@ -139,6 +139,12 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+class JobStopped(BaseException):
+    """The person stopped this step while it was running on this machine (see Studio.stop): the work ends at its
+    next progress update and nothing it was making is kept. A BaseException, so a step's own `except Exception`
+    (a fallback, a retry) can't swallow it and carry on."""
+
+
 class DB:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -281,6 +287,8 @@ class DB:
                  "progress=MAX(progress, ?), message=? WHERE id=?", (p, msg, time.time(), p, msg, job_id))
         if msg:
             self.step(job_id, msg)
+        if getattr(self, "stop_local", False) and self.value("SELECT status FROM jobs WHERE id=?", (job_id,)) == "cancelled":
+            raise JobStopped(f"job {job_id} was stopped")
 
     def step(self, job_id: int, message: str) -> None:
         """The job's step log, shown live under the bar: a new line when the step changes; a counter that moves

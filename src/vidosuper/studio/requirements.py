@@ -22,6 +22,51 @@ def wants_no_music(note: str) -> bool:
     return bool(NO_MUSIC.search(note or ""))
 
 
+# Their words asking for the clips' own sound to go: "no audio of that video", "mute the clips", "no original sound",
+# "music only", "remove the clip sound". Narrow on purpose, since a wrong match silences a film: the words must sit
+# right next to each other, a negation before them ("don't remove the sound from the clips") never counts, and
+# neither do "noise" (that's a clean-up, not silence), the music's drop or "cut to" (editing words).
+_NOT = r"(?<!n't )(?<!not )(?<!never )"
+_OFF = (r"(?:no|without|remove|mute|turn\s+off|switch\s+off|get\s+rid\s+of|take\s+out|strip|"
+        r"(?:don'?t|do\s+not|never)\s+(?:use|keep|want|add|include|play))")
+_SOUND = r"(?:audio|sound|sounds|voices?|talking|speech)"
+_CLIPS = r"(?:video|videos|clip|clips|footage|recordings?|shots?)"
+NO_CLIP_SOUND = re.compile(
+    # "no audio of that video", "remove all the sound from my clips", "don't use any sound in the footage"
+    rf"{_NOT}\b{_OFF}\s+(?:(?:any|all|the|of|more|original|natural|real|their|its|my)\s+){{0,3}}{_SOUND}\b"
+    rf"(?:\s+at\s+all)?\s+(?:of|from|in|on)\s+(?:(?:the|that|this|my|those|these|all|any|each|every)\s+)?{_CLIPS}\b"
+    # "no clip sound", "without the original audio", "mute the camera sound"
+    rf"|{_NOT}\b{_OFF}\s+(?:(?:any|all|the|their|its|my)\s+){{0,2}}"
+    rf"(?:original|natural|clips?'?|video'?s?|footage|camera|ambient|real)\s+{_SOUND}\b"
+    # "mute the clips", "mute all my videos", "the clips should be muted"
+    rf"|{_NOT}\bmute\s+(?:(?:the|all|my|every|each)\s+){{0,2}}{_CLIPS}\b"
+    rf"|\b{_CLIPS}\s+(?:should|must)\s+be\s+(?:muted|silent|silenced)\b"
+    # "music only", "only the music", "just music" (not "only music at the start", "just music and the waves")
+    r"|\b(?:only|just)\s+(?:the\s+)?music\b(?!\s*(?:and|with|plus|&|\+|over|under|at|for|in|during|until|till|on|from"
+    r"|when|while|starts?|plays?|comes?|then|before|after)\b)"
+    r"|\bmusic\s+only\b(?!\s*(?:at|for|in|during|until|till|on|from|when|while|then|before|after)\b)"
+    # "no sound except the music"
+    rf"|{_NOT}\bno\s+(?:audio|sound|sounds)\s*(?:at\s+all\s*)?,?\s*(?:except|but|apart\s+from|other\s+than|besides)\s+"
+    r"(?:the\s+)?music\b",
+    re.I)
+
+# "keep the sound of the waves", "with the original audio", "every hit with its sound": this film wants its clips heard
+CLIP_SOUND = re.compile(
+    rf"{_NOT}\b(?:keep|with|hear|use|add|include|play)\s+(?:(?:the|their|its|my|all|some)\s+){{0,2}}"
+    r"(?:(?:own|original|natural|real|clips?'?|ambient|camera)\s+)?(?:sound|sounds|audio)\b", re.I)
+
+
+def wants_no_clip_sound(note: str) -> bool:
+    """They asked for the clips' own sound to go (music only, or silence)."""
+    return bool(NO_CLIP_SOUND.search(note or ""))
+
+
+def wants_clip_sound(note: str) -> bool:
+    """This film's words ask to hear its clips (their sound, or the hits): a style answer of 'music only' gives way."""
+    note = note or ""
+    return not wants_no_clip_sound(note) and bool(CLIP_SOUND.search(note) or HITS_WORDS.search(note))
+
+
 def _row(ok: bool, what: str, detail: str) -> dict:
     return {"level": "ok" if ok else "warn", "check": "requirement", "detail": f"{what}: {detail}"}
 

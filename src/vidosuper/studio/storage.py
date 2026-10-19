@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -211,6 +212,7 @@ def finish_upload(db: DB, s: StudioSettings, up: dict, project: dict, final_size
                "VALUES (?,?,?,?,?,?,?,?,?)", (cid, project["id"], up["name"], file, up["size"], meta["seconds"],
                                               meta["width"], meta["height"], time.time()))
         result = {"clip": cid, "name": up["name"], "seconds": round(meta["seconds"], 1)}
+        clip_thumb(work.clips / file, work.stills, cid, meta["seconds"])
     else:
         for old in work.music.glob("song.*"):
             old.unlink()
@@ -222,6 +224,43 @@ def finish_upload(db: DB, s: StudioSettings, up: dict, project: dict, final_size
     return result
 
 
+_THUMBING: set[str] = set()  # clips whose frame is being made right now (one ffmpeg per clip, however many page loads)
+_THUMB_FAILED: set[str] = set()  # clips that gave no frame: not tried again on every page load
+_THUMB_LOCK = threading.Lock()
+
+
+def clip_thumb(clip_path: Path, stills: Path, cid: str, seconds: float = 0.0) -> Path | None:
+    """A small frame from the clip (a third of the way in, at most 1.5 s), for its row on the setup page. Written to
+    a temporary name and moved into place, so a half-written picture is never shown."""
+    from ..ffmpeg import run_ffmpeg
+
+    out = stills / f"clip-{cid}.jpg"
+    if out.exists():
+        return out
+    with _THUMB_LOCK:
+        if cid in _THUMBING or cid in _THUMB_FAILED:
+            return None
+        _THUMBING.add(cid)
+    tmp = stills / f"clip-{cid}.part.jpg"
+    try:
+        stills.mkdir(parents=True, exist_ok=True)
+        at = min(1.5, max(0.0, (seconds or 3.0) / 3))
+        run_ffmpeg(["-ss", f"{at:.2f}", "-i", str(clip_path), "-frames:v", "1", "-vf", "scale=-2:160", "-q:v", "4",
+                    str(tmp)], what="clip thumbnail", timeout=25)
+        if tmp.exists():
+            os.replace(tmp, out)
+        if not out.exists():
+            _THUMB_FAILED.add(cid)
+        return out if out.exists() else None
+    except Exception:  # noqa: BLE001 - a row without a picture is fine
+        tmp.unlink(missing_ok=True)
+        _THUMB_FAILED.add(cid)
+        return None
+    finally:
+        with _THUMB_LOCK:
+            _THUMBING.discard(cid)
+
+
 def delete_clip(db: DB, s: StudioSettings, project: dict, clip_id: str) -> bool:
     row = db.one("SELECT * FROM clips WHERE id=? AND project_id=?", (clip_id, project["id"]))
     if not row:
@@ -229,6 +268,7 @@ def delete_clip(db: DB, s: StudioSettings, project: dict, clip_id: str) -> bool:
     path = safe_child(workdir(s, project["user_id"], project["id"]).clips, row["file"])
     if path:
         path.unlink(missing_ok=True)
+    (workdir(s, project["user_id"], project["id"]).stills / f"clip-{clip_id}.jpg").unlink(missing_ok=True)
     db.run("DELETE FROM clips WHERE id=?", (clip_id,))
     return True
 

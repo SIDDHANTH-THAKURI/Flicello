@@ -1,0 +1,118 @@
+/* Second round of fixes (both themes): the clickable cursor everywhere, the light/dark switch, the card that asks
+   before anything starts, and the small new pieces on the film's page. */
+
+/* ------------------------------------------------------------------ everything clickable says so */
+a[href], button:not([disabled]), summary, select, label.choice, label.kind, label.tick, label.drop,
+input[type="radio"], input[type="checkbox"], input[type="range"], input[type="file"], [role="button"], .step-back { cursor: pointer; }
+button[disabled], .btn[disabled], input:disabled, .choice input:disabled + span, [aria-disabled="true"] { cursor: not-allowed; }
+
+/* ------------------------------------------------------------------ light / dark */
+.theme-toggle { display: inline-grid; place-items: center; width: 38px; height: 38px; margin-left: .3rem; padding: 0; border-radius: 12px; border: 1px solid var(--line-2); background: transparent; color: var(--paper-2); transition: background .25s, color .25s, transform .4s var(--ease-spring); }
+.theme-toggle:hover { color: var(--paper); background: rgba(127, 127, 127, .1); transform: rotate(-12deg); }
+.theme-toggle svg { width: 19px; height: 19px; }
+[data-theme="dark"] .theme-toggle .i-moon { display: none; }
+[data-theme="light"] .theme-toggle .i-sun { display: none; }
+
+/* ------------------------------------------------------------------ asking before something starts */
+.ask-veil { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 1.2rem; background: rgba(8, 6, 12, .55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); animation: veil-in .25s var(--ease-out) both; }
+.ask-card { width: min(460px, 100%); padding: 1.5rem 1.5rem 1.3rem; border-radius: var(--r-l); background: var(--ink-2); color: var(--paper); border: 1px solid var(--line-2); box-shadow: var(--shadow-l); animation: ask-in .4s var(--ease-spring) both; }
+.ask-card h3 { margin: 0 0 .5rem; font-size: 1.2rem; letter-spacing: -0.02em; }
+.ask-card p { margin: 0 0 1.3rem; color: var(--paper-2); line-height: 1.5; }
+.ask-card .ask-row { display: flex; gap: .6rem; justify-content: flex-end; flex-wrap: wrap; }
+.ask-card .btn-sun { --h: 44px; }
+.ask-card .btn.danger-go { border-color: transparent; background: var(--cut); color: #fff; }
+@keyframes veil-in { from { opacity: 0; } }
+@keyframes ask-in { from { opacity: 0; transform: translateY(12px) scale(.97); } }
+
+/* ------------------------------------------------------------------ small new pieces */
+.meta .meta-edit { align-self: center; padding: .3rem .75rem; border-radius: 999px; font-size: .82rem; color: var(--paper); text-decoration: none; border: 1px dashed var(--line-2); }
+.meta .meta-edit:hover { border-style: solid; border-color: var(--rose); }
+details.settings-edit { margin: 0 0 1.4rem; }
+details.settings-edit > summary { font-weight: 650; color: var(--paper); }
+.count { margin-left: .5rem; padding: .18rem .6rem; border-radius: 999px; font-size: .74rem; font-weight: 600; letter-spacing: .01em; vertical-align: middle; color: var(--paper-2); border: 1px solid var(--line-2); white-space: nowrap; }
+.alt-sources { margin-top: 1rem; }
+.alt-card { display: grid; gap: .25rem; width: 100%; text-align: left; padding: .9rem 1rem; border-radius: 16px; border: 1px dashed var(--line-2); background: transparent; color: var(--muted); font: inherit; }
+.alt-card b { color: var(--paper-2); font-size: .95rem; }
+.alt-card small { font-size: .82rem; }
+.soon { display: inline-block; margin-left: .2rem; padding: .05rem .5rem; border-radius: 999px; font-size: .72rem; font-weight: 700; color: #fff; background: var(--sun); }
+.u-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-top: 1.1rem; }
+.u-tools .help { flex: 1 1 260px; margin: 0; }
+.preview-key p { margin: 0; color: var(--paper-2); }
+.preview-key b { display: block; margin-bottom: .2rem; color: var(--paper); }
+.device .cap-top { display: flex; align-items: center; gap: .7rem; font-family: var(--f-sans); color: var(--paper); font-size: 1rem; }
+.device .cap-top span:last-child { display: grid; text-align: left; line-height: 1.25; }
+.device .cap-top small { color: var(--muted); font-size: .82rem; }
+.cap-n { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--sun); color: #fff; font-weight: 800; font-size: .95rem; flex: none; }
+.ideas-more h2 { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
+.working details.stop summary { display: inline-flex; padding: .45rem .9rem; border-radius: 999px; border: 1px solid var(--line-2); }
+
+/* ------------------------------------------------------------------ the sky: slow light behind every page
+   Five soft colour clouds drift and breathe on long, unrelated loops (so it never visibly repeats), and a few faint
+   film frames float up. All of it sits behind the content, below 1/3 opacity, and stops with reduced motion. */
+.sky { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.app::before { display: none; } /* the sky replaces the old still glow */
+.sky .cloud { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .55; will-change: transform; }
+.sky .c1 { width: 46vw; height: 46vw; left: 58%; top: -14%; background: radial-gradient(closest-side, #ff8a5c, transparent); animation: drift1 38s ease-in-out infinite alternate; }
+.sky .c2 { width: 40vw; height: 40vw; left: 30%; top: -22%; background: radial-gradient(closest-side, #ff5aa5, transparent); animation: drift2 46s ease-in-out infinite alternate; }
+.sky .c3 { width: 44vw; height: 44vw; left: -12%; top: -6%; background: radial-gradient(closest-side, #9a72ff, transparent); animation: drift3 52s ease-in-out infinite alternate; }
+.sky .c4 { width: 34vw; height: 34vw; left: 78%; top: 48%; background: radial-gradient(closest-side, #ffc46b, transparent); animation: drift4 44s ease-in-out infinite alternate; }
+.sky .c5 { width: 38vw; height: 38vw; left: 8%; top: 62%; background: radial-gradient(closest-side, #ff7db8, transparent); animation: drift5 58s ease-in-out infinite alternate; opacity: .35; }
+@keyframes drift1 { 0% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-8vw, 6vh) scale(1.12); } 100% { transform: translate(-3vw, 12vh) scale(.94); } }
+@keyframes drift2 { 0% { transform: translate(0, 0) scale(1); } 50% { transform: translate(10vw, 8vh) scale(.9); } 100% { transform: translate(4vw, -2vh) scale(1.15); } }
+@keyframes drift3 { 0% { transform: translate(0, 0) scale(1.05); } 50% { transform: translate(9vw, 10vh) scale(.92); } 100% { transform: translate(14vw, -4vh) scale(1.1); } }
+@keyframes drift4 { 0% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-12vw, -8vh) scale(1.18); } 100% { transform: translate(-4vw, 6vh) scale(.95); } }
+@keyframes drift5 { 0% { transform: translate(0, 0) scale(1); } 50% { transform: translate(14vw, -10vh) scale(1.1); } 100% { transform: translate(6vw, 4vh) scale(.9); } }
+
+/* faint film frames floating up, slightly turning: the app's subject, barely there */
+.sky .frame { position: absolute; bottom: -18vh; width: 54px; aspect-ratio: 9 / 16; border-radius: 10px; opacity: 0;
+  border: 1.5px solid rgba(236, 31, 110, .35); background: linear-gradient(160deg, rgba(255, 179, 71, .18), rgba(255, 46, 126, .12), rgba(143, 91, 255, .16));
+  animation: rise-frame 34s linear infinite; }
+.sky .f1 { left: 7%; animation-delay: -2s; }
+.sky .f2 { left: 22%; width: 40px; animation-duration: 42s; animation-delay: -18s; }
+.sky .f3 { left: 47%; width: 34px; animation-duration: 48s; animation-delay: -30s; }
+.sky .f4 { left: 69%; animation-duration: 38s; animation-delay: -9s; }
+.sky .f5 { left: 86%; width: 44px; animation-duration: 45s; animation-delay: -25s; }
+.sky .f6 { left: 93%; width: 30px; animation-duration: 52s; animation-delay: -40s; aspect-ratio: 16 / 9; }
+@keyframes rise-frame {
+  0% { transform: translateY(0) rotate(-8deg); opacity: 0; }
+  12% { opacity: .55; }
+  85% { opacity: .4; }
+  100% { transform: translateY(-130vh) rotate(10deg); opacity: 0; }
+}
+
+/* the light theme: warm daybreak; the dark theme: the same clouds as a faint glow on the night */
+[data-theme="light"] .sky { background: linear-gradient(180deg, #fff3e6 0%, #fbf6ee 45%, #f7f1fb 100%); }
+[data-theme="dark"] .sky .cloud { opacity: .16; }
+[data-theme="dark"] .sky .c5 { opacity: .1; }
+[data-theme="dark"] .sky .frame { border-color: rgba(255, 255, 255, .12); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sky .cloud, .sky .frame { animation: none !important; }
+  .sky .frame { display: none; }
+}
+@media (max-width: 700px) {
+  .sky .cloud { filter: blur(50px); }
+  .sky .f2, .sky .f3, .sky .f5 { display: none; }
+}
+
+.files li { grid-template-columns: auto minmax(0, 1fr) auto auto auto; }
+.files .bar { grid-column: 2 / 5; }
+.up-cancel { font-size: .82rem; color: var(--muted); }
+.up-cancel:hover { color: var(--cut); }
+
+/* an uploaded clip: its own frame, quality and length, and a quiet remove */
+.files li.clip-row { padding: .5rem .6rem .5rem .5rem; }
+.files .thumb { width: 44px; height: 56px; border-radius: 10px; object-fit: cover; }
+.files .thumb-film { display: grid; place-items: center; color: var(--rose); background: linear-gradient(135deg, rgba(255, 179, 71, .25), rgba(236, 31, 110, .18), rgba(122, 67, 240, .2)); }
+.files .thumb-film svg { width: 22px; height: 22px; }
+.files .sub .q { font-style: normal; margin-right: .5rem; padding: .08rem .4rem; border-radius: 6px; font-size: .7rem; font-weight: 700; color: var(--paper-2); border: 1px solid var(--line-2); }
+.clip-remove { display: inline-flex; align-items: center; gap: .35rem; height: 32px; padding: 0 .7rem; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: .82rem; transition: color .2s, background .2s, border-color .2s; }
+.clip-remove svg { width: 16px; height: 16px; }
+.clip-remove:hover, .clip-remove:focus-visible { color: var(--cut); background: rgba(223, 47, 72, .08); border-color: rgba(223, 47, 72, .25); }
+@media (max-width: 560px) { .clip-remove span { display: none; } }
+
+/* the top bar's own sunset button (signed out: "Start free"): the nav's plain-link look must not wash it out */
+.app-nav a.btn-sun { background: var(--sun); background-size: 160% 100%; color: #120a0c; padding: 0 1.1rem; }
+.app-nav a.btn-sun:hover { background: var(--sun); background-size: 160% 100%; background-position: 100% 50%; color: #120a0c; }
+[data-theme="light"] .app-nav a.btn-sun, [data-theme="light"] .app-nav a.btn-sun:hover { color: #fff; }
+.app-nav a.btn-sun[aria-current="page"]::after { display: none; }

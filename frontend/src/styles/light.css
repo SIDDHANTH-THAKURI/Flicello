@@ -1,0 +1,297 @@
+/* "Daybreak": Flicello in the light. Warm paper, the same sunset now rising behind frosted-glass cards, ink type.
+   The app's surfaces were drawn for the night (white at a few percent over black); here each gets its daylight twin. */
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --ink: #fbf6ee;
+  --ink-1: #ffffff;
+  --ink-2: #ffffff;
+  --ink-3: #f4ede3;
+  --line: rgba(46, 26, 64, 0.09);
+  --line-2: rgba(46, 26, 64, 0.17);
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-hi: rgba(255, 255, 255, 0.8);
+
+  --paper: #1d1624;
+  --paper-2: #43384f;
+  --muted: #73697f;
+  --faint: #a199aa;
+
+  --amber: #f59a1f;
+  --ember: #f2552a;
+  --rose: #ec1f6e;
+  --violet: #7a43f0;
+  --sun-soft: linear-gradient(100deg, rgba(255, 179, 71, .22), rgba(255, 46, 126, .16), rgba(143, 91, 255, .2));
+
+  --keep: #0e9f6e;
+  --cut: #df2f48;
+  --warn: #b7791f;
+
+  --card: rgba(255, 255, 255, 0.72);
+  --card-hi: rgba(255, 255, 255, 0.92);
+  --lift: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 12px 34px -16px rgba(74, 36, 92, .22), 0 2px 6px -2px rgba(74, 36, 92, .08);
+  --lift-hi: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 26px 60px -24px rgba(236, 31, 110, .28), 0 4px 12px -4px rgba(74, 36, 92, .12);
+  --shadow-l: 0 30px 80px -30px rgba(74, 36, 92, .3), 0 8px 24px -10px rgba(74, 36, 92, .14);
+}
+
+/* ------------------------------------------------------------------ the sky behind everything */
+[data-theme="light"] body.app { background: var(--ink); color: var(--paper); }
+[data-theme="light"] .app::before {
+  inset: -30vh -20vw auto -20vw; width: auto; height: 95vh; filter: blur(30px); opacity: 1;
+  background:
+    radial-gradient(38% 55% at 82% 18%, rgba(255, 140, 90, .30), transparent 70%),
+    radial-gradient(34% 50% at 58% 4%, rgba(255, 92, 160, .22), transparent 70%),
+    radial-gradient(40% 55% at 18% 10%, rgba(150, 110, 255, .20), transparent 72%),
+    radial-gradient(30% 40% at 95% 60%, rgba(255, 200, 120, .22), transparent 70%);
+}
+[data-theme="light"] .app::after {
+  content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .35;
+  background-image: radial-gradient(rgba(46, 26, 64, .07) 1px, transparent 1px); background-size: 22px 22px;
+  mask-image: linear-gradient(180deg, #000, transparent 60%); -webkit-mask-image: linear-gradient(180deg, #000, transparent 60%);
+}
+[data-theme="light"] ::selection { background: rgba(236, 31, 110, .22); color: var(--paper); }
+
+/* ------------------------------------------------------------------ top bar and footer */
+[data-theme="light"] .app-top { background: rgba(251, 246, 238, .72); border-bottom-color: rgba(46, 26, 64, .07); }
+[data-theme="light"] .app-nav a:hover, [data-theme="light"] .app-nav button.navlink:hover { background: rgba(46, 26, 64, .05); }
+[data-theme="light"] .app-foot { border-top-color: var(--line); }
+[data-theme="light"] .lp-logo { filter: drop-shadow(0 6px 16px rgba(236, 31, 110, .28)); }
+
+/* ------------------------------------------------------------------ cards */
+[data-theme="light"] .panel,
+[data-theme="light"] .kind-card,
+[data-theme="light"] .poster,
+[data-theme="light"] .look,
+[data-theme="light"] .film,
+[data-theme="light"] .rules li,
+[data-theme="light"] .u-clips li,
+[data-theme="light"] .u-terms li,
+[data-theme="light"] .beat,
+[data-theme="light"] .beat-list li,
+[data-theme="light"] .sb-card,
+[data-theme="light"] .files li,
+[data-theme="light"] .legal-card,
+[data-theme="light"] details.report-zone,
+[data-theme="light"] details.danger-zone {
+  background: var(--card); border-color: rgba(46, 26, 64, .08); box-shadow: var(--lift);
+  -webkit-backdrop-filter: blur(16px) saturate(150%); backdrop-filter: blur(16px) saturate(150%);
+}
+[data-theme="light"] .poster:hover, [data-theme="light"] .look:hover, [data-theme="light"] .film:hover,
+[data-theme="light"] .legal-card:hover { box-shadow: var(--lift-hi); border-color: rgba(236, 31, 110, .22); }
+[data-theme="light"] .panel.danger, [data-theme="light"] details.danger-zone { border-color: rgba(223, 47, 72, .22); background: rgba(255, 246, 247, .8); }
+[data-theme="light"] details.danger-zone summary { color: var(--cut); }
+[data-theme="light"] .notice { background: linear-gradient(180deg, rgba(255, 236, 196, .75), rgba(255, 248, 232, .75)); border-color: rgba(214, 150, 40, .3); }
+[data-theme="light"] .notice b { color: #8a5300; }
+[data-theme="light"] .beat.picked { border-color: rgba(236, 31, 110, .38); box-shadow: var(--lift-hi); }
+[data-theme="light"] .rules li.answer { border-color: rgba(14, 159, 110, .25); }
+
+/* the films grid: thumbnails stay dark under their titles */
+[data-theme="light"] .film { background: #1d1624; }
+[data-theme="light"] .film-body b { color: #fff; }
+[data-theme="light"] .film-body small { color: rgba(255, 255, 255, .72); }
+[data-theme="light"] .film-thumb { background: radial-gradient(80% 70% at 50% 40%, #3a2b45, #1d1624); }
+[data-theme="light"] .film-new { background: rgba(255, 255, 255, .55); border-color: rgba(46, 26, 64, .2); color: var(--paper-2); }
+[data-theme="light"] .film-new b { color: var(--paper); }
+[data-theme="light"] .badge { background: rgba(255, 255, 255, .88); color: var(--paper-2); border-color: rgba(46, 26, 64, .1); }
+[data-theme="light"] .empty-hero { background: linear-gradient(135deg, rgba(255, 210, 170, .55), rgba(220, 200, 255, .5)); border-color: rgba(46, 26, 64, .08); box-shadow: var(--lift); }
+[data-theme="light"] .allowance { background: rgba(255, 255, 255, .7); border-color: var(--line); }
+[data-theme="light"] .allowance i span { background: rgba(46, 26, 64, .12); }
+
+/* ------------------------------------------------------------------ buttons */
+[data-theme="light"] .btn { background: rgba(255, 255, 255, .85); border-color: rgba(46, 26, 64, .14); color: var(--paper); box-shadow: 0 1px 0 #fff inset, 0 4px 14px -8px rgba(74, 36, 92, .25); }
+[data-theme="light"] .btn:hover { background: #fff; border-color: rgba(236, 31, 110, .35); }
+[data-theme="light"] .btn.quiet { background: transparent; box-shadow: none; border-color: transparent; color: var(--paper-2); }
+[data-theme="light"] .btn.quiet:hover { background: rgba(46, 26, 64, .05); }
+[data-theme="light"] .btn.danger { background: rgba(255, 240, 242, .9); color: var(--cut); border-color: rgba(223, 47, 72, .35); }
+[data-theme="light"] .btn-sun { color: #fff; text-shadow: 0 1px 2px rgba(120, 20, 40, .25); box-shadow: 0 14px 34px -14px rgba(236, 31, 110, .65), inset 0 1px 0 rgba(255, 255, 255, .4); }
+[data-theme="light"] .btn-sun:hover { box-shadow: 0 20px 50px -16px rgba(236, 31, 110, .75), inset 0 1px 0 rgba(255, 255, 255, .45); }
+[data-theme="light"] .btn-ghost { background: rgba(255, 255, 255, .7); border-color: var(--line-2); color: var(--paper); }
+[data-theme="light"] .link { text-decoration-color: rgba(46, 26, 64, .25); }
+
+/* ------------------------------------------------------------------ choices */
+[data-theme="light"] .choice > span { background: rgba(255, 255, 255, .78); border-color: rgba(46, 26, 64, .12); color: var(--paper-2); box-shadow: 0 1px 0 #fff inset, 0 3px 10px -6px rgba(74, 36, 92, .2); }
+[data-theme="light"] .choice:hover > span { border-color: rgba(236, 31, 110, .35); color: var(--paper); }
+[data-theme="light"] .choice input:checked + span {
+  color: var(--paper); border-color: transparent;
+  background: linear-gradient(#fff, #fff) padding-box, linear-gradient(100deg, var(--amber), var(--rose), var(--violet)) border-box;
+  border: 1.5px solid transparent; box-shadow: 0 10px 24px -14px rgba(236, 31, 110, .55);
+}
+[data-theme="light"] .kind input:checked + .kind-card {
+  background: linear-gradient(180deg, rgba(255, 245, 238, .95), rgba(255, 240, 248, .9)) padding-box,
+              linear-gradient(120deg, var(--amber), var(--rose), var(--violet)) border-box;
+  border: 1.5px solid transparent; box-shadow: var(--lift-hi);
+}
+[data-theme="light"] .kind-card svg { color: var(--muted); }
+[data-theme="light"] .kind input:checked + .kind-card svg { color: var(--rose); }
+
+/* ------------------------------------------------------------------ forms */
+[data-theme="light"] .input,
+[data-theme="light"] .field input:not([type="checkbox"]):not([type="radio"]),
+[data-theme="light"] .field textarea,
+[data-theme="light"] .field select { background: rgba(255, 255, 255, .92); border-color: rgba(46, 26, 64, .14); color: var(--paper); box-shadow: 0 1px 2px rgba(74, 36, 92, .06) inset; }
+[data-theme="light"] .input:focus, [data-theme="light"] .field input:focus, [data-theme="light"] .field textarea:focus, [data-theme="light"] .field select:focus {
+  background: #fff; border-color: rgba(236, 31, 110, .55); box-shadow: 0 0 0 4px rgba(236, 31, 110, .12);
+}
+[data-theme="light"] .tick { background: rgba(255, 255, 255, .75); border-color: rgba(46, 26, 64, .1); }
+[data-theme="light"] .tick input { background: #fff; border-color: rgba(46, 26, 64, .25); }
+[data-theme="light"] .tick input::after { border-color: #fff; }
+[data-theme="light"] .tick:has(input:checked) { border-color: rgba(236, 31, 110, .4); background: rgba(255, 240, 246, .85); }
+[data-theme="light"] .switch span { background: rgba(46, 26, 64, .12); }
+[data-theme="light"] .error-box { background: rgba(255, 238, 240, .9); color: #8f1d2c; border-color: rgba(223, 47, 72, .3); }
+[data-theme="light"] .code span { background: #fff; border-color: rgba(46, 26, 64, .16); }
+[data-theme="light"] input[type="range"].slide::-webkit-slider-thumb { box-shadow: 0 6px 16px rgba(74, 36, 92, .3), 0 0 0 6px rgba(236, 31, 110, .12); }
+
+/* ------------------------------------------------------------------ the film's page */
+[data-theme="light"] .meta span { background: rgba(255, 255, 255, .7); border-color: rgba(46, 26, 64, .1); }
+[data-theme="light"] .track li::before { background: rgba(46, 26, 64, .1); }
+[data-theme="light"] .track li.past::before { background: rgba(46, 26, 64, .4); }
+[data-theme="light"] .drop { border-color: rgba(236, 31, 110, .28); background: radial-gradient(70% 90% at 50% 0%, rgba(255, 170, 120, .2), rgba(255, 255, 255, .55) 75%); }
+[data-theme="light"] .drop:hover, [data-theme="light"] .drop.over { border-color: rgba(236, 31, 110, .6); background: radial-gradient(70% 90% at 50% 0%, rgba(255, 150, 110, .3), rgba(255, 255, 255, .7) 75%); }
+[data-theme="light"] .files .bar, [data-theme="light"] .meter { background: rgba(46, 26, 64, .08); }
+[data-theme="light"] .files .thumb { background: rgba(46, 26, 64, .08); }
+[data-theme="light"] .working {
+  background: radial-gradient(70% 90% at 50% 0%, rgba(255, 150, 120, .22), transparent 70%), rgba(255, 255, 255, .7);
+  border-color: rgba(46, 26, 64, .08); box-shadow: var(--lift); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+[data-theme="light"] .reel span { border-color: rgba(46, 26, 64, .1); background: linear-gradient(170deg, rgba(255, 179, 71, .45), rgba(255, 46, 126, .3) 55%, rgba(143, 91, 255, .35)); }
+[data-theme="light"] .reel::after { background: var(--paper); box-shadow: 0 0 14px 2px rgba(236, 31, 110, .5); }
+[data-theme="light"] .poster-strip, [data-theme="light"] .look-frame { background: #1d1624; }
+[data-theme="light"] .device .frame { background: linear-gradient(160deg, #ffffff, #efe6dc); box-shadow: 0 40px 90px -40px rgba(74, 36, 92, .45), 0 0 0 1px rgba(46, 26, 64, .08); }
+[data-theme="light"] .device .frame::before { background: radial-gradient(closest-side, rgba(255, 120, 160, .35), transparent); }
+[data-theme="light"] .beat audio, [data-theme="light"] .beat-list audio { color-scheme: light; }
+[data-theme="light"] .chip-ok { background: rgba(14, 159, 110, .12); color: #0b6e4d; }
+[data-theme="light"] .sb-meta i { color: var(--rose); }
+[data-theme="light"] .swatches .sw { box-shadow: inset 0 0 0 1px rgba(46, 26, 64, .15); }
+
+/* ------------------------------------------------------------------ toast, legal */
+[data-theme="light"] .toast { background: rgba(255, 255, 255, .95); color: var(--paper); border-color: rgba(46, 26, 64, .1); }
+[data-theme="light"] .doc-summary { background: rgba(255, 238, 220, .7); border-color: rgba(242, 85, 42, .25); }
+[data-theme="light"] .doc-summary b { color: var(--ember); }
+[data-theme="light"] .prose code { background: rgba(46, 26, 64, .06); }
+
+/* sign-in: the footage wall stays a dark stage on its side */
+[data-theme="light"] .auth-stage::after {
+  background: linear-gradient(90deg, rgba(251, 246, 238, 0), rgba(251, 246, 238, .45) 80%, var(--ink)),
+              linear-gradient(0deg, rgba(20, 12, 24, .7), rgba(20, 12, 24, 0) 45%);
+}
+[data-theme="light"] .auth-quote { color: #fff; }
+[data-theme="light"] .auth-quote ul { color: rgba(255, 255, 255, .85); }
+[data-theme="light"] .auth-brand .lp-brand { color: #fff; }
+@media (max-width: 900px) {
+  [data-theme="light"] .auth-stage::after { background: linear-gradient(0deg, var(--ink) 35%, rgba(251, 246, 238, .55)); }
+}
+
+/* ------------------------------------------------------------------ cards stand on the moving sky, not in it */
+[data-theme="light"] {
+  --card: rgba(255, 255, 255, 0.93);
+}
+[data-theme="light"] .kind-card { position: relative; background: rgba(255, 255, 255, .94); }
+[data-theme="light"] .kind:hover .kind-card { box-shadow: var(--lift-hi); }
+/* the picked one: solid white, a bold sunset ring, a glow and a tick */
+[data-theme="light"] .kind input:checked + .kind-card {
+  background: linear-gradient(#fff, #fff) padding-box, linear-gradient(120deg, var(--amber), var(--rose), var(--violet)) border-box;
+  border: 2.5px solid transparent;
+  box-shadow: 0 0 0 6px rgba(236, 31, 110, .14), 0 24px 50px -20px rgba(236, 31, 110, .5), 0 1px 0 #fff inset;
+  transform: translateY(-3px);
+}
+[data-theme="light"] .kind input:checked + .kind-card b { color: var(--rose); }
+.kind input:checked + .kind-card::after {
+  content: "✓"; position: absolute; top: .8rem; right: .8rem; display: grid; place-items: center; width: 28px; height: 28px;
+  border-radius: 50%; background: var(--sun); color: #fff; font-weight: 800; font-size: .9rem;
+  box-shadow: 0 6px 16px -6px rgba(236, 31, 110, .7); animation: tick-pop .45s var(--ease-spring) both;
+}
+@keyframes tick-pop { from { transform: scale(0); } }
+/* chips: solid, and the picked one clearly lit */
+[data-theme="light"] .choice > span { background: rgba(255, 255, 255, .95); }
+[data-theme="light"] .choice input:checked + span {
+  background: linear-gradient(100deg, var(--amber), var(--rose) 60%, var(--violet)) border-box; color: #fff; border: 1.5px solid transparent;
+  box-shadow: 0 0 0 4px rgba(236, 31, 110, .12), 0 12px 26px -12px rgba(236, 31, 110, .7);
+}
+[data-theme="light"] .choice input:checked + span i { color: rgba(255, 255, 255, .85); }
+[data-theme="light"] .input, [data-theme="light"] .field input:not([type="checkbox"]):not([type="radio"]),
+[data-theme="light"] .field textarea, [data-theme="light"] .field select { background: #fff; }
+
+/* a button that is both: the sunset wins (e.g. the music you picked: "✓ Made for my film") */
+[data-theme="light"] .btn.btn-sun { background: var(--sun); background-size: 160% 100%; border-color: transparent; color: #fff; }
+[data-theme="light"] .btn.btn-sun:hover { background-position: 100% 50%; border-color: transparent; }
+/* waiting for something (no clips yet): calm and clearly unavailable, not a washed-out sunset */
+[data-theme="light"] .btn-sun[disabled], [data-theme="light"] .btn-sun[aria-disabled="true"] {
+  opacity: 1; filter: none; background: rgba(46, 26, 64, .07); color: var(--faint); text-shadow: none; box-shadow: none;
+  border: 1.5px dashed rgba(46, 26, 64, .18);
+}
+
+/* ------------------------------------------------------------------ admin in the light
+   The charts keep their dark stage (their colours were checked against #101016), so inside a chart card the night's
+   words come back; everything around them (filter bar, switches, inputs, lists) goes light. */
+[data-theme="light"] .kpi, [data-theme="light"] .viz-card, [data-theme="light"] .viz-tip {
+  --paper: #f4f1ea; --paper-2: #d9d5cc; --muted: #9b98a4; --faint: #66636f;
+  --line: rgba(255, 255, 255, .08); --line-2: rgba(255, 255, 255, .14);
+  box-shadow: 0 18px 44px -22px rgba(29, 22, 36, .55);
+}
+[data-theme="light"] .kpi .meter-track { background: #2a1520; }
+[data-theme="light"] .filters { background: rgba(251, 246, 238, .9); box-shadow: 0 0 0 100vmax rgba(251, 246, 238, .9); border-bottom-color: var(--line); }
+[data-theme="light"] .seg { background: rgba(255, 255, 255, .9); }
+[data-theme="light"] .seg button:hover { background: rgba(46, 26, 64, .06); }
+[data-theme="light"] .seg button[aria-pressed="true"] { background: var(--paper); color: #fff; }
+[data-theme="light"] .people .num, [data-theme="light"] .people-tools input { background: #fff; border-color: rgba(46, 26, 64, .16); }
+[data-theme="light"] .mini-list .lvl.warning, [data-theme="light"] .mini-list .lvl.error { color: var(--cut); border-color: rgba(223, 47, 72, .4); }
+[data-theme="light"] .privacy-note { background: rgba(14, 159, 110, .07); border-color: rgba(14, 159, 110, .25); }
+[data-theme="light"] .flag, [data-theme="light"] .tag-chip { background: rgba(255, 255, 255, .85); }
+[data-theme="light"] .viz-hbar:hover { background: rgba(255, 255, 255, .05); }
+
+/* ------------------------------------------------------------------ small words drawn for the night */
+[data-theme="light"] .files li.off { border-color: rgba(223, 47, 72, .3); }
+[data-theme="light"] .files li.off .name { color: var(--cut); }
+[data-theme="light"] .cost-line.short, [data-theme="light"] .cost-note.short { color: var(--cut); }
+[data-theme="light"] .working .msg { color: var(--paper-2); }
+[data-theme="light"] .ask-veil { background: rgba(46, 26, 64, .28); }
+[data-theme="light"] .ask-card { background: #fff; border-color: rgba(46, 26, 64, .08); }
+[data-theme="light"] .meta .meta-edit { background: rgba(255, 255, 255, .6); }
+[data-theme="light"] .alt-card { background: rgba(255, 255, 255, .6); }
+[data-theme="light"] .count { background: rgba(255, 255, 255, .8); }
+[data-theme="light"] .theme-toggle { background: rgba(255, 255, 255, .7); }
+
+/* ------------------------------------------------------------------ drop zones: a clear, inviting target in the light */
+[data-theme="light"] .drop {
+  border: 2px dashed rgba(236, 31, 110, .32); background: rgba(255, 255, 255, .9);
+  box-shadow: 0 1px 0 #fff inset, 0 10px 30px -18px rgba(236, 31, 110, .35);
+}
+[data-theme="light"] .drop svg { color: var(--rose); width: 50px; height: 50px; padding: 11px; border-radius: 18px; box-sizing: content-box;
+  background: linear-gradient(135deg, rgba(255, 179, 71, .18), rgba(236, 31, 110, .14), rgba(122, 67, 240, .14)); }
+[data-theme="light"] .drop.small svg { width: 30px; height: 30px; padding: 9px; border-radius: 14px; }
+[data-theme="light"] .drop b { color: var(--paper); }
+[data-theme="light"] .drop small { color: var(--muted); }
+[data-theme="light"] .drop:hover, [data-theme="light"] .drop.over {
+  border-color: var(--rose); background: linear-gradient(180deg, rgba(255, 244, 248, .95), rgba(255, 255, 255, .95));
+  box-shadow: 0 0 0 5px rgba(236, 31, 110, .1), 0 16px 36px -18px rgba(236, 31, 110, .45);
+}
+
+/* a ticked box: the sunset fill and a white tick (the plain white box above must not win once it's ticked) */
+[data-theme="light"] .tick input:checked { background: var(--sun); border-color: transparent; box-shadow: 0 4px 12px -4px rgba(236, 31, 110, .6); }
+[data-theme="light"] .tick input:checked::after { border-color: #fff; }
+[data-theme="light"] details.danger-zone .tick input:checked { background: var(--cut); box-shadow: 0 4px 12px -4px rgba(223, 47, 72, .6); }
+
+/* the asking card in the light: a clean white card; its red "yes" stays red, its "Not yet" stays quiet */
+[data-theme="light"] .ask-card { background: #fff; border: 1px solid rgba(46, 26, 64, .08); box-shadow: 0 40px 90px -30px rgba(46, 26, 64, .45), 0 10px 30px -12px rgba(46, 26, 64, .2); }
+[data-theme="light"] .ask-card h3 { color: var(--paper); }
+[data-theme="light"] .ask-card p { color: var(--paper-2); }
+[data-theme="light"] .ask-card .btn.danger-go, [data-theme="light"] .ask-card .btn.danger-go:hover {
+  background: var(--cut); color: #fff; border-color: transparent; box-shadow: 0 10px 24px -10px rgba(223, 47, 72, .7);
+}
+[data-theme="light"] .ask-card .btn.danger-go:hover { filter: brightness(1.06); }
+[data-theme="light"] .ask-card .btn.quiet { background: rgba(46, 26, 64, .05); color: var(--paper-2); }
+[data-theme="light"] .ask-card .btn.quiet:hover { background: rgba(46, 26, 64, .1); color: var(--paper); }
+.ask-card .btn, .ask-card .btn-sun { height: 44px; padding: 0 1.2rem; border-radius: 999px; }
+.ask-card .btn.danger-go { font-weight: 700; }
+
+/* the progress line in the light: done steps solid, the current one lit, the rest waiting */
+[data-theme="light"] .track li { color: var(--faint); }
+[data-theme="light"] .track li::before { height: 4px; background: rgba(46, 26, 64, .1); }
+[data-theme="light"] .track li.past { color: var(--paper-2); }
+[data-theme="light"] .track li.past::before { background: linear-gradient(90deg, rgba(236, 31, 110, .55), rgba(122, 67, 240, .55)); }
+[data-theme="light"] .track li.now { color: var(--rose); font-weight: 700; }
+[data-theme="light"] .track li.now::before { background: var(--sun); box-shadow: 0 0 14px rgba(236, 31, 110, .45); }
+[data-theme="light"] .track li.now.busy::before { background: linear-gradient(90deg, var(--amber), var(--rose), var(--violet), var(--amber)); background-size: 200% 100%; animation: flow 1.6s linear infinite; }
+[data-theme="light"] .track .step-back { color: var(--paper-2); text-decoration-color: rgba(46, 26, 64, .25); }
+[data-theme="light"] .track .step-back:hover { color: var(--rose); text-decoration-color: var(--rose); }

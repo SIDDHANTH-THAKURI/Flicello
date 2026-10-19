@@ -1,6 +1,7 @@
 // The studio's moving parts: resumable uploads (with a frame from each clip as its thumbnail before it has even
 // finished uploading), live progress while a step runs, the rating slider, and the new-film form.
 import { toast } from './ui.js';
+import { ask } from './asks.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -25,6 +26,11 @@ function thumbFor(file, img) {
   if (!file.type.startsWith('video/') && !/\.(mov|mp4|m4v|mkv|webm)$/i.test(file.name)) return;
   const url = URL.createObjectURL(file);
   const v = document.createElement('video');
+  const done = () => { // the video stops reading the file before it is let go (else it keeps asking for it)
+    v.removeAttribute('src');
+    v.load();
+    URL.revokeObjectURL(url);
+  };
   v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.src = url;
   v.addEventListener('loadeddata', () => { v.currentTime = Math.min(1, (v.duration || 2) / 3); }, { once: true });
   v.addEventListener('seeked', () => {
@@ -35,8 +41,9 @@ function thumbFor(file, img) {
       c.getContext('2d').drawImage(v, 0, 0, w, h);
       img.src = c.toDataURL('image/jpeg', 0.7);
     } catch { /* some codecs (HEVC on some browsers) can't be drawn: keep the blank */ }
-    URL.revokeObjectURL(url);
+    done();
   }, { once: true });
+  v.addEventListener('error', done, { once: true }); // a format this browser can't open: keep the blank
 }
 
 function row(list, file) {
@@ -54,14 +61,30 @@ function row(list, file) {
   bar.className = 'bar';
   const fill = document.createElement('span');
   bar.appendChild(fill);
-  li.append(img, name, size, sub, bar);
+  const stop = document.createElement('button');
+  stop.type = 'button'; stop.className = 'link up-cancel'; stop.textContent = 'Cancel';
+  li.append(img, name, size, sub, stop, bar);
   list.appendChild(li);
-  return {
-    set(f, text) { fill.style.width = `${Math.round(f * 100)}%`; sub.textContent = text || `${Math.round(f * 100)}%`; },
-    ok() { li.classList.add('ok'); sub.textContent = '✓'; },
-    fail(msg) { li.classList.add('off'); sub.textContent = ''; name.textContent = `${file.name} · ${msg}`; },
+  const ui = {
+    cancelled: false,
+    uploadId: null, // the server's upload, once it has started (so a cancel can tell it)
+    set(f, text) {
+      if (ui.cancelled) throw new Cancelled();
+      fill.style.width = `${Math.round(f * 100)}%`; sub.textContent = text || `${Math.round(f * 100)}%`;
+    },
+    ok() { li.classList.add('ok'); sub.textContent = '✓'; stop.remove(); },
+    fail(msg) { li.classList.add('off'); sub.textContent = ''; name.textContent = `${file.name} · ${msg}`; stop.remove(); },
+    gone() { li.remove(); },
   };
+  stop.addEventListener('click', () => {
+    ui.cancelled = true;
+    if (ui.uploadId) api('POST', `/api/uploads/${ui.uploadId}/cancel`).catch(() => {});
+    li.remove();
+  });
+  return ui;
 }
+
+class Cancelled extends Error { constructor() { super('cancelled'); this.name = 'Cancelled'; } }
 
 let uploading = 0;
 
@@ -69,6 +92,7 @@ let uploading = 0;
 async function putPiece(id, bytes, offset, ui, frac) {
   let failures = 0;
   for (;;) {
+    if (ui.cancelled) throw new Cancelled();
     try {
       return (await api('PUT', `/api/uploads/${id}?offset=${offset}`, bytes, true)).received;
     } catch (err) {
@@ -86,10 +110,14 @@ async function putPiece(id, bytes, offset, ui, frac) {
 }
 
 async function sendOriginal(pid, file, kind, ui) {
+  if (ui.cancelled) throw new Cancelled();
   const start = await api('POST', `/api/p/${pid}/uploads`, { kind, name: file.name, size: file.size });
+  ui.uploadId = start.id;
+  if (ui.cancelled) { api('POST', `/api/uploads/${start.id}/cancel`).catch(() => {}); throw new Cancelled(); }
   const chunk = start.chunk;
   let received = start.received, failures = 0;
   while (received < file.size) {
+    if (ui.cancelled) throw new Cancelled();
     const piece = file.slice(received, Math.min(file.size, received + chunk));
     try {
       const r = await api('PUT', `/api/uploads/${start.id}?offset=${received}`, piece, true);
@@ -118,11 +146,14 @@ async function uploadFile(pid, file, kind, ui) {
       ui.set(0, 'checking…');
       p = await plan(file, document.body.dataset.shapes, document.body.dataset.kind);
     } catch { p = null; }
+    if (ui.cancelled) throw new Cancelled();
     if (p) {
       let start = null;
       try {
         const { convertAndSend } = await import('./shrink.js');
         start = await api('POST', `/api/p/${pid}/uploads`, { kind, name: `${file.name.replace(/\.[^.]+$/, '')}.mp4`, size: file.size });
+        ui.uploadId = start.id;
+        if (ui.cancelled) throw new Cancelled();
         let frac = 0;
         const size = await convertAndSend(p, start.chunk, (bytes, offset) => putPiece(start.id, bytes, offset, ui, frac), (f) => {
           frac = f;
@@ -131,6 +162,10 @@ async function uploadFile(pid, file, kind, ui) {
         ui.set(1, 'checking…');
         return await api('POST', `/api/uploads/${start.id}/done`, { size });
       } catch (err) {
+        if (ui.cancelled || (err && err.name === 'Cancelled')) {
+          if (start) api('POST', `/api/uploads/${start.id}/cancel`).catch(() => {});
+          throw new Cancelled();
+        }
         console.warn('Flicello: sending the original instead of a lighter copy:', err && err.message);
         if (!start && err.status && err.status >= 400 && err.status < 500) throw err; // refused (limits): same for the original
         if (start) api('POST', `/api/uploads/${start.id}/cancel`).catch(() => {});
@@ -147,7 +182,10 @@ async function uploadAll(pid, files, kind, list) {
   const queue = files.map((file) => ({ file, ui: row(list, file) }));
   const lane = async () => { // two at a time: a slow first file doesn't hold up the rest
     for (let job = queue.shift(); job; job = queue.shift()) {
-      try { await uploadFile(pid, job.file, kind, job.ui); job.ui.ok(); ok += 1; } catch (err) { job.ui.fail(err.message); }
+      if (job.ui.cancelled) continue;
+      try { await uploadFile(pid, job.file, kind, job.ui); job.ui.ok(); ok += 1; } catch (err) {
+        if (job.ui.cancelled || (err && err.name === 'Cancelled')) job.ui.gone(); else job.ui.fail(err.message);
+      }
     }
   };
   await Promise.all([lane(), lane()]);
@@ -180,6 +218,8 @@ function uploads(pid) {
   }
   window.addEventListener('beforeunload', (ev) => { if (uploading) { ev.preventDefault(); ev.returnValue = ''; } });
   $$('[data-delete]').forEach((btn) => btn.addEventListener('click', async () => {
+    const name = (btn.closest('li')?.querySelector('.name')?.textContent || 'this clip').trim();
+    if (!(await ask(`Remove \u201c${name}\u201d from this film? You'd have to upload it again to use it.`, 'Remove it', true))) return;
     btn.disabled = true;
     try {
       await api('POST', `/api/p/${pid}/clips/${btn.dataset.delete}/delete`);

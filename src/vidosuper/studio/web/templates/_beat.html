@@ -20,14 +20,16 @@
 {% if can_compose and beats_left > 0 %}
 <details class="more beat-change">
   <summary>Not quite? Change it</summary>
-  <form method="post" action="/p/{{ p.id }}/beat" class="gap-top">
+  <form method="post" action="/p/{{ p.id }}/beat" class="gap-top" data-confirm="Make a new track with your change? It uses one of the {{ beats_left }} tracks this film can still have made." data-confirm-yes="Make it">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="base" value="{{ shown.id }}">
     <label class="field"><span>What should change?</span>
       <input name="change" maxlength="300" required placeholder="Slower and warmer / more piano, less bass / darker"></label>
     <button class="btn" type="submit">Make another</button>
-    <p class="help">{{ beats_left }} more {{ 'try' if beats_left == 1 else 'tries' }} for this film. Every track stays here to pick from.</p>
+    <p class="help">{{ beats_left }} more {{ 'track' if beats_left == 1 else 'tracks' }} can be made for this film (5 at most). Every track stays here to pick from.</p>
   </form>
 </details>
+{% elif can_compose %}
+<p class="help gap-top">That's the most tracks this film can have made: pick one of them, or upload your own song.</p>
 {% endif %}
 {% if beats|length > 1 %}
 <details class="more beat-tries">
@@ -45,7 +47,7 @@
 </details>
 {% endif %}
 {% elif can_compose and beats_left > 0 %}
-<form method="post" action="/p/{{ p.id }}/beat" class="beat-ask">
+<form method="post" action="/p/{{ p.id }}/beat" class="beat-ask" data-confirm="Make a track for your film? It takes about a minute; you listen before anything is cut. ({{ beats_left }} can be made for this film.)" data-confirm-yes="Make it">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <label class="field"><span>What should it sound like? <small class="muted">(optional)</small></span>
     <textarea name="ask" rows="2" maxlength="400" placeholder="{{ 'Soft piano, calm, a little hopeful' if voice else 'Warm lo-fi with piano / big cinematic drums / upbeat summer house' }}"></textarea></label>

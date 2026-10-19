@@ -27,7 +27,7 @@ from .alerts import alert
 from .brain import BrainError, BudgetExceeded, PersonLimit, Usage, brain_kind_for, make_brain
 from .brain.context import look_from_note, pace_from_note
 from .brain.schemas import DesignPlan, Direction, StoryPitch
-from .db import DB
+from .db import DB, JobStopped
 from .improve import maybe_start as maybe_start_improve
 from . import requirements
 from .pipeline import Pipeline, UserError, remove_project_files, studio_config
@@ -58,7 +58,10 @@ PRIORITY = {"beat": 2, "pitch": 2, "sample": 3, "learn": 4, "prepare": 5, "rende
 FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad shots", "shaky", "too short",
                  "too long", "didn't follow my idea", "colour", "sound"]
 LENGTHS = (15, 30, 45, 60, 90, 120, 180, 300, 600)  # who may ask for which: Studio.lengths_for (access levels)
-MAX_SAMPLE_TRIES = 3
+MAX_SAMPLE_TRIES = 10  # a quiet safety net only: samples will be paid for with credits
+MAX_TRACKS = 5  # tracks made for one film, for everyone: after that they pick one of them or upload their own song
+MAX_IDEAS = 6  # story ideas (or looks) for one film, the first three included; the owner gets more
+MAX_POLISH = 3  # times the AI may reword 'what I understood' for one film
 
 
 IMPROVISE = [  # what the AI is told for each part of the slider (the person sees the left-hand words)
@@ -183,7 +186,7 @@ class Studio:
             alert(self.db, self.s, "access", f"{who} asked for access: {note[:200]}", "warn")
             if mail.available(self.s):
                 site = (self.s.site_url or "").rstrip("/")
-                for owner in self.db.all("SELECT email FROM users WHERE role='owner' AND email IS NOT NULL"):
+                for owner in [{"email": e} for e in self.s.alert_emails]:
                     try:
                         mail.send(self.s, owner["email"], *mail.notice_email(self.s, f"{who} asked for access", [
                             f"{who} ({user.get('email') or 'no email'}) would like to use Flicello.",
@@ -227,8 +230,11 @@ class Studio:
         if len(note) < 3:
             raise ActionError("Tell us in a few words what went wrong.")
         if self.db.value("SELECT COUNT(*) FROM reports WHERE user_id=? AND at > ?", (user["id"], time.time() - 86400),
-                         0) >= 8:
+                         0) >= 3:
             raise ActionError("We've got your reports from today and are on them. Thank you!")
+        if self.db.value("SELECT COUNT(*) FROM reports WHERE user_id=? AND project_id=? AND at > ?",
+                         (user["id"], project["id"], time.time() - 3600), 0) >= 1:
+            raise ActionError("We've got your report about this video and are on it. You can add more in an hour.")
         job = self.db.active_job(project["id"]) or self.db.one(
             "SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1", (project["id"],))
         context = {
@@ -250,7 +256,7 @@ class Studio:
 
         if mail.available(self.s):
             site = (self.s.site_url or "").rstrip("/")
-            for owner in self.db.all("SELECT email FROM users WHERE role='owner' AND email IS NOT NULL"):
+            for owner in [{"email": e} for e in self.s.alert_emails]:
                 try:
                     mail.send(self.s, owner["email"], *mail.notice_email(self.s, f"{who} reported a problem", [
                         f"{who} ({user.get('email') or 'no email'}) says: {note}",
@@ -473,9 +479,14 @@ class Studio:
             kind, routed = route_kind(describe)
             intent = (describe + (" " + intent if intent.strip() else "")).strip()
         self.length_ok(user, length)
-        if pace not in ("calm", "balanced", "fast", "every"):
+        if pace not in ("calm", "balanced", "fast", "every", "other"):
             raise ActionError("Pick how fast it should cut.")
-        pace = pace_from_note(pace, intent)
+        if pace == "other":  # their own way of cutting: their words decide (every step reads them), no keyword guess
+            if len(" ".join((cut_note or "").split())) < 3:
+                raise ActionError("Describe how it should cut, in the box under the choices.")
+            pace = "balanced"
+        else:  # left at the default, the note may say what they want (one shot per beat, fast cuts)
+            pace = pace_from_note(pace, " ".join(x for x in (intent, cut_note or "") if x))
         if kind not in ("montage", "voice", "talk"):
             raise ActionError("Pick what you are making.")
         if style not in STYLES:
@@ -485,11 +496,13 @@ class Studio:
         pid = "p" + secrets.token_hex(6)
         now = time.time()
         title = " ".join(title.split())[:60] or time.strftime("My video, %d %b")
+        mute = kind == "montage" and requirements.wants_no_clip_sound(" ".join([intent, cut_note or "", describe or ""]))
         self.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated, pace, kind, "
                     "music, style, cut_note, improvise, sound, routed) VALUES (?,?,?,?,?,?,'setup',?,?,?,?,?,?,?,?,?,?)",
                     (pid, user["id"], title, shapes, round(float(length), 1), " ".join(intent.split())[:900], now, now,
                      pace, kind, "none" if kind != "montage" or requirements.wants_no_music(intent) else "made", style,
-                     " ".join((cut_note or "").split())[:400], max(0, min(100, int(improvise))), "natural", routed))
+                     " ".join((cut_note or "").split())[:400], max(0, min(100, int(improvise))),
+                     "silent" if mute else "natural", routed))
         workdir(self.s, user["id"], pid).ensure()
         project = self.db.project(pid)
         from . import abilities
@@ -725,6 +738,17 @@ class Studio:
             if row:
                 self._choose_beat(self.db.project(project["id"]), row)
 
+    def mute_if_asked(self, project: dict, text: str) -> bool:
+        """Their words asked for no sound from the clips: the film is switched to 'no clip sound', which the mix obeys
+        for every shot whatever the plan says (see Pipeline.mute_clips). Said on screen in the step's log."""
+        if project.get("kind") != "montage" or project.get("sound") == "silent" \
+                or not requirements.wants_no_clip_sound(text):
+            return False
+        self.db.run("UPDATE projects SET sound='silent', updated=? WHERE id=?", (time.time(), project["id"]))
+        project["sound"] = "silent"
+        self.db.event(project["id"], "Asked for no sound from the clips: every shot is muted (music only).", "info")
+        return True
+
     def set_sound(self, project: dict, sound: str) -> None:
         """With no music: keep the clips' own sound, or a silent film."""
         self._guard(project, "setup")
@@ -744,6 +768,43 @@ class Studio:
         self._guard(project, "setup")
         self.length_ok(self.user(project["user_id"]), length)
         self.db.run("UPDATE projects SET length=?, updated=? WHERE id=?", (float(length), time.time(), project["id"]))
+
+    def set_settings(self, project: dict, shapes: str, length: float | None) -> str:
+        """Change the shape and the length after the film was made (at the clips step; later, go back to it first).
+        Returns what changed, in words, with what it means for their music."""
+        self._guard(project, "setup")
+        if shapes not in ("9:16", "16:9", "both"):
+            raise ActionError("Pick a shape.")
+        if project["kind"] == "talk" and shapes == "both":
+            shapes = "9:16"
+        said = [{"9:16": "vertical 9:16", "16:9": "widescreen 16:9", "both": "both shapes"}[shapes]]
+        tail = ""
+        if project["kind"] == "montage" and length is not None:
+            self.length_ok(self.user(project["user_id"]), length)
+            length = round(float(length), 1)
+            self.db.run("UPDATE projects SET length=? WHERE id=?", (length, project["id"]))
+            said.append(f"{length:g} seconds" if length < 120 else f"{length / 60:g} minutes")
+            row = self.beat_row(project, project.get("beat")) if project.get("music") == "made" else None
+            if project.get("song") and project.get("song_seconds") and float(project["song_seconds"]) < length - 0.5:
+                tail = (f" Your song is {float(project['song_seconds']):.0f} seconds: the film stops when it ends, so "
+                        "extend it below or pick a shorter length.")
+            elif row and not self._track_fits({**project, "length": length}, row):
+                tail = " Your music was made for the old length: it's made again for this one when the film starts."
+        self.db.run("UPDATE projects SET shapes=?, updated=? WHERE id=?", (shapes, time.time(), project["id"]))
+        return f"Saved: {', '.join(said)}.{tail}"
+
+    def add_note(self, project: dict, note: str) -> None:
+        """Anything else they want, in their words, added to the film's request before it starts."""
+        self._guard(project, "setup")
+        note = " ".join((note or "").split())[:400]
+        if len(note) < 3:
+            raise ActionError("Write what you'd like in a few words.")
+        intent = " ".join(f"{project.get('intent') or ''} {note}".split())[:900]
+        self.db.run("UPDATE projects SET intent=?, updated=? WHERE id=?", (intent, time.time(), project["id"]))
+        self.mute_if_asked(project, note)
+        from . import abilities
+
+        abilities.note(self.db, {**project, "intent": intent}, note)
 
     # ------------------------------------------------------------------ music made for the film (music/made.py)
     def can_compose(self) -> bool:
@@ -778,7 +839,7 @@ class Studio:
         """Tracks the music service may still make for this film (their access level's allowance)."""
         tier = self.tier(self.user(project["user_id"]))
         made = self.db.value("SELECT COUNT(*) FROM beats WHERE project_id=? AND maker='elevenlabs'", (project["id"],), 0)
-        return max(0, tier.beats - made)
+        return max(0, min(tier.beats, MAX_TRACKS) - made)
 
     @staticmethod
     def track_seconds(project: dict) -> float:
@@ -799,7 +860,8 @@ class Studio:
             raise ActionError("Music can't be made right now. Your film gets our own simple beat instead; you can "
                               "also upload a song.")
         if self.beats_left(project) <= 0:
-            raise ActionError("That's all the tracks this film can have made: pick one of them, or upload a song.")
+            raise ActionError(f"That's {MAX_TRACKS} tracks for this film, the most it can have made: pick one of "
+                              "them, or upload your own song.")
         ask = " ".join((ask or "").split())[:400]
         change = " ".join((change or "").split())[:300]
         if base and not self.beat_row(project, base):
@@ -987,8 +1049,9 @@ class Studio:
                                                      "end_ms": int(min((intro + groove) * bar, intro * bar + 30) * 1000)}}
         work = workdir(self.s, project["user_id"], project["id"]).ensure()
         name = Path(row["file"]).stem + "-full.mp3"
+        what = "again, for the film's new length" if row["whole"] or row["full_file"] else "from the taste you picked"
         self.db.job_progress(job["id"], span[0] + (span[1] - span[0]) * 0.1,
-                             f"Making the full {int(seconds) // 60}:{int(seconds) % 60:02d} track from the taste you picked")
+                             f"Making the full {int(seconds) // 60}:{int(seconds) % 60:02d} track {what}")
         note = ""
         try:
             if not self._music_budget_ok(project):
@@ -1009,9 +1072,16 @@ class Studio:
             name = Path(row["file"]).stem + "-full.wav"
             house_beat(work.beats / name, seconds, "calm" if purpose == "bed" else "balanced")
             note = " The music service couldn't make the full track, so the film uses our own simple beat."
-        self.db.run("UPDATE beats SET full_file=?, facts=? WHERE id=?",
-                    (name, (self._beat_facts(work.beats / name, purpose) + note).strip(), row["id"]))
+        self.db.run("UPDATE beats SET full_file=?, facts=?, seconds=? WHERE id=?",  # seconds: the length it's made for
+                    (name, (self._beat_facts(work.beats / name, purpose) + note).strip(), seconds, row["id"]))
         return self.beat_row(project, row["id"])
+
+    def _track_fits(self, project: dict, row: dict) -> bool:
+        """A made track still fits the film: made for about its length now. The length can change after the track
+        was made; too short and the film would stop with the music, much too long and its drop and ending would come
+        after the film is over."""
+        need, made_for = self.track_seconds(project), float(row.get("seconds") or 0)
+        return not made_for or need - 1.0 <= made_for <= need * 1.3 + 3.0
 
     def _ensure_track(self, job: dict, project: dict, user: dict, pipe,
                       span: tuple[float, float] = (0.0, 1.0)) -> Path | None:
@@ -1027,7 +1097,7 @@ class Studio:
             if not available() or self.beats_left(project) <= 0:
                 return None
             row = self._compose(job, project, user, pipe, span=span)
-        if not row["whole"] and not row["full_file"]:
+        if (not row["whole"] and not row["full_file"]) or not self._track_fits(project, row):
             row = self._full_from_taste(job, project, user, row, span)
         self._choose_beat(self.db.project(project["id"]), row)
         work = workdir(self.s, project["user_id"], project["id"])
@@ -1112,9 +1182,9 @@ class Studio:
         """One more idea: something different (with why), their own idea shaped up, or (looks only) the look `base`
         with the change in `reason`."""
         self._guard(project, "choose")
-        cap = 12 if uses_looks(project) else 9
-        if self.db.value("SELECT COUNT(*) FROM pitches WHERE project_id=?", (project["id"],), 0) >= cap:
-            raise ActionError("That's plenty of ideas: pick one, or write your own.")
+        if self.ideas_left(project) <= 0:
+            raise ActionError(f"That's {self.idea_cap(project)} ideas for this film, the most it can have: pick one of "
+                              "them. To start over, go back to the clips and settings.")
         if base and not self.db.one("SELECT id FROM pitches WHERE id=? AND project_id=?", (base, project["id"])):
             raise ActionError("Pick one of the looks to change.")
         if base and not reason.strip():
@@ -1130,6 +1200,19 @@ class Studio:
                                          **({"improvise": int(improvise)} if improvise is not None else {}),
                                          "base": int(base or 0)})
 
+    def idea_cap(self, project: dict) -> int:
+        user = self.user(project["user_id"])
+        return (12 if uses_looks(project) else 9) if user and self.is_owner(user) else MAX_IDEAS
+
+    def ideas_left(self, project: dict) -> int:
+        """More ideas (or looks) this film may still have: another, their own, improvised, changed."""
+        made = self.db.value("SELECT COUNT(*) FROM pitches WHERE project_id=?", (project["id"],), 0)
+        return max(0, self.idea_cap(project) - made)
+
+    @staticmethod
+    def sample_tries_left(project: dict) -> int:
+        return max(0, MAX_SAMPLE_TRIES - int(project.get("sample_tries") or 0))
+
     def sample_verdict(self, user: dict, project: dict, ok: bool, note: str = "") -> None:
         self._guard(project, "review")
         note = " ".join(note.split())[:600]
@@ -1141,10 +1224,12 @@ class Studio:
         if project["sample_tries"] >= MAX_SAMPLE_TRIES:
             raise ActionError("Let's try a different story instead: go back and pick another idea."
                               if project["kind"] == "montage" else
-                              "That's three tries: make this version, then ask for the changes you still want.")
+                              "That's all the samples for this film: make this version, then ask for the changes you "
+                              "still want.")
         if not note:
             raise ActionError("Say what to change, so the next sample is better.")
         self.db.run("UPDATE projects SET sample_tries=sample_tries+1 WHERE id=?", (project["id"],))
+        self.mute_if_asked(project, note)
         self._enqueue(project, "sample", {"pitch": project["chosen"], "note": note})
 
     # ------------------------------------------------------------------ going back, stopping a step
@@ -1189,15 +1274,13 @@ class Studio:
         job = self.db.active_job(project["id"])
         if job is None:
             raise ActionError("Nothing is running for this video.")
-        if job["status"] == "running" and self.s.jobs != "remote":
-            raise ActionError("This step is in the middle of its work and can't be stopped right now.")
         to = self.STOP_TO.get(job["kind"], "setup")
         if job["kind"] == "beat":
             to = (json.loads(job["params"] or "{}") if isinstance(job["params"], str) else job["params"]).get("back") or "setup"
         if job["kind"] in ("sample", "pitch") and not self.pitches(project):
             to = "understood" if project.get("understood") else "setup"
         self.db.run("UPDATE jobs SET status='cancelled', finished=?, abort=CASE WHEN status='running' THEN ? ELSE abort "
-                    "END, error='stopped by the person' WHERE id=?", (time.time(), time.time(), job["id"]))
+                    "END, error=? WHERE id=?", (time.time(), time.time(), f"stopped by the person; back to {to}", job["id"]))
         self.db.step(job["id"], "Stopped.")
         if to == "setup":
             self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
@@ -1226,6 +1309,7 @@ class Studio:
                 edits["notes"][k] = " ".join(str(value).split())[:300]
         if not any(edits.values()):
             raise ActionError("Mark at least one shot to change.")
+        # a note here is about its own shot (the AI fixes that shot, its sound too): it never mutes the whole film
         if edits["notes"]:  # a note costs an AI call: the same limit as notes on the sample
             if project["sample_tries"] >= MAX_SAMPLE_TRIES:
                 raise ActionError("Let's try a different story instead: go back and pick another idea.")
@@ -1289,6 +1373,7 @@ class Studio:
             if project["revisions"] >= self.s.limits.revisions_per_video and not self.is_owner(user):
                 raise ActionError("Thanks! That was the last round of changes for this video.")
             self.db.run("UPDATE projects SET revisions=revisions+1 WHERE id=?", (project["id"],))
+            self.mute_if_asked(project, fix)
             self._enqueue(project, "revise", {"feedback": fix, "tags": tags})
 
     def retry(self, project: dict) -> None:
@@ -1361,6 +1446,11 @@ class Studio:
         pipe = Pipeline(work, self.cfg, None, progress, owner=owner)
         pipe.no_music = project["music"] == "none" and not project["song"]
         pipe.natural_sound = project.get("sound") == "natural"
+        # no sound from the clips: asked for in this film's words (the mix obeys, music or not), or their style says
+        # "music only" and music plays (unless this film's own words ask to hear its clips)
+        pipe.mute_clips = project.get("sound") == "silent" or (
+            project["kind"] == "montage" and not pipe.no_music and self.profile(user).answers.get("sound") == "music"
+            and not requirements.wants_clip_sound(ask_text(project)))
         kind = brain_kind_for(self.s, owner)
         pipe.brain = make_brain(kind, self.s, self._spender(project, user["id"], job["id"]), work.brain,
                                 pipe.project.load_signals)
@@ -1385,8 +1475,16 @@ class Studio:
                     and brain_kind_for(self.s, self.is_owner(user)) == "api":
                 raise BudgetExceeded("the monthly budget is used up")
             handler(job, project, user)
+            if self._stopped(job):
+                return  # stopped by the person as it finished: what it made is not used
             self.db.job_done(job["id"])
+        except JobStopped:
+            log.info("job %s stopped by the person", job["id"])
+            self._stopped(job)
+            return
         except PersonLimit as exc:
+            if self._stopped(job):  # stopped by the person meanwhile: it stays stopped
+                return
             wait = max(60.0, exc.resume_at - time.time())
             self.db.requeue(job["id"], delay=wait, error=str(exc))
             self.db.step(job["id"], "Waiting: this account's share for today is used")
@@ -1398,11 +1496,16 @@ class Studio:
                     f"Paused: your account has used today's share of AI and rendering. It carries on by itself {when}; "
                     "you can leave this page."))
         except BudgetExceeded as exc:
+            if self._stopped(job):
+                return
             self.db.run("UPDATE jobs SET status='waiting', error=? WHERE id=?", (str(exc), job["id"]))
             if job["kind"] in JOB_STAGE:
                 self.db.set_stage(project["id"], "paused", note=f"Paused: {exc}. The owner has been told.")
             alert(self.db, self.s, "budget", f"A job is waiting: {exc}.")
         except Exception as exc:  # noqa: BLE001 - every failure is recorded, retried once, then shown
+            if self._stopped(job):  # stopped by the person, then it broke: nothing to retry or show them
+                log.info("job %s stopped by the person (it then failed: %s)", job["id"], exc)
+                return
             detail = traceback.format_exc()
             self.db.event(project["id"], f"{job['kind']} failed (try {job['attempts']}): {type(exc).__name__}: "
                           f"{' '.join(str(exc).split())[:200]}\n{detail[-3000:]}", "error", job["id"])
@@ -1427,6 +1530,17 @@ class Studio:
                       "use the AI until it is replaced in .env, the server's .env.studio and the Modal secret.")
             else:
                 alert(self.db, self.s, "job", f"{job['kind']} failed for a video: {type(exc).__name__}: {str(exc)[:200]}")
+
+    def _stopped(self, job: dict) -> bool:
+        """The person stopped this step (Studio.stop): it is put back at the stage the stop chose, even if the step
+        moved the video on as it ended."""
+        row = self.db.one("SELECT status, error FROM jobs WHERE id=?", (job["id"],))
+        if not row or row["status"] != "cancelled":
+            return False
+        to = (row["error"] or "").rpartition("back to ")[2].strip()
+        if job["project_id"] and to in STAGES:
+            self.db.set_stage(job["project_id"], to)
+        return True
 
     # the job handlers -------------------------------------------------
     def _save_pitches(self, project: dict, pitches: list[dict], rnd: int) -> None:
@@ -1788,6 +1902,73 @@ class Studio:
             out.append({"at": at, "what": line[:160]})
         return out
 
+    def polish_left(self, project: dict) -> int:
+        u = self.understanding(project) or {}
+        user = self.user(project["user_id"])
+        cap = 10 if user and self.is_owner(user) else MAX_POLISH
+        return max(0, cap - int(u.get("_polished") or 0))
+
+    @staticmethod
+    def _their_words(u: dict, brief: dict) -> str:
+        """What they typed or changed on 'what I understood': their answers, and every line that isn't the AI's own
+        wording (which only repeats what they asked for, already checked when the film was made)."""
+        norm = lambda x: " ".join(str(x).split()).lower()  # noqa: E731
+        said = [x["answer"] for x in brief.get("answers") or []]
+        if norm(brief.get("story", "")) != norm(u.get("story", "")):
+            said.append(brief["story"])
+        for key in ("must", "avoid"):
+            before = {norm(x) for x in u.get(key) or []}
+            said += [x for x in brief.get(key) or [] if norm(x) not in before]
+        if brief.get("music") and norm(brief["music"]) != norm(u.get("music", "")):
+            said.append(brief["music"])
+        return " ".join(said)
+
+    def polish_understanding(self, project: dict, form: dict) -> None:
+        """The AI rewords what they wrote on 'what I understood' (clearer, nothing added or lost). The version before
+        is kept, so they can go back to it."""
+        self._guard(project, "understood")
+        u = self.understanding(project)
+        if not u:
+            raise ActionError("Nothing to polish yet.")
+        if self.polish_left(project) <= 0:
+            raise ActionError("That's all the polishing for this film: edit the words yourself, or carry on.")
+
+        def lines(name: str) -> list[str]:
+            return [x.strip(" -•\t")[:200] for x in str(form.get(name, "")).splitlines() if x.strip(" -•\t")][:12]
+
+        current = {"story": " ".join(str(form.get("story") or u.get("story", "")).split())[:600],
+                   "feel": [w.strip() for w in str(form.get("feel", "")).split(",") if w.strip()][:6] or u.get("feel", []),
+                   "must": lines("must") if "must" in form else u.get("must", []),
+                   "avoid": lines("avoid") if "avoid" in form else u.get("avoid", [])}
+        self.mute_if_asked(project, self._their_words(u, current))  # what they typed counts, polished or not
+        user = self.user(project["user_id"])
+        owner = self.is_owner(user)
+        work = workdir(self.s, user["id"], project["id"]).ensure()
+        brain = make_brain(brain_kind_for(self.s, owner), self.s, self._spender(project, user["id"], None), work.brain)
+        try:
+            out = brain.polish_understanding(current, project["kind"])
+        except BudgetExceeded as exc:
+            raise ActionError(f"It can't be polished right now ({exc}). Edit the words yourself, or carry on.") from exc
+        except Exception as exc:  # noqa: BLE001 - their words stay as they were
+            log.warning("polishing failed: %s", exc)
+            raise ActionError("The AI couldn't polish it just now; your words are as you left them. Try again.") from exc
+        history = (u.get("_history") or [])[-4:] + [current]
+        u.update(story=out["story"] or current["story"], feel=out["feel"] or current["feel"],
+                 must=out["must"] or current["must"], avoid=out["avoid"] or current["avoid"],
+                 _history=history, _polished=int(u.get("_polished") or 0) + 1)
+        self.db.run("UPDATE projects SET understood=?, updated=? WHERE id=?", (json.dumps(u), time.time(), project["id"]))
+
+    def undo_understanding(self, project: dict) -> None:
+        """Back to the words as they were before the last polish."""
+        self._guard(project, "understood")
+        u = self.understanding(project) or {}
+        history = u.get("_history") or []
+        if not history:
+            raise ActionError("There's no earlier version to go back to.")
+        last = history.pop()
+        u.update({k: last.get(k, u.get(k)) for k in ("story", "feel", "must", "avoid")}, _history=history)
+        self.db.run("UPDATE projects SET understood=?, updated=? WHERE id=?", (json.dumps(u), time.time(), project["id"]))
+
     def confirm_understanding(self, project: dict, form: dict) -> None:
         """They checked (and corrected) what was understood: that becomes the brief every later step follows, and the
         stories are pitched from it."""
@@ -1828,6 +2009,7 @@ class Studio:
                     terms.append({"heard": heard[:80], "written": (written or heard)[:80]})
             brief["terms"] = terms[:24]
         self.db.run("UPDATE projects SET brief=?, updated=? WHERE id=?", (json.dumps(brief), time.time(), project["id"]))
+        self.mute_if_asked(project, self._their_words(u, brief))
         from . import abilities
 
         abilities.note(self.db, project, " ".join([brief["story"], *brief["must"], brief.get("music", "")]))
