@@ -130,6 +130,9 @@ def _json_from_text(text: str) -> dict:
 
 # ---------------------------------------------------------------- the Claude API
 
+MAX_OUT = 32000  # the most room one structured answer gets (the client's own 600 s timeout covers it)
+
+
 class ApiBackend:
     name = "api"
 
@@ -169,24 +172,40 @@ class ApiBackend:
         first = self._variant.get(key, 0)
         t0 = time.monotonic()
         last_error: Exception | None = None
+        spent = [0, 0, 0, 0]  # every call is paid for, including one that ran out of room
         for i in range(first, len(variants)):
-            try:
-                msg = self.client.messages.create(**base, **variants[i]())
-            except self.anthropic.BadRequestError as exc:  # this model or schema doesn't take that form: simpler one
-                last_error = exc
+            while True:
+                try:
+                    msg = self.client.messages.create(**base, **variants[i]())
+                except self.anthropic.BadRequestError as exc:  # this model or schema doesn't take that form: simpler one
+                    last_error = exc
+                    msg = None
+                    break
+                u = msg.usage
+                for k, n in enumerate((u.input_tokens, u.output_tokens, u.cache_creation_input_tokens,
+                                       u.cache_read_input_tokens)):
+                    spent[k] += n or 0
+                # out of room: the thinking (high effort) can use the whole budget before any answer is written, and
+                # the reply is then empty or cut off. Ask again with twice the room, up to MAX_OUT.
+                if msg.stop_reason == "max_tokens" and base["max_tokens"] < MAX_OUT:
+                    base["max_tokens"] = min(MAX_OUT, base["max_tokens"] * 2)
+                    continue
+                break
+            if msg is None:
                 continue
             self._variant[key] = i
+            if msg.stop_reason == "max_tokens":
+                raise BrainError(f"{req.task}: the answer did not fit in {base['max_tokens']} tokens")
             if i < 2:
                 text = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text")
+                if "{" not in text:
+                    raise BrainError(f"{req.task}: no answer in the reply (stopped: {msg.stop_reason})")
                 data = _json_from_text(text)
             else:
                 data = next((b.input for b in msg.content if getattr(b, "type", "") == "tool_use"), None)
                 if data is None:
                     raise BrainError(f"{req.task}: the model did not return a result")
-            u = msg.usage
-            usage = Usage.priced(req.task, req.model, self.name, u.input_tokens or 0, u.output_tokens or 0,
-                                 u.cache_creation_input_tokens or 0, u.cache_read_input_tokens or 0,
-                                 time.monotonic() - t0)
+            usage = Usage.priced(req.task, req.model, self.name, *spent, time.monotonic() - t0)
             return data, usage
         raise BrainError(f"{req.task}: the API refused every request form: {last_error}")
 

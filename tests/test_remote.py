@@ -392,3 +392,39 @@ def test_threads_are_sized_to_the_cpus_a_machine_is_paid_for(monkeypatch):
     monkeypatch.delenv("VIDO_CPUS")
     assert 1 <= cpus.usable_cpus() <= (__import__("os").cpu_count() or 64)
     cpus.usable_cpus.cache_clear()
+
+
+def test_an_answer_that_runs_out_of_room_is_asked_again_with_more_room():
+    """High-effort thinking can use the whole output budget before any answer is written (the reply is empty and
+    stops at max_tokens: 'no JSON object in the reply' on two films' design step). Asked again with twice the room."""
+    from types import SimpleNamespace as NS
+
+    import anthropic
+    from pydantic import BaseModel
+
+    from vidosuper.studio.brain.backends import ApiBackend, BrainError, Request
+
+    class Out(BaseModel):
+        shots: list[str]
+
+    def reply(stop, text):
+        blocks = [NS(type="thinking", thinking="...")] + ([NS(type="text", text=text)] if text else [])
+        return NS(stop_reason=stop, content=blocks, usage=NS(input_tokens=100, output_tokens=50,
+                                                              cache_creation_input_tokens=0, cache_read_input_tokens=0))
+
+    asked: list[int] = []
+    replies = [reply("max_tokens", ""), reply("end_turn", '{"shots": ["a", "b"]}')]
+    b = ApiBackend.__new__(ApiBackend)
+    b.anthropic, b._variant = anthropic, {}
+    b.client = NS(messages=NS(create=lambda **kw: (asked.append(kw["max_tokens"]), replies.pop(0))[1]))
+    req = Request("design", "system", "text", Out, "claude-opus-5-5", effort="high", max_tokens=12000)
+    data, usage = b.ask(req)
+    assert data == {"shots": ["a", "b"]} and asked == [12000, 24000]
+    assert usage.input_tokens == 200 if hasattr(usage, "input_tokens") else True  # both calls counted
+
+    # never fits: a clear error, not a parse failure
+    asked.clear()
+    replies[:] = [reply("max_tokens", "")] * 4
+    with pytest.raises(BrainError, match="did not fit"):
+        b.ask(req)
+    assert asked[-1] == 32000

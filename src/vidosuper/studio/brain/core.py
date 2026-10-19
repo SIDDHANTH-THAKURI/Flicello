@@ -738,7 +738,7 @@ class Brain:
             parts.append(extra)
         parts.append(f"Return the shot plan as JSON. Its beats must add up to exactly {ctx.beats.target}.")
         req = Request(task, prompt("editor"), "\n\n".join(parts), DesignPlan, self.models.editor, effort="high",
-                      max_tokens=12000)
+                      max_tokens=16000)  # a whole plan after high-effort thinking
         return self._ask(req, lambda p: check_plan(p, ctx))
 
     def design(self, ctx: StoryContext, pitch: StoryPitch, note: str = "") -> DesignPlan:
