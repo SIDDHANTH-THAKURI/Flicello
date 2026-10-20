@@ -44,6 +44,7 @@ def compose(plan: dict, out_path: Path, *, model: str = DEFAULT_MODEL, output_fo
         body["seed"] = seed
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    song_id = None
     for fmt in (output_format, "mp3_44100_128"):
         request = urllib.request.Request(f"{API}?output_format={fmt}", data=json.dumps(body).encode("utf-8"),
                                          headers={"xi-api-key": key, "Content-Type": "application/json"},
@@ -51,13 +52,14 @@ def compose(plan: dict, out_path: Path, *, model: str = DEFAULT_MODEL, output_fo
         try:
             with urllib.request.urlopen(request, timeout=600) as response:
                 out_path.write_bytes(response.read())
+                song_id = response.headers.get("song-id")  # lets a later track take this one as its reference
             break
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:400]
             if fmt != "mp3_44100_128" and exc.code in (400, 403, 422) and "format" in detail.lower():
                 continue  # this plan can't have that format; take the standard one
             raise RuntimeError(f"ElevenLabs Music said HTTP {exc.code}: {detail}") from exc
-    out_path.with_suffix(".plan.json").write_text(json.dumps({"model": model, "plan": plan}, indent=1),
+    out_path.with_suffix(".plan.json").write_text(json.dumps({"model": model, "plan": plan, "song_id": song_id}, indent=1),
                                                   encoding="utf-8")
     return out_path
 
