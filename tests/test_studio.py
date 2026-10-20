@@ -394,8 +394,9 @@ def test_the_api_key_is_read_from_the_dotenv_file(tmp_path, monkeypatch):
 
     (tmp_path / ".env").write_text('# comment\nANTHROPIC_API_KEY="sk-test-123"\nVIDO_STUDIO_MONTHLY_USD=7\n', encoding="utf-8")
     monkeypatch.setattr(config_module, "REPO_ROOT", tmp_path)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("VIDO_STUDIO_MONTHLY_USD", raising=False)
+    for name in ("ANTHROPIC_API_KEY", "VIDO_STUDIO_MONTHLY_USD"):  # set first, so whatever the .env puts in the
+        monkeypatch.setenv(name, "")  # environment is undone after (it leaked a $7 month into later tests)
+        monkeypatch.delenv(name)
     s = load_settings(tmp_path / "home")
     assert s.limits.monthly_usd == 7.0
     assert ApiBackend().client.api_key == "sk-test-123"
@@ -643,6 +644,29 @@ def test_slivers_are_folded_into_a_neighbour_not_an_error():
     first = heal_template(tpl([0.0, 0.1, 2.0, 4.0]))  # a sliver at the very start
     assert first.slots[0].start == 0.0 and first.slots[0].transition_in.type == "cut" and len(first.slots) == 2
     assert len(heal_template(tpl([0.0, 0.1])).slots) == 1  # never removes the only shot
+
+
+def test_a_refused_ai_key_pauses_the_film_instead_of_failing_it(studio):
+    """Jobs 20 and 23 (Oct 18): the AI key was refused, the step was tried twice and the film failed with 'Something
+    went wrong'. Now it waits, the person is told plainly, the owner is alerted, and Try again carries on."""
+
+    class AuthenticationError(Exception):
+        pass
+
+    friend = _friend(studio, "Key")
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+    studio.db.run("UPDATE projects SET stage='sampling' WHERE id=?", (p["id"],))
+    job_id = studio.db.enqueue("sample", p["id"], friend["id"], {"pitch": 1})
+    studio._job_sample = lambda job, project, user: (_ for _ in ()).throw(
+        AuthenticationError("Error code: 401 - invalid x-api-key"))
+    studio.run_job(studio.db.claim())
+    shown = studio.db.project(p["id"])
+    assert shown["stage"] == "paused" and "AI service" in shown["note"]
+    assert studio.db.one("SELECT status FROM jobs WHERE id=?", (job_id,))["status"] == "waiting"
+    assert studio.db.one("SELECT * FROM alerts WHERE kind='key'")
+    studio.retry(shown)  # the key is fixed: it carries on from the same step
+    assert studio.db.project(p["id"])["stage"] == "sampling"
+    assert studio.db.one("SELECT status FROM jobs WHERE id=?", (job_id,))["status"] == "queued"
 
 
 def test_a_failed_step_never_shows_our_internals(studio):

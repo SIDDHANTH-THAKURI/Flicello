@@ -31,6 +31,15 @@ from pydantic import BaseModel, ValidationError
 from ..settings import price_for
 
 
+class BadReply(RuntimeError):
+    """A reply with no readable answer in it (no JSON, cut off, no tool result): asked again, never fails a step at
+    once. `usage`: what the reply cost (still counted)."""
+
+    def __init__(self, message: str, usage=None):
+        super().__init__(message)
+        self.usage = usage
+
+
 class BrainError(RuntimeError):
     """The brain could not produce a usable answer (after retries)."""
 
@@ -131,6 +140,7 @@ def _json_from_text(text: str) -> dict:
 
 # ---------------------------------------------------------------- the Claude API
 
+PULSE_EVERY = 50.0  # seconds between pulses while an answer streams
 LOWER_EFFORT = {"max": "high", "xhigh": "high", "high": "medium", "medium": "low"}
 MAX_OUT = 64000  # the most room one structured answer gets; streamed, so a long one never trips the client's timeout
 
@@ -147,6 +157,7 @@ class ApiBackend:
         self.anthropic = anthropic
         self.client = anthropic.Anthropic(api_key=key, max_retries=4, timeout=timeout)
         self._variant: dict[tuple[str, str], int] = {}  # (model, schema) -> request variant that the API accepts
+        self.pulse = None  # called about once a minute while a long answer streams in: the step is alive
 
     def _content(self, req: Request, correction: str | None) -> list[dict]:
         blocks: list[dict] = [{"type": "text", "text": req.text}]
@@ -166,6 +177,15 @@ class ApiBackend:
         if stream is None:  # a stand-in client (tests)
             return self.client.messages.create(**kwargs)
         with stream(**kwargs) as s:
+            if self.pulse is not None:  # a long think must not look like a stuck step to the watchdog
+                due = time.monotonic() + PULSE_EVERY
+                for _ in s:
+                    if time.monotonic() >= due:
+                        due = time.monotonic() + PULSE_EVERY
+                        try:
+                            self.pulse()
+                        except Exception:  # noqa: BLE001 - a missed pulse never stops the answer
+                            pass
             return s.get_final_message()
 
     def ask(self, req: Request, correction: str | None = None) -> tuple[dict, Usage]:
@@ -212,16 +232,18 @@ class ApiBackend:
             self._variant[key] = i
             if msg.stop_reason == "max_tokens":
                 raise BrainError(f"{req.task}: the answer did not fit in {base['max_tokens']} tokens")
+            usage = Usage.priced(req.task, req.model, self.name, *spent, time.monotonic() - t0)
             if i < 2:
                 text = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text")
-                if "{" not in text:
-                    raise BrainError(f"{req.task}: no answer in the reply (stopped: {msg.stop_reason})")
-                data = _json_from_text(text)
+                try:
+                    data = _json_from_text(text)
+                except ValueError as exc:
+                    raise BadReply(f"{req.task}: no readable answer in the reply ({exc}; stopped: {msg.stop_reason})",
+                                   usage) from exc
             else:
                 data = next((b.input for b in msg.content if getattr(b, "type", "") == "tool_use"), None)
                 if data is None:
-                    raise BrainError(f"{req.task}: the model did not return a result")
-            usage = Usage.priced(req.task, req.model, self.name, *spent, time.monotonic() - t0)
+                    raise BadReply(f"{req.task}: the model did not return a result", usage)
             return data, usage
         raise BrainError(f"{req.task}: the API refused every request form: {last_error}")
 
@@ -293,7 +315,14 @@ def structured(backend, req: Request, spend: SpendFn, check: CheckFn | None = No
     problems: list[str] = []
     usable = None
     for attempt in range(retries + 1):
-        data, usage = backend.ask(req, correction)
+        try:
+            data, usage = backend.ask(req, correction)
+        except BadReply as exc:  # nothing readable came back: ask again, plainly
+            if exc.usage is not None:
+                spend(exc.usage)
+            problems = [str(exc)]
+            correction = "Your previous reply had no readable JSON answer. Return only the complete JSON object, nothing else."
+            continue
         spend(usage)
         if log:
             log(f"{req.task}-{attempt + 1}", data)
@@ -315,3 +344,4 @@ def structured(backend, req: Request, spend: SpendFn, check: CheckFn | None = No
         log_.warning("%s: used with taste problems left after %d tries: %s", req.task, retries + 1, "; ".join(problems[:4]))
         return usable
     raise BrainError(f"{req.task}: still not valid after {retries + 1} tries: " + "; ".join(problems[:6]))
+

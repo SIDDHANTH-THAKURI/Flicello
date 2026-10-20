@@ -680,7 +680,9 @@
 {% endif %}
 
 {% elif p.stage == 'paused' %}
-<section class="working paused-card rise d2"><h2>Paused</h2><p class="msg">{{ p.note or "Waiting for the owner." }}</p></section>
+<section class="working paused-card rise d2"><h2>Paused</h2><p class="msg">{{ p.note or "Waiting for the owner." }}</p>
+  <form method="post" action="/p/{{ p.id }}/retry"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn gap-top" type="submit"><span>Try again</span></button></form></section>
 
 {% elif p.stage == 'failed' %}
 <section class="working failed-card rise d2">

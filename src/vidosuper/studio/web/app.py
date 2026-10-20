@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import accounts, analytics, auth
@@ -764,10 +765,13 @@ def create_app(studio: Studio) -> FastAPI:
         if int(request.headers.get("content-length") or 0) > limit:
             raise HTTPException(413, "Chunk too large.")
         data = bytearray()
-        async for piece in request.stream():
-            data.extend(piece)
-            if len(data) > limit:
-                raise HTTPException(413, "Chunk too large.")
+        try:
+            async for piece in request.stream():
+                data.extend(piece)
+                if len(data) > limit:
+                    raise HTTPException(413, "Chunk too large.")
+        except ClientDisconnect:  # the phone lost signal mid-chunk: nothing written, the page sends it again
+            return JSONResponse({"detail": "Connection dropped; send the chunk again."}, status_code=503)
         try:
             received = await run_in_threadpool(write_chunk, studio.db, s, up, offset, bytes(data))
         except UploadError as exc:

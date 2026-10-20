@@ -439,3 +439,82 @@ def test_an_answer_that_runs_out_of_room_is_asked_again_with_more_room():
     with pytest.raises(BrainError, match="did not fit"):
         b.ask(req)
     assert asked[-1] == 64000 and efforts[-1] == "low"
+
+
+def test_an_unreadable_reply_is_asked_for_again_not_failed():
+    """'no JSON object in the reply' and a JSON cut off mid-way (jobs 12 and 26, Oct 17-20) failed the whole step at
+    once: now the reply is asked for again (its cost still counted), and a later good answer is used."""
+    from types import SimpleNamespace as NS
+
+    import anthropic
+    from pydantic import BaseModel
+
+    from vidosuper.studio.brain.backends import ApiBackend, BrainError, Request, structured
+
+    class Out(BaseModel):
+        shots: list[str]
+
+    def reply(text):
+        return NS(stop_reason="end_turn", content=[NS(type="text", text=text)],
+                  usage=NS(input_tokens=10, output_tokens=5, cache_creation_input_tokens=0, cache_read_input_tokens=0))
+
+    sent: list[str] = []
+    replies = [reply("Here is the plan, as asked."), reply('{"shots": ["a", '), reply('{"shots": ["a"]}')]
+    b = ApiBackend.__new__(ApiBackend)
+    b.anthropic, b._variant, b.pulse = anthropic, {}, None
+    b.client = NS(messages=NS(create=lambda **kw: (sent.append(str(kw["messages"])), replies.pop(0))[1]))
+    spent = []
+    req = Request("design", "system", "text", Out, "claude-opus-5-5", max_tokens=4000)
+    obj = structured(b, req, spent.append)
+    assert obj.shots == ["a"] and len(spent) == 3  # every reply paid for
+    assert "no readable JSON answer" in sent[-1]
+
+    replies[:] = [reply("nothing")] * 3
+    with pytest.raises(BrainError, match="still not valid after 3 tries"):
+        structured(b, req, spent.append)
+
+
+def test_a_long_streamed_answer_pulses_so_the_watchdog_sees_it_alive(monkeypatch):
+    """Streaming lets a design think for many minutes; without a sign of life the watchdog would take the step back
+    after 25 minutes of no progress. The backend pulses while the answer streams in."""
+    from types import SimpleNamespace as NS
+
+    from vidosuper.studio.brain import backends
+
+    clock = iter(range(0, 10000, 30))  # each streamed event: 30 s later
+    monkeypatch.setattr(backends.time, "monotonic", lambda: float(next(clock)))
+    final = object()
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            return iter(range(10))  # 10 events, about 5 minutes
+
+        def get_final_message(self):
+            return final
+
+    b = backends.ApiBackend.__new__(backends.ApiBackend)
+    pulses = []
+    b.pulse = lambda: pulses.append(1)
+    b.client = NS(messages=NS(stream=lambda **kw: Stream()))
+    assert b._send({}) is final
+    assert 4 <= len(pulses) <= 6
+
+    b.pulse = lambda: 1 / 0  # a broken pulse never stops the answer
+    assert b._send({}) is final
+
+
+def test_a_refused_ai_key_is_recognised():
+    from vidosuper.studio.service import service_refused
+
+    class AuthenticationError(Exception):
+        pass
+
+    assert service_refused(AuthenticationError("Error code: 401 - invalid x-api-key"))
+    assert service_refused(RuntimeError("Your credit balance is too low to access the Anthropic API"))
+    assert not service_refused(ValueError("no JSON object in the reply"))

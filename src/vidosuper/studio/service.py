@@ -133,6 +133,14 @@ class ActionError(ValueError):
     """Shown to the person as is."""
 
 
+def service_refused(exc: BaseException) -> bool:
+    """The AI account itself said no (a refused key, no permission, no credit left): no retry can help until the
+    owner fixes it."""
+    name, text = type(exc).__name__, str(exc).lower()
+    return name in ("AuthenticationError", "PermissionDeniedError") or "invalid x-api-key" in text \
+        or "credit balance is too low" in text
+
+
 class Studio:
     def __init__(self, s: StudioSettings):
         self.s = s.ensure()
@@ -1019,8 +1027,10 @@ class Studio:
                 song_id = made_now["song_id"]
                 self._spend_music(project, user, job, made_now["seconds"], took)
                 break
-        except ComposeError as exc:
-            log.warning("a track could not be made: %s", exc)
+        except (BudgetExceeded, JobStopped):  # (and PersonLimit) the money rules and the person decide
+            raise
+        except Exception as exc:  # noqa: BLE001 - the music service or describing it again broke: never the film
+            log.warning("a track could not be made: %s", exc, exc_info=not isinstance(exc, ComposeError))
             self.db.event(project["id"], f"music: {exc}; our own beat instead", "warn", job["id"])
             maker, whole, name = "house", True, name.replace(".mp3", ".wav")
             note = " The music service couldn't make it just now, so this is our own simple beat."
@@ -1444,8 +1454,16 @@ class Studio:
         owner = self.is_owner(user)
         work = workdir(self.s, user["id"], project["id"])
 
+        now = {"f": 0.0, "msg": "", "t": time.monotonic()}
+
         def progress(f: float, msg: str) -> None:
+            now.update(f=f, msg=msg, t=time.monotonic())
             self.db.job_progress(job["id"], lo + (hi - lo) * f, msg)
+
+        def pulse() -> None:  # the AI is still writing: say how long, so the step is seen to be alive
+            mins = int((time.monotonic() - now["t"]) // 60)
+            if mins >= 1 and now["msg"]:
+                self.db.job_progress(job["id"], lo + (hi - lo) * now["f"], f"{now['msg']} ({mins} min)")
 
         pipe = Pipeline(work, self.cfg, None, progress, owner=owner)
         pipe.no_music = project["music"] == "none" and not project["song"]
@@ -1458,6 +1476,8 @@ class Studio:
         kind = brain_kind_for(self.s, owner)
         pipe.brain = make_brain(kind, self.s, self._spender(project, user["id"], job["id"]), work.brain,
                                 pipe.project.load_signals)
+        if hasattr(getattr(pipe.brain, "backend", None), "pulse"):
+            pipe.brain.backend.pulse = pulse
         return pipe
 
     def _context(self, pipe: Pipeline, project: dict, user: dict):
@@ -1515,6 +1535,17 @@ class Studio:
             self.db.event(project["id"], f"{job['kind']} failed (try {job['attempts']}): {type(exc).__name__}: "
                           f"{' '.join(str(exc).split())[:200]}\n{detail[-3000:]}", "error", job["id"])
             user_fixable = isinstance(exc, (UploadError, ActionError, UserError))  # only these have words made for people
+            if service_refused(exc) and job["kind"] in JOB_STAGE:
+                # our AI account said no (key refused, no credit left): not their film's fault, and trying again
+                # can't help until the owner fixes it. The film waits (nothing lost) instead of failing.
+                self.db.run("UPDATE jobs SET status='waiting', error=? WHERE id=?", (str(exc)[:500], job["id"]))
+                self.db.set_stage(project["id"], "paused", note=(
+                    "Paused: our AI service is not answering right now. Nothing is lost: the owner has been told and "
+                    "will start it again from this step, or press Try again in a while."))
+                alert(self.db, self.s, "key", f"The AI account refused a request ({type(exc).__name__}: "
+                      f"{str(exc)[:160]}): videos are paused until the key or credit is fixed in .env, the server's "
+                      ".env.studio and the Modal secret; then retry them from /admin.")
+                return
             if job["attempts"] < 2 and not user_fixable:
                 self.db.requeue(job["id"], delay=20.0, error=str(exc)[:500])
                 return
