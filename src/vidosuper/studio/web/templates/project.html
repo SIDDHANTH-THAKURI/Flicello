@@ -4,7 +4,7 @@
 {% block title %}{{ p.title }} · {{ app_name }}{% endblock %}
 {% block body_attrs %} data-project="{{ p.id }}" data-stage="{{ p.stage }}" data-busy="{{ 1 if p.stage in BUSY else 0 }}" data-chunk="{{ chunk }}" data-shapes="{{ p.shapes }}" data-kind="{{ p.kind }}"{% endblock %}
 {% block content %}
-{% set ideas_left = ideas_left|default(0) %}{% set sample_tries_left = sample_tries_left|default(0) %}{% set polish_left = polish_left|default(0) %}{% set clip_thumbs = clip_thumbs|default([]) %}
+{% set posters = posters|default([]) %}{% set ideas_left = ideas_left|default(0) %}{% set sample_tries_left = sample_tries_left|default(0) %}{% set polish_left = polish_left|default(0) %}{% set clip_thumbs = clip_thumbs|default([]) %}
 {% set busy = p.stage in BUSY %}
 {% if p.kind == 'montage' %}
   {% set steps = [('setup', 'Clips'), ('preparing', 'Watching'), ('understood', 'Under­stood'), ('choose', 'Story'), ('review', 'Sample'), ('done', 'Film')] %}
@@ -533,11 +533,13 @@
   {% if board and board.rough %}
   <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}">
     <figcaption class="cap-top"><span class="cap-n">1</span><span><b>The whole story</b><small>rough, low quality · {{ board.seconds|mmss }}</small></span></figcaption>
-    <div class="frame"><video src="/m/{{ p.id }}/out/{{ board.rough }}" controls playsinline preload="metadata"></video></div></figure>
+    {% set still = board.rough|replace('.mp4', '.jpg') %}
+    <div class="frame"><video src="/m/{{ p.id }}/out/{{ board.rough }}" controls playsinline preload="metadata"{% if still in posters %} poster="/m/{{ p.id }}/out/{{ still }}"{% endif %}></video></div></figure>
   {% endif %}
   <figure class="device {{ 'tall' if sample.shape == '9:16' else 'wide' }}">
     {% if board and board.rough %}<figcaption class="cap-top"><span class="cap-n">2</span><span><b>How it will look</b><small>a short part, full quality</small></span></figcaption>{% endif %}
-    <div class="frame"><video src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"></video></div></figure>
+    {% set still = sample.file|replace('.mp4', '.jpg') %}
+    <div class="frame"><video src="/m/{{ p.id }}/out/{{ sample.file }}" controls playsinline preload="metadata"{% if still in posters %} poster="/m/{{ p.id }}/out/{{ still }}"{% endif %}></video></div></figure>
 </div>
 <div class="split gap-top">
   <form method="post" action="/p/{{ p.id }}/sample" class="panel start" data-confirm="Make the whole film now, at full quality? This is the long step{% if render_eta %} ({{ render_eta|eta }} as a rule; longer films take longer){% endif %}." data-confirm-yes="Make the whole film">
@@ -601,7 +603,8 @@
 <div class="screens rise d2">
   {% for r in latest %}
   <figure class="device {{ 'tall' if r.shape == '9:16' else 'wide' }}">
-    <div class="frame"><video src="/m/{{ p.id }}/out/{{ r.file }}" controls playsinline preload="metadata"></video></div>
+    {% set still = r.file|replace('.mp4', '.jpg') %}
+    <div class="frame"><video src="/m/{{ p.id }}/out/{{ r.file }}" controls playsinline preload="metadata"{% if still in posters %} poster="/m/{{ p.id }}/out/{{ still }}"{% endif %}></video></div>
     <figcaption>{{ r.shape }} · {{ r.seconds|mmss }} · <a class="btn" href="/m/{{ p.id }}/out/{{ r.file }}?dl=1">Download</a></figcaption>
     {% if is_owner %}
     <details class="more"><summary>Checks</summary><ul class="beats">
@@ -656,13 +659,13 @@
 {% endif %}
 
 {% elif p.stage == 'paused' %}
-<section class="working rise d2"><h2>Paused</h2><p class="msg">{{ p.note or "Waiting for the owner." }}</p></section>
+<section class="working paused-card rise d2"><h2>Paused</h2><p class="msg">{{ p.note or "Waiting for the owner." }}</p></section>
 
 {% elif p.stage == 'failed' %}
-<section class="working rise d2">
+<section class="working failed-card rise d2">
   <h2>Something went wrong</h2>
   <p class="msg">{{ p.error or "We've been told and are looking at it." }}</p>
-  {% if joblog %}<ol class="steps" aria-label="What it did">{% for st in joblog %}<li class="done"><span>{{ st.m }}</span><time>{{ st.s|ago_s }}</time></li>{% endfor %}</ol>{% endif %}
+  {% if joblog %}<ol class="steps" aria-label="What it did">{% for st in joblog %}<li class="{{ 'broke' if loop.last else 'done' }}"><span>{{ st.m }}</span>{% if loop.last %}<b class="sr-only"> (it stopped here)</b>{% endif %}<time>{{ st.s|ago_s }}</time></li>{% endfor %}</ol>{% endif %}
   <form method="post" action="/p/{{ p.id }}/retry" data-confirm="Try this step again?" data-confirm-yes="Try again"><input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="btn-sun" type="submit"><span>Try again</span></button></form>
   <p class="help"><a href="#report">Tell us what happened</a>: it helps us fix it for everyone.</p>

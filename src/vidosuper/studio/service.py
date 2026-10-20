@@ -1477,6 +1477,7 @@ class Studio:
             handler(job, project, user)
             if self._stopped(job):
                 return  # stopped by the person as it finished: what it made is not used
+            self._posters(project)
             self.db.job_done(job["id"])
         except JobStopped:
             log.info("job %s stopped by the person", job["id"])
@@ -1530,6 +1531,18 @@ class Studio:
                       "use the AI until it is replaced in .env, the server's .env.studio and the Modal secret.")
             else:
                 alert(self.db, self.s, "job", f"{job['kind']} failed for a video: {type(exc).__name__}: {str(exc)[:200]}")
+
+    def _posters(self, project: dict) -> None:
+        """Every video of this film has its still for the player (see pipeline.poster_for)."""
+        from .pipeline import poster_for
+
+        try:
+            out = workdir(self.s, project["user_id"], project["id"]).out
+            for video in sorted(out.glob("*.mp4")) if out.exists() else []:
+                if not video.with_suffix(".jpg").exists():
+                    poster_for(video)
+        except Exception:  # noqa: BLE001 - a missing still never fails a step
+            log.warning("could not make the stills for %s", project["id"], exc_info=True)
 
     def _stopped(self, job: dict) -> bool:
         """The person stopped this step (Studio.stop): it is put back at the stage the stop chose, even if the step

@@ -415,11 +415,21 @@ def create_app(studio: Studio) -> FastAPI:
             raise Redirect("/welcome")
         projects = studio.projects(user)
         thumbs = {}
-        for p in projects:
+        for p in projects:  # its story's still, else its finished film's, else its first clip's: footage, not a box
             still = studio.db.one("SELECT stills FROM pitches WHERE project_id=? ORDER BY (id=?) DESC, id LIMIT 1",
                                   (p["id"], p["chosen"] or 0))
             names = json.loads(still["stills"]) if still else []
-            thumbs[p["id"]] = names[0] if names else None
+            thumbs[p["id"]] = f"stills/{names[0]}" if names else None
+            if thumbs[p["id"]] is None:
+                work = workdir(s, p["user_id"], p["id"])
+                film = studio.db.one("SELECT file FROM renders WHERE project_id=? AND kind='final' ORDER BY id DESC LIMIT 1",
+                                     (p["id"],))
+                clip = studio.db.one("SELECT id FROM clips WHERE project_id=? ORDER BY created LIMIT 1", (p["id"],))
+                for rel in ([f"out/{Path(film['file']).with_suffix('.jpg').name}"] if film else []) + \
+                        ([f"stills/clip-{clip['id']}.jpg"] if clip else []):
+                    if (work.root / rel).exists():
+                        thumbs[p["id"]] = rel
+                        break
         return page(request, "home.html", user, sess, projects=projects, thumbs=thumbs, credits=studio.credits(user))
 
     def new_ctx(user: dict) -> dict:
@@ -484,6 +494,15 @@ def create_app(studio: Studio) -> FastAPI:
                 import threading
                 threading.Thread(target=lambda: [clip_thumb(work.clips / c["file"], work.stills, c["id"], c["seconds"] or 0)
                                                  for c in missing[:20]], daemon=True).start()
+        work = workdir(s, p["user_id"], pid)
+        videos = sorted(work.out.glob("*.mp4")) if work.out.exists() else []
+        posters = {v.with_suffix(".jpg").name for v in videos if v.with_suffix(".jpg").exists()}
+        if len(posters) < len(videos):  # older videos get their still in the background (new ones have it already)
+            import threading
+
+            from ..pipeline import poster_for
+            todo = [v for v in videos if v.with_suffix(".jpg").name not in posters][:12]
+            threading.Thread(target=lambda: [poster_for(v) for v in todo], daemon=True).start()
         pitches = studio.pitches(p)
         samples = studio.renders(p, "sample")
         finals = studio.renders(p, "final")
@@ -492,7 +511,7 @@ def create_app(studio: Studio) -> FastAPI:
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
-                    clip_thumbs=clip_thumbs,
+                    clip_thumbs=clip_thumbs, posters=posters,
                     joblog=steps_of(job or (studio.db.one("SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
                                                           (pid,)) if p["stage"] == "failed" else None)),
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),

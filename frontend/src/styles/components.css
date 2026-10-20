@@ -4,7 +4,7 @@
 .btn-sun {
   --h: 42px;
   position: relative; isolation: isolate; display: inline-flex; align-items: center; gap: .55rem; height: var(--h); padding: 0 1.2rem;
-  border-radius: 999px; text-decoration: none; font-weight: 700; color: #120a0c; letter-spacing: -0.01em; font-size: .95rem;
+  border: 0; border-radius: 999px; text-decoration: none; font-weight: 700; color: #120a0c; letter-spacing: -0.01em; font-size: .95rem;
   background: var(--sun); background-size: 160% 100%; background-position: 0% 50%;
   box-shadow: 0 10px 40px -10px rgba(255, 46, 126, .6), inset 0 1px 0 rgba(255, 255, 255, .35);
   transition: transform .35s var(--ease-spring), box-shadow .35s var(--ease-out), background-position .8s var(--ease-out);

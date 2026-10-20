@@ -533,6 +533,45 @@ def remove_project_files(work: Workdir, cfg: Config) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
+_POSTERING: set[str] = set()  # videos whose still is being made right now
+_POSTER_FAILED: set[str] = set()  # videos that gave no still: not tried again on every page load
+_POSTER_LOCK = __import__("threading").Lock()
+
+
+def poster_for(video: Path) -> Path | None:
+    """The still a video's player shows before it plays (a film often opens on black, which reads as broken): a frame
+    about a quarter of the way in, next to the video with the same name (.jpg). Never fails what made the video."""
+    from ..ffmpeg import ffprobe_json, run_ffmpeg
+
+    video = Path(video)
+    out = video.with_suffix(".jpg")
+    key = str(video)
+    if out.exists():
+        return out
+    with _POSTER_LOCK:
+        if key in _POSTERING or key in _POSTER_FAILED:
+            return None
+        _POSTERING.add(key)
+    tmp = out.with_name(out.stem + ".part.jpg")
+    try:
+        seconds = float(ffprobe_json(video, timeout=20).get("format", {}).get("duration") or 4.0)
+        at = min(3.0, max(0.6, seconds * 0.25))
+        run_ffmpeg(["-ss", f"{at:.2f}", "-i", str(video), "-frames:v", "1", "-vf", "scale=-2:'min(960,ih)'", "-q:v", "3",
+                    str(tmp)], what="video poster", timeout=30)
+        if tmp.exists():
+            os.replace(tmp, out)
+        if not out.exists():
+            _POSTER_FAILED.add(key)
+        return out if out.exists() else None
+    except Exception:  # noqa: BLE001 - a player without a still still plays
+        tmp.unlink(missing_ok=True)
+        _POSTER_FAILED.add(key)
+        return None
+    finally:
+        with _POSTER_LOCK:
+            _POSTERING.discard(key)
+
+
 def folder_bytes(path: Path) -> int:
     if not path.exists():
         return 0

@@ -295,3 +295,150 @@
 [data-theme="light"] .track li.now.busy::before { background: linear-gradient(90deg, var(--amber), var(--rose), var(--violet), var(--amber)); background-size: 200% 100%; animation: flow 1.6s linear infinite; }
 [data-theme="light"] .track .step-back { color: var(--paper-2); text-decoration-color: rgba(46, 26, 64, .25); }
 [data-theme="light"] .track .step-back:hover { color: var(--rose); text-decoration-color: var(--rose); }
+
+/* ================================================================== golden hour
+   Daybreak, second pass: the light theme had become white boxes on cream. Every surface now catches the sunset
+   rising behind the page: a warm wash at one corner, a cool one at the other, a luminous edge, and small sunset
+   marks where the eye should land (section titles, eyebrows, counts). Only in the light: the night is untouched. */
+
+[data-theme="light"] {
+  --gh-warm: rgba(255, 190, 140, .26);
+  --gh-cool: rgba(190, 168, 255, .22);
+  --gh-paper: rgba(255, 255, 255, .86);
+  --gh-edge: linear-gradient(140deg, rgba(255, 255, 255, .95), rgba(255, 175, 135, .45) 38%, rgba(236, 31, 110, .22) 62%,
+                             rgba(160, 120, 255, .42));
+  --gh-ink: linear-gradient(90deg, #c2410c, #be185d 55%, #6d28d9);
+  --gh-lift: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 18px 40px -22px rgba(124, 58, 120, .32), 0 3px 10px -4px rgba(74, 36, 92, .08);
+}
+
+/* cards: frosted glass catching the light, with a glowing edge */
+[data-theme="light"] .panel,
+[data-theme="light"] details.report-zone,
+[data-theme="light"] .legal-card,
+[data-theme="light"] .ask-card,
+[data-theme="light"] .kind-card {
+  border: 1px solid transparent;
+  background:
+    radial-gradient(120% 85% at 0% 0%, var(--gh-warm), transparent 55%) padding-box,
+    radial-gradient(110% 90% at 100% 100%, var(--gh-cool), transparent 58%) padding-box,
+    linear-gradient(var(--gh-paper), var(--gh-paper)) padding-box,
+    var(--gh-edge) border-box;
+  box-shadow: var(--gh-lift);
+}
+[data-theme="light"] .ask-card { --gh-paper: rgba(255, 255, 255, .97); }
+[data-theme="light"] .panel.notice {
+  background:
+    radial-gradient(120% 90% at 0% 0%, rgba(255, 210, 120, .42), transparent 60%) padding-box,
+    linear-gradient(rgba(255, 250, 238, .92), rgba(255, 246, 228, .92)) padding-box,
+    linear-gradient(140deg, rgba(255, 255, 255, .95), rgba(240, 170, 60, .6)) border-box;
+}
+[data-theme="light"] .panel.danger, [data-theme="light"] details.danger-zone {
+  border: 1px solid transparent;
+  background:
+    radial-gradient(120% 90% at 0% 0%, rgba(255, 170, 180, .24), transparent 60%) padding-box,
+    linear-gradient(rgba(255, 248, 249, .92), rgba(255, 248, 249, .92)) padding-box,
+    linear-gradient(140deg, rgba(255, 255, 255, .95), rgba(223, 47, 72, .38)) border-box;
+}
+
+/* where the eye lands: a small sunset gem before each section title, eyebrows in sunset ink */
+[data-theme="light"] .panel > h2 { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; }
+[data-theme="light"] .panel > h2::before {
+  content: ""; flex: none; width: 10px; height: 10px; border-radius: 3px; background: var(--sun); transform: rotate(45deg);
+  box-shadow: 0 0 0 4px rgba(236, 31, 110, .1), 0 4px 10px -2px rgba(236, 31, 110, .45);
+}
+[data-theme="light"] .panel.danger > h2::before { background: var(--cut); box-shadow: 0 0 0 4px rgba(223, 47, 72, .1); }
+[data-theme="light"] .panel.notice > h2::before { background: linear-gradient(135deg, #ffc46b, #f59a1f); box-shadow: 0 0 0 4px rgba(245, 154, 31, .16); }
+[data-theme="light"] .eyebrow-s, [data-theme="light"] .doc-toc p {
+  background: var(--gh-ink); -webkit-background-clip: text; background-clip: text; color: transparent; font-weight: 600;
+}
+[data-theme="light"] .page-title { color: #1b1222; }
+
+/* the film's facts under its title: soft sunset chips */
+[data-theme="light"] .meta span {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .95), rgba(255, 236, 226, .92)); border-color: rgba(242, 85, 42, .2);
+  color: #6b3a35; box-shadow: 0 4px 12px -8px rgba(242, 85, 42, .4);
+}
+[data-theme="light"] .meta span:has(q) { background: linear-gradient(180deg, rgba(255, 255, 255, .95), rgba(244, 236, 255, .92)); border-color: rgba(122, 67, 240, .2); }
+[data-theme="light"] .meta q { color: #3b2350; }
+[data-theme="light"] .count { background: linear-gradient(180deg, #fff, #fff0f6); border-color: rgba(236, 31, 110, .28); color: #9d174d; }
+[data-theme="light"] .allowance { background: linear-gradient(180deg, rgba(255, 255, 255, .95), rgba(255, 238, 230, .9)); border-color: rgba(242, 85, 42, .22); color: #6b3a35; }
+
+/* secondary buttons and chips: warm paper, a rose edge when touched */
+[data-theme="light"] .btn:not(.btn-sun):not(.danger):not(.quiet):not(.danger-go) {
+  background: linear-gradient(180deg, #ffffff, #fff6f0); border-color: rgba(236, 31, 110, .18);
+  box-shadow: 0 1px 0 #fff inset, 0 6px 16px -10px rgba(194, 65, 12, .38);
+}
+[data-theme="light"] .btn:not(.btn-sun):not(.danger):not(.quiet):not(.danger-go):hover {
+  background: linear-gradient(180deg, #ffffff, #ffedf4); border-color: rgba(236, 31, 110, .45); box-shadow: 0 10px 22px -12px rgba(236, 31, 110, .5);
+}
+[data-theme="light"] .choice > span { background: linear-gradient(180deg, #ffffff, #fff8f3); border-color: rgba(194, 65, 12, .15); }
+[data-theme="light"] .choice:hover > span { background: linear-gradient(180deg, #ffffff, #fff0f5); }
+[data-theme="light"] .choice input:checked + span { background: linear-gradient(100deg, var(--amber), var(--rose) 60%, var(--violet)) border-box; }
+
+/* fields: paper with a breath of warmth */
+[data-theme="light"] .input, [data-theme="light"] .field input:not([type="checkbox"]):not([type="radio"]),
+[data-theme="light"] .field textarea, [data-theme="light"] .field select {
+  background: linear-gradient(180deg, #fffdfb, #ffffff); border-color: rgba(120, 72, 96, .2);
+}
+
+/* rows inside cards: warm paper, a lift when pointed at */
+[data-theme="light"] .files li, [data-theme="light"] .u-clips li, [data-theme="light"] .rules li, [data-theme="light"] .beat-list li,
+[data-theme="light"] .u-terms li, [data-theme="light"] .sb-card, [data-theme="light"] .beat {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(255, 248, 243, .96)); border-color: rgba(194, 65, 12, .13);
+  transition: border-color .25s, box-shadow .3s;
+}
+[data-theme="light"] .files li:hover, [data-theme="light"] .u-clips li:hover, [data-theme="light"] .rules li:hover,
+[data-theme="light"] .beat-list li:hover, [data-theme="light"] .sb-card:hover {
+  border-color: rgba(236, 31, 110, .3); box-shadow: 0 10px 24px -16px rgba(236, 31, 110, .45);
+}
+[data-theme="light"] .beat.picked { border-color: rgba(236, 31, 110, .45); }
+
+/* "more" toggles: a sunset-tinted plus */
+[data-theme="light"] details.more summary::before { border-color: rgba(236, 31, 110, .35); color: var(--rose); background: #fff0f6; }
+[data-theme="light"] details.more summary:hover { color: var(--paper); }
+
+/* the top bar and the footer: a thread of sunset */
+[data-theme="light"] .app-top { border-bottom-color: transparent; }
+[data-theme="light"] .app-top::after, [data-theme="light"] .app-foot::before {
+  content: ""; position: absolute; left: 0; right: 0; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 140, 90, .55) 20%, rgba(236, 31, 110, .5) 50%, rgba(122, 67, 240, .45) 80%, transparent);
+}
+[data-theme="light"] .app-top::after { bottom: -1px; }
+[data-theme="light"] .app-foot {
+  position: relative; border-top-color: transparent; background: linear-gradient(180deg, rgba(255, 244, 236, 0), rgba(255, 236, 226, .6));
+}
+[data-theme="light"] .app-foot::before { top: 0; }
+
+/* video frames sit in a soft sunset halo */
+[data-theme="light"] .device .frame::before { background: radial-gradient(closest-side, rgba(255, 140, 120, .4), rgba(160, 120, 255, .2) 60%, transparent); }
+
+/* story posters and looks: their words on warm glass */
+[data-theme="light"] .poster, [data-theme="light"] .look {
+  border: 1px solid transparent;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .97), rgba(255, 245, 239, .97)) padding-box, var(--gh-edge) border-box;
+}
+[data-theme="light"] .facts dt { color: #b4466e; }
+
+/* a film with no footage yet: a sunset poster, not a dark box (each state its own sky) */
+[data-theme="light"] .film-thumb:has(.film-empty-thumb) { background: linear-gradient(165deg, #ffd3a1 0%, #ff8fab 46%, #a07bff 100%); }
+[data-theme="light"] .film-st-busy .film-thumb:has(.film-empty-thumb) {
+  background: linear-gradient(115deg, #ffd3a1, #ff8fab, #a07bff, #ffd3a1); background-size: 300% 100%; animation: flow 7s linear infinite;
+}
+[data-theme="light"] .film-st-failed .film-thumb:has(.film-empty-thumb) { background: linear-gradient(165deg, #ffc9b8 0%, #f2647e 52%, #a32f68 100%); }
+[data-theme="light"] .film-st-paused .film-thumb:has(.film-empty-thumb) { background: linear-gradient(165deg, #ece4ff 0%, #b8a0ff 50%, #6c52d6 100%); }
+[data-theme="light"] .film-st-done .film-thumb:has(.film-empty-thumb) { background: linear-gradient(165deg, #ffe0a8 0%, #ff9f6e 45%, #e5487f 100%); }
+[data-theme="light"] .film-empty-thumb { color: #fff; }
+[data-theme="light"] .film-empty-thumb svg { opacity: .95; filter: drop-shadow(0 8px 18px rgba(90, 20, 70, .35)); }
+[data-theme="light"] .film-thumb:has(.film-empty-thumb)::after { background: linear-gradient(180deg, transparent 45%, rgba(46, 14, 44, .72)); }
+[data-theme="light"] .film-new { border: 1.5px dashed rgba(236, 31, 110, .3); background: linear-gradient(160deg, rgba(255, 255, 255, .85), rgba(255, 236, 228, .8)); }
+
+/* paused and failed: their own colour, not a blank card */
+[data-theme="light"] .working.failed-card { background: radial-gradient(60% 80% at 50% 0%, rgba(242, 100, 126, .18), transparent 70%), rgba(255, 252, 252, .9); }
+[data-theme="light"] .working.paused-card { background: radial-gradient(60% 80% at 50% 0%, rgba(160, 123, 255, .2), transparent 70%), rgba(253, 252, 255, .9); }
+/* film cards: the picture is the card (no dark backing showing at the rounded edge) */
+[data-theme="light"] .film:not(.film-new) { background: transparent; border-color: rgba(255, 255, 255, .75); box-shadow: 0 18px 40px -24px rgba(124, 58, 120, .5), 0 3px 10px -4px rgba(74, 36, 92, .12); }
+[data-theme="light"] .film:not(.film-new):hover { border-color: rgba(255, 255, 255, .95); box-shadow: 0 30px 60px -28px rgba(236, 31, 110, .5), 0 4px 12px -4px rgba(74, 36, 92, .14); }
+/* chips drawn inside the dark chart cards keep the night's look (their words are light there) */
+[data-theme="light"] .viz-card .tag-chip, [data-theme="light"] .viz-card .flag, [data-theme="light"] .kpi .flag {
+  background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .16); color: var(--paper-2);
+}

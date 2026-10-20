@@ -389,3 +389,37 @@ def test_the_project_page_shows_at_every_stage(studio, kind):
         studio.db.set_stage(p["id"], stage)
         r = client.get(f"/p/{p['id']}")
         assert r.status_code == 200 and "didn't go to plan" not in r.text, (kind, stage)
+
+
+# ---------------------------------------------------------------- pictures, not boxes
+
+def test_film_cards_show_footage_and_players_open_on_a_still(studio, media):
+    user = _friend(studio)
+    p = studio.create_project(user, "Trip", "9:16", 15, "")
+    client = _client(studio, user)
+    csrf = _csrf(client.get(f"/p/{p['id']}").text)
+    clip = _upload(client, csrf, p["id"], media / "clips" / "a_stable.mp4", "clip")["clip"]
+    assert f'src="/m/{p["id"]}/stills/clip-{clip}.jpg"' in client.get("/").text  # no story yet: its first clip
+    # a finished film: its player opens on a still from the film (made once the step ends), and its card shows it
+    work = workdir(studio.s, user["id"], p["id"]).ensure()
+    import shutil
+    shutil.copy(media / "clips" / "a_stable.mp4", work.out / "v1-9x16.mp4")
+    studio.db.run("INSERT INTO renders(project_id, version, kind, shape, file, seconds, created) VALUES (?,?,?,?,?,?,?)",
+                  (p["id"], 1, "final", "9:16", "v1-9x16.mp4", 5.0, time.time()))
+    studio.db.run("UPDATE projects SET stage='done', version=1 WHERE id=?", (p["id"],))
+    studio._posters(studio.db.project(p["id"]))
+    assert (work.out / "v1-9x16.jpg").exists()
+    assert f'poster="/m/{p["id"]}/out/v1-9x16.jpg"' in client.get(f"/p/{p['id']}").text
+    assert client.get(f"/m/{p['id']}/out/v1-9x16.jpg").status_code == 200
+
+
+def test_a_failed_step_is_marked_where_it_broke(studio):
+    user = _friend(studio)
+    p = studio.create_project(user, "Trip", "9:16", 15, "")
+    job = studio.db.enqueue("sample", p["id"], user["id"])
+    for m in ("Reading the plan", "Mixing the sound"):
+        studio.db.step(job, m)
+    studio.db.run("UPDATE jobs SET status='failed' WHERE id=?", (job,))
+    studio.db.set_stage(p["id"], "failed", error="Something went wrong on our side.")
+    page = _client(studio, user).get(f"/p/{p['id']}").text
+    assert '<li class="done"><span>Reading the plan' in page and '<li class="broke"><span>Mixing the sound' in page

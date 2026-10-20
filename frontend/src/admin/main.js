@@ -3,6 +3,9 @@ import '../styles/tokens.css';
 import '../styles/components.css';
 import '../styles/app.css';
 import '../styles/admin.css';
+import '../styles/extras.css'; // the sky, the light/dark switch, the asking card: the same as every other page
+import '../styles/light.css';
+import { confirms, themeToggle } from '../app/asks.js';
 import { PALETTE, fmt, lineChart, columnChart, stackedColumns, hbars, outcomes, heatmap, sparkline, table, legend } from './charts.js';
 import { dismiss } from '../app/ui.js';
 
@@ -215,6 +218,8 @@ function people() {
   apply();
 }
 
+themeToggle();
+confirms();
 controls();
 people();
 load();

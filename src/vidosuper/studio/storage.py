@@ -245,8 +245,8 @@ def clip_thumb(clip_path: Path, stills: Path, cid: str, seconds: float = 0.0) ->
     try:
         stills.mkdir(parents=True, exist_ok=True)
         at = min(1.5, max(0.0, (seconds or 3.0) / 3))
-        run_ffmpeg(["-ss", f"{at:.2f}", "-i", str(clip_path), "-frames:v", "1", "-vf", "scale=-2:160", "-q:v", "4",
-                    str(tmp)], what="clip thumbnail", timeout=25)
+        run_ffmpeg(["-ss", f"{at:.2f}", "-i", str(clip_path), "-frames:v", "1", "-vf", "scale=-2:'min(360,ih)'", "-q:v",
+                    "4", str(tmp)], what="clip thumbnail", timeout=25)
         if tmp.exists():
             os.replace(tmp, out)
         if not out.exists():

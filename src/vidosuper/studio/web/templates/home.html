@@ -33,10 +33,10 @@
   </a>
   {% for p in projects %}
   {% set busy = p.stage in BUSY %}
-  <a class="film rise d{{ loop.index0 % 4 + 1 }}" href="/p/{{ p.id }}">
+  <a class="film film-st-{{ 'busy' if busy else p.stage }} rise d{{ loop.index0 % 4 + 1 }}" href="/p/{{ p.id }}">
     <span class="badge {{ 'busy' if busy else p.stage }}">{{ STAGES.get(p.stage, p.stage) }}</span>
     <div class="film-thumb">
-      {% if thumbs[p.id] %}<img src="/m/{{ p.id }}/stills/{{ thumbs[p.id] }}" alt="" loading="lazy">
+      {% if thumbs[p.id] %}<img src="/m/{{ p.id }}/{{ thumbs[p.id] }}" alt="" loading="lazy">
       {% else %}<div class="film-empty-thumb"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="8" y="6" width="32" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 18l10 6-10 6z" fill="currentColor"/></svg></div>{% endif %}
     </div>
     <div class="film-body">

@@ -116,3 +116,14 @@ details.settings-edit > summary { font-weight: 650; color: var(--paper); }
 .app-nav a.btn-sun:hover { background: var(--sun); background-size: 160% 100%; background-position: 100% 50%; color: #120a0c; }
 [data-theme="light"] .app-nav a.btn-sun, [data-theme="light"] .app-nav a.btn-sun:hover { color: #fff; }
 .app-nav a.btn-sun[aria-current="page"]::after { display: none; }
+
+/* a failed step is not a tick: the one it stopped on is marked; paused and failed cards wear a sign */
+.steps li.broke { color: var(--cut); }
+.steps li.broke span::before { content: "✕"; color: var(--cut); }
+.working.failed-card::before, .working.paused-card::before {
+  display: grid; place-items: center; width: 56px; height: 56px; border-radius: 18px; color: #fff; font-weight: 800; font-size: 1.5rem;
+}
+.working.failed-card::before { content: "!"; background: linear-gradient(135deg, #ff9a8a, #e5385a); box-shadow: 0 14px 30px -12px rgba(229, 56, 90, .6); }
+.working.paused-card::before { content: ""; box-shadow: 0 14px 30px -12px rgba(122, 87, 232, .6);
+  background: linear-gradient(#fff, #fff) 19px 17px / 6px 22px no-repeat, linear-gradient(#fff, #fff) 31px 17px / 6px 22px no-repeat,
+              linear-gradient(135deg, #c3b0ff, #7a57e8); }
