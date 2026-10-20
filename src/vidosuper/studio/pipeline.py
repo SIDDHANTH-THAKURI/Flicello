@@ -290,6 +290,7 @@ class Pipeline:
         good = sum(1 for f in ctx.facts.values() for m in f.moments if m["strength"] >= 4)
         ctx.allow_reuse = good < -(-ctx.beats.target // 4)  # fewer good moments than a shot every 4 beats: reuse them
         ctx.reuse_if_asked(intent, *[r["text"] for r in rules])
+        ctx.sync_if_asked(*[r["text"] for r in rules])  # (their own words are added by the caller: not the AI's brief)
         return ctx
 
     # ------------------------------------------------------------ pitch
@@ -329,6 +330,7 @@ class Pipeline:
     # ------------------------------------------------------------ design, sample, render
     def design(self, ctx: StoryContext, pitch: StoryPitch, note: str = "") -> DesignPlan:
         self.progress(0.05, "Planning the cut on the song's beats")
+        ctx.sync_if_asked(note)
         if ctx.pace == "every":
             if note.strip():  # "not quite": another take of the same idea, shaped by what they said
                 return self.revise_strikes(ctx, pitch, note, 1 + (len(note) % 7))
@@ -367,6 +369,7 @@ class Pipeline:
 
     def revise(self, ctx: StoryContext, pitch: StoryPitch, current: DesignPlan, feedback: str) -> DesignPlan:
         self.progress(0.05, "Working your changes into the plan")
+        ctx.sync_if_asked(feedback)
         if ctx.pace == "every":
             return self.revise_strikes(ctx, pitch, feedback, 1 + len(current.plan) % 7)
         return self.brain.revise(ctx, pitch, current, feedback)

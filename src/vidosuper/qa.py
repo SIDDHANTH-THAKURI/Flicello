@@ -93,6 +93,21 @@ def beat_findings(cuts: list[float], grid: np.ndarray, start: float, end: float,
                     detail + ("" if strict else " (free cuts are fine where the edit cuts on motion)"))]
 
 
+def hit_findings(hard: list[float], booms: np.ndarray, bars: np.ndarray, joins: int, start: float, end: float,
+                 tolerance: float = 0.05) -> list[Finding]:
+    """Beat sync as a person feels it: how many of the film's cuts land on the music's heavy hits (the kick, the 808)
+    or bar starts, and how many joins are soft (a dissolve hides the hit). On a beat is not enough: a cut on the snare
+    one beat before every 808 measured 'perfect' and felt off."""
+    if not len(booms) or not joins:
+        return []
+    marks = np.sort(np.concatenate([booms, bars]))
+    inside = [c for c in hard if start + 0.3 < c < end - 0.3]
+    on = sum(1 for c in inside if len(marks) and np.min(np.abs(marks - c)) <= tolerance)
+    soft = max(0, joins - len(hard))
+    detail = f"{on} of {joins} cuts on a heavy hit or bar start" + (f"; {soft} soft (dissolves)" if soft else "")
+    return [Finding("ok" if on >= 0.6 * joins else "warn", "hits", detail)]
+
+
 def black_findings(blacks: list[tuple[float, float]], fades: list[float], slack: float = 0.6) -> list[Finding]:
     """Black is fine at the planned fades (start, intro/film/outro joins, end) and short."""
     bad = [(a, b) for a, b in blacks
@@ -222,6 +237,9 @@ def run_checks(video: Path, edl: EDL, project: Project, *, head: float = 0.0, ta
                 grid = np.sort(np.concatenate([grid, extra, extra + period / 2]))
             hard = [head + item.start / timeline.fps for item in timeline.items if item.index and not item.trans_frames]
             findings += beat_findings(m.cuts, grid, head, head + film, strict=strict_beats, planned=hard)
+            booms = np.asarray(getattr(song, "booms", []) or [], dtype=float) + edl.music.grid_shift - edl.music.start + head
+            bars = np.asarray(song.downbeats) + edl.music.grid_shift - edl.music.start + head
+            findings += hit_findings(hard, booms, bars, len(timeline.items) - 1, head, head + film)
         else:
             findings.append(Finding("warn", "beat sync", "music jumps off the beat grid: not checked"))
     fades = [0.0, head, head + film, m.duration] if (head or tail) else [0.0, m.duration]

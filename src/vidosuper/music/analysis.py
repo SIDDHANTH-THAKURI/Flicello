@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
-MUSIC_VERSION = 7  # 7: strikes; 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum; 6: beat level re-checked;
+MUSIC_VERSION = 8  # 8: booms, and bars phased on a clear kick/808; 7: strikes; 2: beat clarity (pulse); 3: kick-band clarity too; 4: grid on the kick drum; 6: beat level re-checked;
 #                   5: drops on the beat where the kick comes in, bars phased from the main drop
 SR = 22050
 HOP = 512
@@ -38,6 +38,8 @@ class MusicAnalysis(BaseModel):
     strikes: list[float] = Field(default_factory=list, description=(
         "Seconds of the clear hits (kick, snare, claps, stabs), each on the beat grid's sixteenth notes: what a cut "
         "can land on. Wider than the beats: dance tracks hit about 2-3 times a second."))
+    booms: list[float] = Field(default_factory=list, description=(
+        "Seconds of the beats with a heavy low hit (the kick or the 808): the hits a beat-synced cut lands on"))
     pulse: list[float] = Field(default_factory=list, description=(
         f"Beat clarity per {PULSE_CHUNK:.0f} s: onset strength on the beats / on the half-beats (1.4+ clear, "
         "~1 or less: no audible beat on the grid there)"))
@@ -56,11 +58,12 @@ class MusicAnalysis(BaseModel):
                 f"{len(self.beats)} beats. Sections: {secs}. Drops: {drops}.{weak_txt}")
 
     def weak_beat_stretches(self, below: float = 1.15) -> list[tuple[float, float]]:
-        """Track time ranges where the beat grid has no clear accent (merged PULSE_CHUNK pieces)."""
+        """Track time ranges where the beat grid has no clear accent (merged PULSE_CHUNK pieces). A piece with heavy
+        hits on its beats (an 808 every bar) has a clear beat, however loud the hi-hats between them are."""
         out: list[tuple[float, float]] = []
         for k, d in enumerate(self.pulse):
-            if d < below:
-                a, b = k * PULSE_CHUNK, min(self.duration, (k + 1) * PULSE_CHUNK)
+            a, b = k * PULSE_CHUNK, min(self.duration, (k + 1) * PULSE_CHUNK)
+            if d < below and sum(1 for t in self.booms if a <= t < b) < 2:
                 if out and abs(out[-1][1] - a) < 1e-6:
                     out[-1] = (out[-1][0], b)
                 else:
@@ -73,11 +76,35 @@ def fingerprint_file(path: Path) -> str:
     return hashlib.sha1(f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode()).hexdigest()[:16]
 
 
-def _downbeat_phase(beat_frames: np.ndarray, chroma: np.ndarray, low_env: np.ndarray) -> int:
-    """Which of the 4 beat phases starts the bar. Chords usually change on the bar start and kick
-    drums favour it, so score each phase by harmonic change + low-frequency accent."""
+BOOM_CLEAR = 2.0  # one beat of the bar this much heavier in the low end than any other: that beat starts the bar
+
+
+def _boom_levels(beat_frames: np.ndarray, low_lin: np.ndarray) -> np.ndarray:
+    """How hard the low end (kick, 808) hits on each beat: the peak just after it."""
+    return np.array([low_lin[max(0, f - 1):f + 6].max() if f < len(low_lin) else 0.0 for f in beat_frames])
+
+
+def _clear_boom_phase(levels: np.ndarray) -> int | None:
+    """The bar phase when the kick or 808 clearly marks one beat of four (trap, phonk, most dance music), else None
+    (a pop kick on 1 and 3 is not clear: the chords decide)."""
+    if len(levels) < 8:
+        return None
+    means = np.array([levels[p::4].mean() for p in range(4)])
+    order = np.argsort(means)
+    if means[order[-1]] <= 0 or means[order[-1]] < BOOM_CLEAR * max(means[order[-2]], 1e-9):
+        return None
+    return int(order[-1])
+
+
+def _downbeat_phase(beat_frames: np.ndarray, chroma: np.ndarray, low_env: np.ndarray,
+                    booms: np.ndarray | None = None) -> int:
+    """Which of the 4 beat phases starts the bar. A kick or 808 that clearly marks one beat decides (pads changing
+    chord a beat early once put every cut of a phonk film one beat before its 808s); otherwise chords usually change
+    on the bar start and kick drums favour it, so score each phase by harmonic change + low-frequency accent."""
     if len(beat_frames) < 8:
         return 0
+    if booms is not None and (clear := _clear_boom_phase(booms)) is not None:
+        return clear
     bounds = np.concatenate([beat_frames, [chroma.shape[1]]])
     sync = np.stack([chroma[:, a:max(a + 1, b)].mean(axis=1) for a, b in zip(bounds[:-1], bounds[1:])])
     sync /= np.linalg.norm(sync, axis=1, keepdims=True) + 1e-9
@@ -285,7 +312,9 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
     low_env = low_env / (low_env.max() + 1e-9)
     chroma = librosa.feature.chroma_stft(S=spec ** 2, sr=sr, hop_length=HOP)
     grid_frames = librosa.time_to_frames(beats, sr=sr, hop_length=HOP)
-    phase = _downbeat_phase(np.asarray(grid_frames, dtype=int), chroma, low_env)
+    boom_level = _boom_levels(np.asarray(grid_frames, dtype=int), spec[freqs < 150].sum(axis=0))
+    boom_phase = _clear_boom_phase(boom_level)
+    phase = _downbeat_phase(np.asarray(grid_frames, dtype=int), chroma, low_env, boom_level)
     downbeats = beats[phase::4]
     onset_norm = onset_env / (onset_env.max() + 1e-9)
 
@@ -325,7 +354,7 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
                 if novelty[p] > biggest[0]:
                     biggest = (float(novelty[p]), t)
             bounds.append(t)
-        if biggest[1] is not None:  # drops land on bar starts: the main drop sets the bar phase
+        if biggest[1] is not None and boom_phase is None:  # drops land on bar starts: the main drop sets the phase
             downbeats = beats[int(np.argmin(np.abs(beats - biggest[1]))) % 4::4]
     bounds.append(duration)
     sections = _label_sections(sorted(set(bounds)), energy, duration)
@@ -335,6 +364,8 @@ def analyze_music(path: str | Path) -> MusicAnalysis:
         beats=[round(float(b), 3) for b in beats], downbeats=[round(float(b), 3) for b in downbeats],
         energy=[round(float(e), 3) for e in energy], sections=sections, drops=drops,
         strikes=find_strikes(y, sr, beats),
+        booms=[round(float(b), 3) for b, lv in zip(beats, boom_level)
+               if len(boom_level) and lv >= 0.35 * float(np.percentile(boom_level, 95))],
         # dance music puts loud hi-hats on the off-beats and busy bass lines in the low band, so also
         # listen to the low band and to the kick drum alone
         pulse=[max(a, b, c) for a, b, c in zip(

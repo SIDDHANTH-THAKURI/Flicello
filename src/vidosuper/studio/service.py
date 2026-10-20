@@ -1481,9 +1481,15 @@ class Studio:
         return pipe
 
     def _context(self, pipe: Pipeline, project: dict, user: dict):
-        return pipe.context(self.shapes(project), project["length"], ask_text(project),
-                            rules_for(self.profile(user).rules, project["kind"]),
-                            project["pace"])
+        ctx = pipe.context(self.shapes(project), project["length"], ask_text(project),
+                           rules_for(self.profile(user).rules, project["kind"]),
+                           project["pace"])
+        # what they said on earlier samples and versions of this film still holds ('beat sync' once is beat sync)
+        said = [project.get("intent") or "", project.get("cut_note") or ""]
+        said += [r["text"] for r in self.db.all("SELECT text FROM feedback WHERE project_id=? AND text<>''", (project["id"],))]
+        if hasattr(ctx, "sync_if_asked"):
+            ctx.sync_if_asked(*said)
+        return ctx
 
     def run_job(self, job: dict) -> None:
         project = self.db.project(job["project_id"]) if job["project_id"] else None

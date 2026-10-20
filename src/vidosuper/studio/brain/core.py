@@ -24,7 +24,7 @@ from ...music.analysis import MusicAnalysis
 from ...schemas import ClipAnalysis, ClipInfo, ClipSignals
 from ..settings import Models
 from .backends import BrainError, Request, SpendFn, Usage, structured
-from .context import REUSE_WORDS, BeatMap, ClipFacts, catalog_text, craft_rules, moment_by_id, prompt, rules_text
+from .context import REUSE_WORDS, SYNC_WORDS, BeatMap, ClipFacts, catalog_text, craft_rules, moment_by_id, prompt, rules_text
 from ...explainer.script import VoiceScript
 
 DESIGNED_TEXT = '# Style: DESIGNED (designer animations)\nThe person picked designer animations. talk: they are cut out of their room and stand in front of a stage; your callouts are drawn BEHIND them, above and around their head.\n- The backbone is `scene` callouts: one designer animation for what is being said right now, about every 3-6 seconds, each starting on the word that brings it. `visual` says in a few concrete words what the animation should show ("two people podcasting at a table", "an email arriving with a notification", "a ghost floating"), `topics` gives 1-3 simple search words for an animation library ("podcast", "email", "ghost"). Think like a motion designer illustrating the story, not a subtitle writer. `text` on a scene is an optional 1-3 word label.\n- `title` for the name of the thing being talked about, once, early (typed on letter by letter).\n- `stack` when a number of things is said ("10 audio clips", "3 reasons"): `count`, a `visual` for one of them ("an audio waveform") and `text` ("10 audio clips"); it flies out of the scene that is up.\n- `stat` for a rating or a figure (value as said). `pill` rarely.\n- `ambient`: one looping animation behind their head for the whole video that suits the subject ("a circular sound visualizer" for audio/music/podcasts, "soft floating particles", "film reel") with `ambient_topics`.\n- Set `punch` on the single strongest moment.\n- voice mode: give every scene a `visual` and `topics` too, so it gets a real animation instead of an emoji.\n'
@@ -48,10 +48,15 @@ class StoryContext:
     rules: list[dict]  # the person's style rules: {"id", "text", ...}
     allow_reuse: bool = False  # thin footage, or the person said repeats are fine: a moment may come back, made to look different
     pace: str = "balanced"  # calm | balanced | fast: how quickly the video cuts
+    sync: bool = False  # they asked for beat sync (in the note, a sample note, a change or their style rules): a rule
 
     def reuse_if_asked(self, *texts: str) -> None:
         if any(REUSE_WORDS.search(t or "") for t in texts):
             self.allow_reuse = True
+
+    def sync_if_asked(self, *texts: str) -> None:
+        if any(SYNC_WORDS.search(t or "") for t in texts):
+            self.sync = True
 
     def header(self) -> str:
         shape = " and ".join({"9:16": "9:16 vertical (Reels/Shorts)", "16:9": "16:9 landscape (YouTube)"}[s]
@@ -71,6 +76,11 @@ class StoryContext:
                "speed), with at least two other shots between, so the repeat is never obvious. Never zoom in to hide a "
                "repeat: the viewer must see the whole action."]
               if self.allow_reuse else []),
+            *([f"# Beat sync: they asked for it, so it is a rule\nEvery cut lands on a heavy hit or a bar start "
+               f"(beats {', '.join(f'{b:g}' for b in self.beats.hit_marks())}). Hard cuts only (a dissolve hides the "
+               f"hit; at most {SYNC_SOFT} in the whole film, in a quiet part). No shot longer than {SYNC_LONGEST} beats. "
+               "Slow motion is fine, but the cut into and out of it is on a hit."]
+              if self.sync else []),
             *self.impact_text(),
         ])
 
@@ -357,6 +367,79 @@ def _overlapping_windows(plan: DesignPlan, pool: dict[str, PoolMoment], uses: di
     return out
 
 
+SYNC_SOFT = 1  # dissolves or fades a beat-synced film may have (a quiet part)
+SYNC_LONGEST = 8  # beats: the longest shot of a beat-synced film
+SYNC_MISS = 0.15  # the share of cuts that may land off the hits (a story beat between two hits)
+
+
+def _sync_problems(plan: DesignPlan, beats) -> list[str]:
+    """What breaks beat sync in a plan: cuts between the hits, dissolves, shots that hold too long."""
+    marks = beats.hit_marks()
+    pos, off, soft, long_ = 0.0, [], [], []
+    for i, s in enumerate(plan.plan):
+        if i and not any(abs(pos - m) < 0.01 for m in marks):
+            off.append(f"shot {i + 1} at beat {pos:g}")
+        if i and s.transition != "cut":
+            soft.append(i + 1)
+        if s.kind != "stutter" and s.beats > SYNC_LONGEST:
+            long_.append(i + 1)
+        pos += s.beats * (s.count if s.kind == "stutter" else 1)
+    out = []
+    if len(off) > max(1, int(SYNC_MISS * (len(plan.plan) - 1))):
+        out.append(f"beat sync was asked for, but {len(off)} cuts land between the music's hits ({'; '.join(off[:6])}): "
+                   f"start shots on the hits or bar starts: beats {', '.join(f'{m:g}' for m in marks)}")
+    if len(soft) > SYNC_SOFT:
+        out.append(f"beat sync was asked for: shots {', '.join(map(str, soft))} come in with a dissolve or fade, which "
+                   f"hides the hit. Hard cuts (at most {SYNC_SOFT} soft transition, in a quiet part)")
+    if long_:
+        out.append(f"beat sync was asked for: shots {', '.join(map(str, long_))} hold longer than {SYNC_LONGEST} beats; "
+                   "split them on a hit")
+    return out
+
+
+def sync_snap(plan: DesignPlan, ctx: StoryContext) -> DesignPlan:
+    """A plan made beat-synced by hand when the AI's last answer still missed the hits: every join a hard cut and every cut moved to the nearest heavy hit or bar start. Stutters keep their own rhythm. A shot
+    squeezed to nothing is folded into the one before. If the moved plan would break something real (footage too
+    short), the AI's plan stands."""
+    beats = ctx.beats
+    if not ctx.sync or not plan.plan or not _sync_problems(plan, beats):
+        return plan
+    marks = beats.hit_marks()
+    total = plan_beats(plan)
+    shots = list(plan.plan)
+    spans = [x.beats * (x.count if x.kind == "stutter" else 1) for x in shots]
+    starts = [sum(spans[:i]) for i in range(len(shots))]
+    kept: list[tuple[float, object]] = [(0.0, shots[0])]
+    for i in range(1, len(shots)):
+        b, x = starts[i], shots[i]
+        fixed = x.kind == "stutter" or kept[-1][1].kind == "stutter"
+        if fixed:
+            at = b
+        else:
+            room = [m for m in marks if kept[-1][0] + 0.5 <= m <= total - 0.5]
+            at = min(room, key=lambda m: abs(m - b)) if room else None
+        if at is None or at <= kept[-1][0] + 1e-6:
+            continue  # nothing left for it: the shot before holds on
+        if x.transition != "cut":
+            x = x.model_copy(update={"transition": "cut", "transition_beats": 0.0})
+        kept.append((at, x))
+    out = []
+    for j, (at, x) in enumerate(kept):
+        end = kept[j + 1][0] if j + 1 < len(kept) else total
+        if x.kind == "stutter":
+            out.append(x)
+            continue
+        length = round(end - at, 3)
+        upd = {"beats": length}
+        if x.peak_beat is not None and x.peak_beat >= length:
+            upd["peak_beat"] = None
+        out.append(x.model_copy(update=upd))
+    snapped = plan.model_copy(update={"plan": out, "notes": (plan.notes + " Cuts moved onto the music's hits.").strip()})
+    if len(check_plan(snapped, ctx, taste=False)) > len(check_plan(plan, ctx, taste=False)):
+        return plan
+    return snapped
+
+
 STRONG = 6  # moment strength (of 10) a beat edit needs: a stutter, a hit, a ramp, the drop
 MAX_SHOWINGS = 2  # the most times one stretch of footage is shown, even when the footage is thin
 
@@ -431,6 +514,8 @@ def check_plan(plan: DesignPlan, ctx: StoryContext, taste: bool = True) -> list[
     last = len(plan.plan) - 1
     if not taste:
         return problems
+    if ctx.sync and plan.plan:
+        problems += _sync_problems(plan, beats)
     if plan.plan:  # pacing a short video needs: a quick hook and no stalls
         first = plan.plan[0].beats * (plan.plan[0].count if plan.plan[0].kind == "stutter" else 1) * beats.period
         if first > 4.5:
@@ -794,7 +879,8 @@ class Brain:
         parts.append(f"Return the shot plan as JSON. Its beats must add up to exactly {ctx.beats.target}.")
         req = Request(task, prompt("editor"), "\n\n".join(parts), DesignPlan, self.models.editor, effort="high",
                       max_tokens=16000)  # a whole plan after high-effort thinking
-        return self._ask(req, lambda p: check_plan(p, ctx), fallback=lambda p: check_plan(p, ctx, taste=False))
+        plan = self._ask(req, lambda p: check_plan(p, ctx), fallback=lambda p: check_plan(p, ctx, taste=False))
+        return sync_snap(plan, ctx)  # beat sync asked and still missed: the cuts are put on the hits by hand
 
     def design(self, ctx: StoryContext, pitch: StoryPitch, note: str = "") -> DesignPlan:
         ctx.reuse_if_asked(note)

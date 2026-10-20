@@ -38,6 +38,9 @@ FAST_WORDS = re.compile(r"\b(fast|quick|rapid|punchy|snappy|energetic|hype|frant
 EVERY_WORDS = re.compile(r"\b(?:every|each|per)\s+(?:single\s+)?(?:beat|strike|drum\s?hit|drum)s?\b|"
                          r"\bone\s+(?:shot|cut|clip)\s+(?:per|for\s+(?:each|every)|on\s+(?:each|every))\b", re.IGNORECASE)
 BRIGHT_WORDS = re.compile(r"\b(bright|brighter|light|airy|sunny|vibrant)\b", re.IGNORECASE)
+SYNC_WORDS = re.compile(r"\bbeat[\s-]*sync\w*|\bsync\w*\s+(?:\w+\s+){0,3}(?:beats?|music|song|track|drums?)\b|"
+                        r"\b(?:cuts?|cutting|transitions?)\s+(?:\w+\s+){0,3}on\s+(?:the\s+)?(?:beats?|hits?|drops?|bass|808s?|kicks?)\b|"
+                        r"\bon\s+(?:the\s+)?beat\b", re.IGNORECASE)
 HITS_WORDS = re.compile(r"\b(hit|hits|hitting|crack|bat|impact|punch|slam|smash)\b", re.IGNORECASE)
 
 
@@ -56,6 +59,8 @@ def read_note(intent: str, pace: str) -> list[str]:
     out = {"every": "Cuts on every beat and strike of the music: one shot per hit",
            "fast": "Fast cuts on the beat", "calm": "Calm, cinematic cutting"}.get(pace)
     lines = [out] if out else ["A mix of fast and slow cuts"]
+    if SYNC_WORDS.search(intent or ""):
+        lines.append("Beat sync: hard cuts that land on the music's heavy hits (the kick, the 808), no dissolves")
     if HITS_WORDS.search(intent or ""):
         lines.append("Every real impact in your clips (a hit, a clap, a splash) lands exactly on a beat, with its own sound")
     if REUSE_WORDS.search(intent or ""):
@@ -86,6 +91,12 @@ class BeatMap:
     drop: int | None  # beat of the main drop inside the target, if any
     sections: list[tuple[str, int, int, float]] = field(default_factory=list)  # label, from beat, to beat, energy
     strikes: list[float] = field(default_factory=list)  # the song's clear hits, in beats from beat 0 (sixteenth notes)
+    booms: list[float] = field(default_factory=list)  # beats with a heavy low hit (kick, 808), from beat 0
+
+    def hit_marks(self) -> list[float]:
+        """Where a beat-synced cut may land: the heavy hits and every bar start (the bar start still feels on the music
+        where nothing heavy plays)."""
+        return sorted(set(self.booms) | {float(b) for b in range(0, self.target + 1, 4)})
 
     @property
     def seconds(self) -> float:
@@ -99,6 +110,10 @@ class BeatMap:
                  f"{self.target}.",
                  "Sections, in beats from the start: " + "; ".join(
                      f"{label} {a}-{b} (energy {e:.2f})" for label, a, b, e in self.sections if a < self.target)]
+        if self.booms:
+            lines.append("Heavy hits (the kick or the 808), in beats from the start: " + ", ".join(
+                f"{b:g}" for b in self.booms) + ". These are the moments the music hits hardest: a cut on one of them "
+                "feels in sync; a cut between them feels late or early.")
         if self.drop is not None:
             lines.append(f"Drop: beat {self.drop} (song time {self.t0 + self.drop * self.period:.1f} s). The shot that "
                          f"starts on beat {self.drop} is the hit.")
@@ -137,7 +152,8 @@ def beat_map(song: MusicAnalysis, target_seconds: float) -> BeatMap:
         if b > a:
             sections.append((s.label, a, b, s.energy))
     strikes = sorted({round((t - t0) / period * 4) / 4 for t in song.strikes if 0 < (t - t0) / period < target})
-    return BeatMap(first, t0, period, available, target, drop_beat, sections, strikes)
+    booms = sorted({round((t - t0) / period * 2) / 2 for t in song.booms if 0 <= (t - t0) / period <= target})
+    return BeatMap(first, t0, period, available, target, drop_beat, sections, strikes, booms)
 
 
 def catalog_text(catalog: dict) -> str:
