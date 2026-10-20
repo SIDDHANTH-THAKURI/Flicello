@@ -130,7 +130,8 @@ def _json_from_text(text: str) -> dict:
 
 # ---------------------------------------------------------------- the Claude API
 
-MAX_OUT = 32000  # the most room one structured answer gets (the client's own 600 s timeout covers it)
+LOWER_EFFORT = {"max": "high", "xhigh": "high", "high": "medium", "medium": "low"}
+MAX_OUT = 64000  # the most room one structured answer gets; streamed, so a long one never trips the client's timeout
 
 
 class ApiBackend:
@@ -157,13 +158,23 @@ class ApiBackend:
             blocks.append({"type": "text", "text": correction})
         return blocks
 
+    def _send(self, kwargs: dict):
+        """One call, streamed: a big answer (long thinking on a long film) can take many minutes, and the client
+        refuses to wait that long for a reply that arrives all at once."""
+        stream = getattr(self.client.messages, "stream", None)
+        if stream is None:  # a stand-in client (tests)
+            return self.client.messages.create(**kwargs)
+        with stream(**kwargs) as s:
+            return s.get_final_message()
+
     def ask(self, req: Request, correction: str | None = None) -> tuple[dict, Usage]:
         schema = model_schema(req.schema)
         base = dict(model=req.model, max_tokens=req.max_tokens,
                     system=[{"type": "text", "text": req.system, "cache_control": {"type": "ephemeral"}}],
                     messages=[{"role": "user", "content": self._content(req, correction)}])
+        effort = [req.effort]  # stepped down if the thinking alone fills the largest budget
         variants = [
-            lambda: dict(output_config={"format": {"type": "json_schema", "schema": schema}, "effort": req.effort}),
+            lambda: dict(output_config={"format": {"type": "json_schema", "schema": schema}, "effort": effort[0]}),
             lambda: dict(output_config={"format": {"type": "json_schema", "schema": schema}}),
             lambda: dict(tools=[{"name": "submit", "description": f"Submit the {req.task} result.", "input_schema": schema}],
                          tool_choice={"type": "tool", "name": "submit"}),
@@ -176,7 +187,7 @@ class ApiBackend:
         for i in range(first, len(variants)):
             while True:
                 try:
-                    msg = self.client.messages.create(**base, **variants[i]())
+                    msg = self._send({**base, **variants[i]()})
                 except self.anthropic.BadRequestError as exc:  # this model or schema doesn't take that form: simpler one
                     last_error = exc
                     msg = None
@@ -189,6 +200,10 @@ class ApiBackend:
                 # the reply is then empty or cut off. Ask again with twice the room, up to MAX_OUT.
                 if msg.stop_reason == "max_tokens" and base["max_tokens"] < MAX_OUT:
                     base["max_tokens"] = min(MAX_OUT, base["max_tokens"] * 2)
+                    continue
+                # still out of room at the most we give: think less rather than fail the film
+                if msg.stop_reason == "max_tokens" and i == 0 and effort[0] in LOWER_EFFORT:
+                    effort[0] = LOWER_EFFORT[effort[0]]
                     continue
                 break
             if msg is None:

@@ -423,9 +423,19 @@ def test_an_answer_that_runs_out_of_room_is_asked_again_with_more_room():
     assert data == {"shots": ["a", "b"]} and asked == [12000, 24000]
     assert usage.input_tokens == 200 if hasattr(usage, "input_tokens") else True  # both calls counted
 
-    # never fits: a clear error, not a parse failure
+    # still out of room at 32000 ('Day out', 20 Oct): think less (high -> medium) rather than fail the film
+    efforts: list[str] = []
+    b.client = NS(messages=NS(create=lambda **kw: (asked.append(kw["max_tokens"]),
+                                                   efforts.append(kw.get("output_config", {}).get("effort")), replies.pop(0))[2]))
     asked.clear()
-    replies[:] = [reply("max_tokens", "")] * 4
+    replies[:] = [reply("max_tokens", "")] * 4 + [reply("end_turn", '{"shots": ["c"]}')]
+    data, _ = b.ask(req)
+    assert data == {"shots": ["c"]} and asked == [12000, 24000, 48000, 64000, 64000] and efforts[-1] == "medium"
+
+    # never fits, even thinking little: a clear error, not a parse failure
+    asked.clear()
+    efforts.clear()
+    replies[:] = [reply("max_tokens", "")] * 6
     with pytest.raises(BrainError, match="did not fit"):
         b.ask(req)
-    assert asked[-1] == 32000
+    assert asked[-1] == 64000 and efforts[-1] == "low"
