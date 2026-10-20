@@ -110,6 +110,24 @@ def _span(slot: Slot, seconds_on_screen: float) -> float:
     return source_time(probe, seconds_on_screen)
 
 
+FILL_SLACK = 0.02  # seconds kept clear of a clip's last frame
+MIN_FILL = 0.75  # slowest a shot is played to fill its beats before another clip is preferred (30 fps stays smooth)
+
+
+def _fill_speed(clip, need: float, speed: float, pool: list[dict], floor: float = MIN_FILL) -> tuple[float | None, float]:
+    """A shot's beats can ask for more footage than its whole clip (the beat grid and the transitions' overlap add a
+    little to what the plan measured). Then it plays a little slower to fill them, which reads as a held moment:
+    (speed, source seconds). Slower than `floor` would judder, so (None, need) asks for another clip, unless no
+    clip is long enough, when the slower shot is still better than no film."""
+    room = clip.duration - FILL_SLACK
+    if need <= room or room <= 0.1:
+        return speed, need
+    factor = room / need
+    if factor < floor and any(m["clip"].duration - FILL_SLACK >= need for m in pool):
+        return None, need
+    return round(max(0.1, speed * factor), 4), room
+
+
 def _resolve_tiles(graphics: list[Graphic], clips: dict, shorts: dict[str, str]) -> list[Graphic]:
     """Panel tiles name clips by short id ('c40@52.6'); the renderer needs their files."""
     out = []
@@ -145,6 +163,7 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
     """An EDL with placeholder footage in every slot; transitions are centred on the slot boundaries."""
     pool = _moments(project)
     used: set[tuple[str, float]] = set()
+    fill = lambda clip, need, speed: _fill_speed(clip, need, speed, pool)  # noqa: E731
     clips = project.clips()
     shorts = _short_ids(project)
     slots = template.slots
@@ -158,10 +177,14 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
         slow = min([p.speed for p in slot.ramp] or [slot.speed]) < 0.95
         if slot.clip:  # chosen by hand
             clip = clips[shorts.get(slot.clip, slot.clip)]
-            start = max(0.0, min(slot.src_in or 0.0, clip.duration - need))  # a longer slot may start earlier
-            chosen[k] = {"clip": clip, "start": start, "end": start + need, "text": f"chosen: {slot.want}", "need": need}
-            used.add((clip.clip_id, start))
-            continue
+            speed, need = (slot.speed, need) if slot.ramp else fill(clip, need, slot.speed)
+            if speed is not None:
+                start = max(0.0, min(slot.src_in or 0.0, clip.duration - need))  # a longer slot may start earlier
+                chosen[k] = {"clip": clip, "start": start, "end": start + need, "text": f"chosen: {slot.want}",
+                             "need": need, "speed": speed}
+                used.add((clip.clip_id, start))
+                continue
+            need = _span(slot, frames[k] / fps)  # much too short for its beats: another clip that is long enough
         def fit(m: dict) -> float:
             hits = sum(1 for w in slot.keywords if w.lower() in m["text"].lower())
             calm = m["kind"] in ("scenic", "establishing")
@@ -177,6 +200,11 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
                 continue
             pick = m
             break
+        if pick is None and not slot.ramp and pool:  # nothing long enough: the longest moment's clip, a little slower
+            longest = max(pool, key=lambda m: m["clip"].duration)
+            speed, fitted = _fill_speed(longest["clip"], need, slot.speed, [], floor=0.1)
+            pick = {**longest, "start": 0.0, "end": fitted, "speed": speed}
+            need = fitted
         if pick is None:
             raise ValueError(f"no footage long enough for slot {slot.id} ({need:.1f}s of source)")
         used.add((pick["clip"].clip_id, pick["start"]))
@@ -190,7 +218,7 @@ def autofill(template: Template, project: Project, fps: int = 30, width: int = 1
         segments.append(Segment(
             id=slot.id, clip_id=pick["clip"].clip_id, src_in=round(start, 4), src_out=round(start + need, 4),
             framing="fill" if template.vertical else "auto",  # full-bleed 9:16; frame_center keeps the subject
-            speed=slot.speed, ramp=slot.ramp, push=slot.push, fx=slot.fx, frame_center=slot.frame_center,
+            speed=pick.get("speed", slot.speed), ramp=slot.ramp, push=slot.push, fx=slot.fx, frame_center=slot.frame_center,
             zoom=slot.zoom, zoom_center=slot.zoom_center, flip=slot.flip,
             graphics=_resolve_tiles(slot.graphics, clips, shorts),
             transition_in=Transition(type=slot.transition_in.type, duration=trans[k] / fps) if trans[k] else Transition(),
