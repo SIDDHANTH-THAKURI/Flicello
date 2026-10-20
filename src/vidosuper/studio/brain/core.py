@@ -63,8 +63,11 @@ class StoryContext:
             f"# Shape and length\n{shape}; about {self.beats.seconds:.0f} seconds.",
             "# The song, in beats\n" + self.beats.text(self.song),
             self.pace_text(),
+            "# Beat edits\nStutters, hits, ramps and the shot on the drop go only on strong moments (strength 6 or more "
+            "of 10). Weaker moments (a pan across a railing, the ground, empty sky) are only for linking shots, played "
+            "plainly, or left out.",
             *(["# Reusing footage\nThe footage is thin or the person said repeats are fine: you may use a moment more than "
-               "once, but each time it must look different (another part of the moment, another swing or take, a different "
+               "once (twice at most), but each time it must look different (another part of the moment, another swing or take, a different "
                "speed), with at least two other shots between, so the repeat is never obvious. Never zoom in to hide a "
                "repeat: the viewer must see the whole action."]
               if self.allow_reuse else []),
@@ -354,6 +357,20 @@ def _overlapping_windows(plan: DesignPlan, pool: dict[str, PoolMoment], uses: di
     return out
 
 
+STRONG = 6  # moment strength (of 10) a beat edit needs: a stutter, a hit, a ramp, the drop
+MAX_SHOWINGS = 2  # the most times one stretch of footage is shown, even when the footage is thin
+
+
+def _window_strength(f, m: PoolMoment) -> int:
+    """How strong the logged moment a pool window sits in is (the one it overlaps most)."""
+    best, score = 0.0, 0
+    for x in f.moments:
+        o = min(x["end"], m.end) - max(x["start"], m.start)
+        if o > best:
+            best, score = o, int(x["strength"])
+    return score
+
+
 def check_plan(plan: DesignPlan, ctx: StoryContext, taste: bool = True) -> list[str]:
     """What is wrong with a shot plan. `taste` False: only what would break the film (the beats, the footage, the
     shot lengths the renderer needs), not the rules of taste (the hook, reuse, hits, the drop, pace): a person's own
@@ -447,6 +464,31 @@ def check_plan(plan: DesignPlan, ctx: StoryContext, taste: bool = True) -> list[
         slow = [i + 1 for i, s in enumerate(plan.plan) if s.transition not in ("cut",) and i > 0 and s.kind != "hold"]
         if len(slow) > 1:
             problems.append("fast pace: use hard cuts (no dissolves or whips) except at most one for the breath")
+    # beat edits only where there is something to see: never a stutter on a railing or the ground
+    strongest = max((int(x["strength"]) for f in facts.values() for x in f.moments), default=0)
+    need = min(STRONG, strongest)
+    drop_at = float(beats.drop) if beats.drop is not None else None
+    pos2 = 0.0
+    for i, s in enumerate(plan.plan):
+        m = pool.get(s.key)
+        f = facts.get(m.clip) if m else None
+        on_drop = drop_at is not None and abs(pos2 - drop_at) < 1e-6
+        if f and (s.kind in ("stutter", "hit", "ramp") or on_drop) and _window_strength(f, m) < need:
+            what = "the shot on the drop" if on_drop and s.kind not in ("stutter", "hit", "ramp") else f"a {s.kind}"
+            problems.append(f"shot {i + 1}: {what} needs a strong moment (strength {need}+), but '{s.key}' is a weaker one "
+                            f"({_window_strength(f, m)}): put the beat edit on a strong moment and use this one plainly, "
+                            "or leave it out")
+        pos2 += s.beats * (s.count if s.kind == "stutter" else 1)
+    # even thin footage: a stretch is shown at most twice
+    for k, idx in uses.items():
+        if k not in pool:
+            continue
+        same = [j for j in uses if j in pool and j != k and _overlap(pool[k], pool[j]) > 0.5]
+        shown = len(idx) + sum(len(uses[j]) for j in same)
+        if shown > MAX_SHOWINGS:
+            problems.append(f"'{k}' ({pool[k].clip} {pool[k].start:g}-{pool[k].end:g}) is shown {shown} times: at most "
+                            f"{MAX_SHOWINGS}. Use other moments, or hold the strong ones longer")
+            break
     if ctx.allow_reuse:
         for k, idx in uses.items():
             close = [(a, b) for a, b in zip(idx, idx[1:]) if b - a < 3]
@@ -650,11 +692,11 @@ class Brain:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         (self.log_dir / f"{name}.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
 
-    def _ask(self, req: Request, check=None, tag: str = ""):
+    def _ask(self, req: Request, check=None, tag: str = "", fallback=None):
         def log(name, data):
             self._log(f"{tag or req.task}-{name.split('-')[-1]}", data)
 
-        return structured(self.backend, req, self.spend, check, log=log)
+        return structured(self.backend, req, self.spend, check, log=log, fallback=fallback)
 
     # -- 1 analyse a clip
     def analyse_clip(self, clip: ClipInfo, brief: str, sheets: list[Path]) -> ClipAnalysis:
@@ -752,7 +794,7 @@ class Brain:
         parts.append(f"Return the shot plan as JSON. Its beats must add up to exactly {ctx.beats.target}.")
         req = Request(task, prompt("editor"), "\n\n".join(parts), DesignPlan, self.models.editor, effort="high",
                       max_tokens=16000)  # a whole plan after high-effort thinking
-        return self._ask(req, lambda p: check_plan(p, ctx))
+        return self._ask(req, lambda p: check_plan(p, ctx), fallback=lambda p: check_plan(p, ctx, taste=False))
 
     def design(self, ctx: StoryContext, pitch: StoryPitch, note: str = "") -> DesignPlan:
         ctx.reuse_if_asked(note)

@@ -261,6 +261,62 @@ def clip_thumb(clip_path: Path, stills: Path, cid: str, seconds: float = 0.0) ->
             _THUMBING.discard(cid)
 
 
+def earlier_clips(db: DB, s: StudioSettings, project: dict, limit: int = 60) -> list[dict]:
+    """Clips this person uploaded to their other films and still on disk, newest first, each file once, minus the
+    ones this film already has: to add without uploading again."""
+    have = {(r["name"], r["bytes"]) for r in db.all("SELECT name, bytes FROM clips WHERE project_id=?", (project["id"],))}
+    rows = db.all("SELECT c.*, p.title AS film FROM clips c JOIN projects p ON p.id=c.project_id "
+                  "WHERE p.user_id=? AND p.id<>? AND p.deleted=0 ORDER BY c.created DESC", (project["user_id"], project["id"]))
+    out, seen = [], set()
+    for r in rows:
+        key = (r["name"], r["bytes"])
+        if key in seen or key in have:
+            continue
+        path = safe_child(workdir(s, project["user_id"], r["project_id"]).clips, r["file"])
+        if path is None or not path.exists():
+            continue
+        seen.add(key)
+        r["thumb"] = (workdir(s, project["user_id"], r["project_id"]).stills / f"clip-{r['id']}.jpg").exists()
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def reuse_clip(db: DB, s: StudioSettings, user: dict, project: dict, clip_id: str) -> dict:
+    """Add a clip from one of their earlier films: the file is linked, not copied (no upload, no extra space), and
+    what the AI saw in it last time is used again (clip logs are kept by the file's content)."""
+    row = db.one("SELECT c.* FROM clips c JOIN projects p ON p.id=c.project_id WHERE c.id=? AND p.user_id=? AND p.id<>? "
+                 "AND p.deleted=0", (clip_id, user["id"], project["id"]))
+    if not row:
+        raise UploadError("That clip isn't in your other films any more.")
+    src = safe_child(workdir(s, user["id"], row["project_id"]).clips, row["file"])
+    if src is None or not src.exists():
+        raise UploadError(f"{row['name']}'s file is gone: films untouched for {s.limits.retention_days} days are cleared.")
+    lim = s.limits
+    if db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (project["id"],), 0) >= lim.clips_per_project:
+        raise UploadError(f"A video can use up to {lim.clips_per_project} clips.")
+    if db.one("SELECT id FROM clips WHERE project_id=? AND name=? AND bytes=?", (project["id"], row["name"], row["bytes"])):
+        raise UploadError(f"{row['name']} is already in this video.")
+    work = workdir(s, user["id"], project["id"]).ensure()
+    if folder_bytes(work.root) + int(row["bytes"] or 0) > lim.project_bytes:
+        raise UploadError(f"A video's footage can total {lim.project_bytes / 1e9:.1f} GB; this one would go over.")
+    cid = "c" + secrets.token_hex(6)
+    file = f"{cid}{Path(row['file']).suffix}"
+    try:
+        os.link(src, work.clips / file)  # the same file twice on disk costs nothing
+    except OSError:
+        shutil.copy2(src, work.clips / file)
+    db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, width, height, created) VALUES (?,?,?,?,?,?,?,?,?)",
+           (cid, project["id"], row["name"], file, row["bytes"], row["seconds"], row["width"], row["height"], time.time()))
+    old = workdir(s, user["id"], row["project_id"]).stills / f"clip-{row['id']}.jpg"
+    if old.exists():
+        work.stills.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(old, work.stills / f"clip-{cid}.jpg")
+    db.run("UPDATE projects SET updated=? WHERE id=?", (time.time(), project["id"]))
+    return {"clip": cid, "name": row["name"], "seconds": round(float(row["seconds"] or 0), 1)}
+
+
 def delete_clip(db: DB, s: StudioSettings, project: dict, clip_id: str) -> bool:
     row = db.one("SELECT * FROM clips WHERE id=? AND project_id=?", (clip_id, project["id"]))
     if not row:

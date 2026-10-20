@@ -52,9 +52,9 @@ class Limits(_Strict):
     videos_per_user: int = Field(3, description="Finished videos a friend may make (the owner is not limited).")
     revisions_per_video: int = 2
     clips_per_project: int = 20
-    clip_bytes: int = 2 * GB
-    project_bytes: int = 2 * GB
-    user_bytes: int = 6 * GB
+    clip_bytes: int = 5 * GB
+    project_bytes: int = 5 * GB
+    user_bytes: int = 15 * GB  # three full films' footage
     total_bytes: int = 60 * GB  # all studio data together: uploads stop above this
     clip_seconds: float = 600.0
     project_seconds: float = 1200.0  # footage per project (analysis cost grows with it)

@@ -1806,3 +1806,35 @@ def test_what_cant_be_done_yet_is_said_plainly_counted_for_the_owner_and_told_wh
     assert studio.tell_gap("lyrics") in (0, 1)
     assert studio.db.one("SELECT told FROM gaps WHERE ability='lyrics'")["told"]
     assert studio.export(studio.user(friend["id"]))["asked_for_not_possible_yet"][0]["ability"] == "lyrics"
+
+
+def test_clips_from_earlier_films_can_be_added_without_uploading_again(studio, media):
+    """'option to use from my existing uploads': the setup page lists their clips from other films; ticked ones are
+    linked in (no upload, no extra space), never someone else's."""
+    _friend(studio, "Ana")
+    client, csrf = _signed_in(studio, "Ana")
+    pids = []
+    for k in range(2):
+        r = client.post("/new", data={"csrf": csrf, "title": f"Film {k}", "shapes": "9:16", "length": 15, "intent": ""},
+                        follow_redirects=False)
+        pids.append(r.headers["location"].rsplit("/", 1)[1])
+    _upload(client, csrf, pids[0], media / "clips" / "a_stable.mp4", "clip")
+    first = studio.db.one("SELECT * FROM clips WHERE project_id=?", (pids[0],))
+    page = client.get(f"/p/{pids[1]}").text
+    assert "Use clips you uploaded before (1)" in page and "from Film 0" in page
+    client.post(f"/p/{pids[1]}/clips/reuse", data={"csrf": csrf, "clip": first["id"]})
+    added = studio.db.all("SELECT * FROM clips WHERE project_id=?", (pids[1],))
+    assert len(added) == 1 and added[0]["name"] == first["name"] and added[0]["id"] != first["id"]
+    user = studio.db.project(pids[1])["user_id"]
+    src = studio.s.users_dir / user / "projects" / pids[0] / "clips" / first["file"]
+    dst = studio.s.users_dir / user / "projects" / pids[1] / "clips" / added[0]["file"]
+    assert dst.exists() and dst.stat().st_size == src.stat().st_size
+    assert "Use clips you uploaded before" not in client.get(f"/p/{pids[1]}").text  # already in: not offered again
+    # someone else can't take it
+    _friend(studio, "Bo")
+    other, csrf2 = _signed_in(studio, "Bo")
+    r = other.post("/new", data={"csrf": csrf2, "title": "Mine", "shapes": "9:16", "length": 15, "intent": ""},
+                   follow_redirects=False)
+    theirs = r.headers["location"].rsplit("/", 1)[1]
+    other.post(f"/p/{theirs}/clips/reuse", data={"csrf": csrf2, "clip": first["id"]})
+    assert not studio.db.all("SELECT * FROM clips WHERE project_id=?", (theirs,))

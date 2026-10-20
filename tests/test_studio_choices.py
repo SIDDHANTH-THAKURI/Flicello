@@ -423,3 +423,90 @@ def test_a_failed_step_is_marked_where_it_broke(studio):
     studio.db.set_stage(p["id"], "failed", error="Something went wrong on our side.")
     page = _client(studio, user).get(f"/p/{p['id']}").text
     assert '<li class="done"><span>Reading the plan' in page and '<li class="broke"><span>Mixing the sound' in page
+
+
+# ---------------------------------------------------------------- footage fits the film ('Day out', 21 Oct)
+
+def _facts_ctx(strengths, allow_reuse=False):
+    from vidosuper.studio.brain.context import BeatMap, ClipFacts
+    from vidosuper.studio.brain.core import StoryContext
+
+    facts = {}
+    for i, st in enumerate(strengths, 1):
+        moments = [{"start": 0.5, "end": 5.5, "peak": 2.0, "kind": "scene", "description": "x", "hook": 5, "strength": st,
+                    "best_use": "any", "sound": "either"}]
+        facts[f"c0{i}"] = ClipFacts(f"c0{i}", f"clip{i}", 6.0, 30.0, False, [], moments)
+    beats = BeatMap(first=0, t0=0.0, period=0.5, available=64, target=32, drop=None, sections=[])
+    ctx = StoryContext(catalog={"clips": []}, facts=facts, song=None, beats=beats, shapes=["9:16"], intent="", rules=[])
+    ctx.allow_reuse = allow_reuse
+    return ctx
+
+
+def test_a_stutter_on_a_weak_moment_is_refused_but_fine_on_a_strong_one():
+    """The railing: a beat edit (six 0.3 s cuts) on a deck-and-railing moment scored 5 of 10."""
+    from vidosuper.studio.brain.core import check_plan
+    from vidosuper.studio.brain.schemas import DesignPlan, PlanShot, PoolMoment
+
+    pool = [PoolMoment(key="rail", clip="c01", start=1.0, end=5.0), PoolMoment(key="opera", clip="c02", start=1.0, end=5.0)]
+
+    def plan(stutter_on):
+        return DesignPlan(name="t", idea="t", pool=pool, plan=[
+            PlanShot(kind="cut", beats=8, key="opera" if stutter_on == "rail" else "rail"),
+            PlanShot(kind="stutter", beats=1, count=8, key=stutter_on), PlanShot(kind="cut", beats=8, key="x")])
+
+    ctx = _facts_ctx([5, 8])
+    assert any("needs a strong moment" in p for p in check_plan(plan("rail"), ctx))
+    assert not any("needs a strong moment" in p for p in check_plan(plan("opera"), ctx))
+
+
+def test_even_thin_footage_shows_one_stretch_at_most_twice():
+    from vidosuper.studio.brain.core import check_plan
+    from vidosuper.studio.brain.schemas import DesignPlan, PlanShot, PoolMoment
+
+    pool = [PoolMoment(key="a", clip="c01", start=1.0, end=5.0), PoolMoment(key="b", clip="c02", start=1.0, end=5.0),
+            PoolMoment(key="c", clip="c03", start=1.0, end=5.0)]
+    ctx = _facts_ctx([7, 7, 7], allow_reuse=True)
+    thrice = DesignPlan(name="t", idea="t", pool=pool, plan=[PlanShot(kind="cut", beats=4, key=k) for k in "abcabcab"])
+    assert any("shown 3 times" in p for p in check_plan(thrice, ctx))
+
+
+def test_a_plan_with_only_taste_problems_left_is_used_not_failed():
+    """A film is never failed over taste: after the last try, a plan that only breaks taste rules is used."""
+    from pydantic import BaseModel
+
+    from vidosuper.studio.brain.backends import BrainError, Usage, structured
+
+    class Out(BaseModel):
+        n: int
+
+    class B:
+        def ask(self, req, correction=None):
+            return {"n": 1}, Usage(task="design", model="m", backend="fake")
+
+    from vidosuper.studio.brain.backends import Request
+    req = Request("design", "s", "t", Out, "m")
+    got = structured(B(), req, lambda u: None, check=lambda o: ["the first shot lasts 6.0s"], fallback=lambda o: [])
+    assert got.n == 1
+    with pytest.raises(BrainError):
+        structured(B(), req, lambda u: None, check=lambda o: ["broken"], fallback=lambda o: ["broken"])
+
+
+def test_a_film_far_longer_than_its_footage_is_made_to_fit_and_their_own_length_then_stands(studio):
+    """61 s of footage, 90 s asked: 'Day out' repeated the same 2 s twelve times. Now the film is made as long as
+    its footage carries, with a note; if they set it longer again, that stands."""
+    from types import SimpleNamespace as NS
+
+    u = studio.db.all("SELECT * FROM users LIMIT 1")
+    project = {"id": "pfit", "kind": "montage", "length": 90.0, "intent": "", "info": None}
+    studio.db.run("INSERT INTO projects(id, user_id, title, shapes, length, intent, stage, created, updated, kind) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?)", ("pfit", u[0]["id"] if u else "u1", "Day out", "16:9", 90.0, "", "preparing",
+                                                    time.time(), time.time(), "montage"))
+    info = {}
+    assert studio._fit_length({**project}, NS(supported_seconds=lambda: 39.4), info)
+    assert studio.db.project("pfit")["length"] == 35.0 and info["fit"]["to"] == 35.0
+    note = studio.db.all("SELECT * FROM events WHERE project_id='pfit'")
+    assert note and "instead of 90" in str(note[-1])
+    # enough footage: left alone; asked for repeats: left alone; declined: left alone
+    assert not studio._fit_length({**project, "length": 40.0}, NS(supported_seconds=lambda: 39.4), {})
+    assert not studio._fit_length({**project, "intent": "loop the same shots"}, NS(supported_seconds=lambda: 10.0), {})
+    assert not studio._fit_length({**project}, NS(supported_seconds=lambda: 10.0), {"fit_declined": True})

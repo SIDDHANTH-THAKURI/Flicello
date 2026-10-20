@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -284,10 +285,13 @@ class ClaudeCodeBackend:
 # ---------------------------------------------------------------- checked answers
 
 def structured(backend, req: Request, spend: SpendFn, check: CheckFn | None = None, retries: int = 2,
-               log: Callable[[str, dict], None] | None = None):
-    """Ask, validate, and ask again with the problems (at most `retries` more times)."""
+               log: Callable[[str, dict], None] | None = None, fallback: CheckFn | None = None):
+    """Ask, validate, and ask again with the problems (at most `retries` more times). `fallback`: the problems that
+    really break the result; an answer with only taste problems left after the last try is still used, so a film is
+    never failed over a matter of taste."""
     correction = None
     problems: list[str] = []
+    usable = None
     for attempt in range(retries + 1):
         data, usage = backend.ask(req, correction)
         spend(usage)
@@ -301,7 +305,13 @@ def structured(backend, req: Request, spend: SpendFn, check: CheckFn | None = No
             problems = check(obj) if check else []
             if not problems:
                 return obj
+            if fallback is not None and not fallback(obj):
+                usable = obj
         correction = ("Your previous answer had these problems. Fix all of them and return the complete "
                       "corrected JSON:\n- " + "\n- ".join(problems[:20]) +
                       "\n\nYour previous answer was:\n" + json.dumps(data)[:20000])
+    if usable is not None:
+        log_ = logging.getLogger(__name__)
+        log_.warning("%s: used with taste problems left after %d tries: %s", req.task, retries + 1, "; ".join(problems[:4]))
+        return usable
     raise BrainError(f"{req.task}: still not valid after {retries + 1} tries: " + "; ".join(problems[:6]))

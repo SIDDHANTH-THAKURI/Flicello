@@ -263,6 +263,24 @@ class Pipeline:
         make_beat(self.work.music / "song.wav", length + 8, pace)
         return True
 
+    def supported_seconds(self) -> float:
+        """How long a film this footage carries without showing a shot twice: footage inside strong moments (strength 6
+        and up, of 10) counts whole, middling ones (5) half, the rest (and anything marked unusable) not at all."""
+        facts = clip_facts(load_catalog(self.project.root))
+        total = 0.0
+        for f in facts.values():
+            n = int(f.duration * 10) + 1
+            w = [0.0] * n  # weight of each tenth of a second
+            for m in f.moments:
+                k = 1.0 if m["strength"] >= 6 else 0.5 if m["strength"] >= 5 else 0.0
+                for i in range(max(0, int(m["start"] * 10)), min(n, int(m["end"] * 10))):
+                    w[i] = max(w[i], k)
+            for a, b in f.avoid:
+                for i in range(max(0, int(a * 10)), min(n, int(b * 10))):
+                    w[i] = 0.0
+            total += sum(w) / 10
+        return total
+
     def context(self, shapes: list[str], length: float, intent: str, rules: list[dict], pace: str = "balanced") -> StoryContext:
         self.ensure_song(length, pace)
         catalog = load_catalog(self.project.root)

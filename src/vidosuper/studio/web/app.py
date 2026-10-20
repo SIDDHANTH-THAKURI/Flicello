@@ -510,8 +510,10 @@ def create_app(studio: Studio) -> FastAPI:
         older = [r for r in finals if r["version"] != p["version"]]
         feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
                                  (pid, p["version"]))
+        from ..storage import earlier_clips
+        earlier = earlier_clips(studio.db, s, p) if p["stage"] == "setup" and p["kind"] == "montage" else []
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
-                    clip_thumbs=clip_thumbs, posters=posters,
+                    clip_thumbs=clip_thumbs, posters=posters, earlier=earlier,
                     joblog=steps_of(job or (studio.db.one("SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
                                                           (pid,)) if p["stage"] == "failed" else None)),
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
@@ -797,6 +799,20 @@ def create_app(studio: Studio) -> FastAPI:
 
         cancel_upload(studio.db, s, _upload(user, uid))
         return {"ok": True}
+
+    @app.post("/p/{pid}/clips/reuse")
+    def clip_reuse(request: Request, pid: str, csrf: str = Form(""), clip: list[str] = Form([])):
+        """Add clips from their earlier films (ticked on the setup page)."""
+        from ..storage import reuse_clip
+
+        def add(user, p):
+            if p["stage"] != "setup":
+                raise ActionError("Clips can only be added before the video is started.")
+            if not clip:
+                raise ActionError("Tick the clips you want first.")
+            for cid in clip[:20]:
+                reuse_clip(studio.db, s, user, p, cid)
+        return act(request, csrf, pid, add)
 
     @app.post("/api/p/{pid}/clips/{cid}/delete")
     def clip_delete(request: Request, pid: str, cid: str):

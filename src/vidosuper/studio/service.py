@@ -783,6 +783,10 @@ class Studio:
             self.length_ok(self.user(project["user_id"]), length)
             length = round(float(length), 1)
             self.db.run("UPDATE projects SET length=? WHERE id=?", (length, project["id"]))
+            info = json.loads(project["info"]) if project.get("info") else {}
+            if info.get("fit") and length > float(info["fit"]["to"]):  # they want it longer than the footage carries
+                info["fit_declined"] = True
+                self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
             said.append(f"{length:g} seconds" if length < 120 else f"{length / 60:g} minutes")
             row = self.beat_row(project, project.get("beat")) if project.get("music") == "made" else None
             if project.get("song") and project.get("song_seconds") and float(project["song_seconds"]) < length - 0.5:
@@ -1879,7 +1883,16 @@ class Studio:
             project = self.db.project(project["id"])
             pipe.no_music = False
         info = pipe.analyse(project["length"], project["pace"])
+        old = json.loads(project["info"]) if project.get("info") else {}
+        if old.get("fit_declined"):
+            info["fit_declined"] = True
+        fitted = self._fit_length(project, pipe, info)
         self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
+        if fitted:
+            project = self.db.project(project["id"])
+            self._pay_for(project)  # a shorter film uses fewer credits: the difference comes back
+            if self._ensure_track(job, project, user, pipe, (0.8, 0.84)) is not None:  # music made for the old length
+                project = self.db.project(project["id"])
         if info["skipped"]:
             self.db.event(project["id"], f"{len(info['skipped'])} file(s) couldn't be read and were left out.", "warn")
         self.db.job_progress(job["id"], 0.85, "Putting what I saw into words")
@@ -1887,6 +1900,29 @@ class Studio:
         understood = pipe.brain.understand(ctx)
         self.db.run("UPDATE projects SET understood=?, brief=NULL WHERE id=?", (understood.model_dump_json(), project["id"]))
         self.db.set_stage(project["id"], "understood")
+
+    FIT_SLACK = 1.15  # a film up to this much longer than its footage carries is left alone
+
+    def _fit_length(self, project: dict, pipe, info: dict) -> bool:
+        """A film much longer than its footage would have to show the same shots again and again (and stretch weak
+        moments to fill the time): make it as long as the footage carries, and say so. Not when they said repeats are
+        fine, or set the length back up after being told."""
+        from .brain.context import REUSE_WORDS
+
+        if project["kind"] != "montage" or info.get("fit_declined") or REUSE_WORDS.search(project.get("intent") or ""):
+            return False
+        carries = pipe.supported_seconds()
+        length = float(project["length"])
+        target = max(15.0, 5 * (carries // 5))
+        if length <= max(target * self.FIT_SLACK, target + 5):
+            return False
+        info["fit"] = {"from": length, "to": target, "carries": round(carries, 1)}
+        self.db.run("UPDATE projects SET length=?, updated=? WHERE id=?", (target, time.time(), project["id"]))
+        raw = sum(float(c["seconds"] or 0) for c in self.db.all("SELECT seconds FROM clips WHERE project_id=?", (project["id"],)))
+        self.db.event(project["id"], f"Your footage is {raw:.0f} seconds, with about {carries:.0f} seconds of strong moments, so "
+                      f"I made the film {target:g} seconds instead of {length:g}: at {length:g} it would show the same shots "
+                      "again and again. Want it longer anyway? Go back to the clips and settings and pick the length.", "warn")
+        return True
 
     def understanding(self, project: dict) -> dict | None:
         return json.loads(project["understood"]) if project.get("understood") else None
