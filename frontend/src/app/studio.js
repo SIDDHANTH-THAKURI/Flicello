@@ -3,6 +3,8 @@
 import { toast } from './ui.js';
 import { ask } from './asks.js';
 import { editor } from './editor.js';
+import { previews, stylePreviews } from './player.js';
+import { timeline } from './timeline.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -520,6 +522,9 @@ export function studio() {
   const pid = document.body.dataset.project;
   if (pid) { uploads(pid); progress(pid); reloadWhenDone(pid); }
   editor();
+  previews();
+  stylePreviews();
+  timeline();
   shotNumbers();
   shotChanges();
   swatches();
@@ -530,3 +535,20 @@ export function studio() {
   inviteLink();
   busyForms();
 }
+
+// review links: a note is pinned to the moment the video is at; a note's time takes the video there
+(function review() {
+  const box = document.querySelector('[data-review]');
+  if (!box) return;
+  const video = box.querySelector('[data-review-video]');
+  const at = box.querySelector('[data-review-at]');
+  const clock = box.querySelector('[data-review-clock]');
+  const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+  const sync = () => { at.value = String(video.currentTime || 0); clock.textContent = mmss(video.currentTime || 0); };
+  video.addEventListener('timeupdate', sync);
+  video.addEventListener('seeked', sync);
+  box.querySelectorAll('[data-seek]').forEach((b) => b.addEventListener('click', () => {
+    video.currentTime = parseFloat(b.dataset.seek) || 0;
+    video.play().catch(() => {});
+  }));
+}());

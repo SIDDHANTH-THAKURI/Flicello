@@ -1,0 +1,9 @@
+{
+  "name": "flicello-motion",
+  "private": true,
+  "version": "1.0.0",
+  "description": "The motion-graphics engine: HyperFrames (HeyGen, Apache-2.0) renders the blocks in src/vidosuper/motion to video with transparency, deterministically, in headless Chrome. Installed with `npm ci` here; telemetry is switched off by the caller (HYPERFRAMES_NO_TELEMETRY=1).",
+  "dependencies": {
+    "hyperframes": "0.8.185"
+  }
+}

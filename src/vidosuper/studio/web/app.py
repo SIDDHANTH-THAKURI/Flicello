@@ -160,7 +160,7 @@ def create_app(studio: Studio) -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"  # no referrer to other sites; our own forms keep their Origin
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"  # talking to Cello
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         public = indexable(request, s.public_signup)
@@ -441,9 +441,13 @@ def create_app(studio: Studio) -> FastAPI:
     @app.get("/new", response_class=HTMLResponse)
     def new_page(request: Request):
         user, sess = need_user(request)
-        pace = studio.profile(user).answers.get("pace", "balanced")  # their style's pace ("their own words" is a rule)
+        answers = studio.profile(user).answers
+        pace = answers.get("pace", "balanced")  # their style's pace ("their own words" is a rule)
+        from ..exports import PLATFORMS
+
+        shape = PLATFORMS.get(answers.get("platform", ""), {}).get("shape")  # "make it for YouTube", remembered
         return page(request, "new.html", user, sess, default_pace=pace if pace in ("calm", "fast") else "balanced",
-                    form={}, **new_ctx(user))
+                    form={"shapes": shape} if shape else {}, **new_ctx(user))
 
     @app.post("/new")
     def new_post(request: Request, csrf: str = Form(""), title: str = Form(""), shapes: str = Form("9:16"),
@@ -501,7 +505,11 @@ def create_app(studio: Studio) -> FastAPI:
         for r in results:
             for iid in r.get("items") or []:
                 by_item.setdefault(iid, r)
-        return {"editor_thread": msgs, "editor_thinking": agent.thinking(msgs), "spec_items": studio.spec_items(p, user),
+        from .. import faces
+
+        index = studio.people_of(p)
+        return {"people": faces.public(index), "people_looked": index is not None,
+                "editor_thread": msgs, "editor_thinking": agent.thinking(msgs), "spec_items": studio.spec_items(p, user),
                 "item_checks": by_item, "brief_checks": specs.summary(results),
                 "editor_placeholder": EDITOR_ASKS.get(p["stage"], "Tell me anything: I keep it for the next step."),
                 "editable_spec": p["stage"] not in BUSY}
@@ -550,6 +558,7 @@ def create_app(studio: Studio) -> FastAPI:
         versions_all = studio.versions_list(p) if finals else []
         work = next((v for v in versions_all if v["version"] == work_v), None)
         pending = studio._info(p).get("pending") if p["stage"] == "confirm" else None
+        draft = studio.draft_of(p) if p["stage"] == "done" else None
         from ..storage import earlier_clips
         earlier = earlier_clips(studio.db, s, p) if p["stage"] == "setup" and p["kind"] == "montage" else []
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
@@ -566,7 +575,15 @@ def create_app(studio: Studio) -> FastAPI:
                     render_eta=studio.typical_seconds("render"),
                     note_lines=note_read(p),
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
-                    work=work, strip=strip, versions_all=versions_all, pending=pending,
+                    work=work, strip=strip, versions_all=versions_all, pending=pending, draft=draft,
+                    style_cards=studio.style_cards(p) if p["stage"] == "done" and p["kind"] == "montage" else [],
+                    ready=studio.ready_of(p) if p["stage"] == "done" else None,
+                    exports=studio.exports_of(p) if p["stage"] == "done" else [],
+                    review_links=[dict(r) for r in studio.db.all("SELECT token, version FROM review_links WHERE project_id=? "
+                                                                 "AND revoked=0 ORDER BY version DESC", (pid,))],
+                    review_notes=studio.review_notes(p) if p["stage"] in ("done", "confirm") else [],
+                    site_url=(s.site_url or "").rstrip("/"),
+                    drafting=bool(job and job["kind"] == "draft"),
                     shot_times=json.dumps([[c["start"], c["n"]] for c in strip["cards"]]) if strip else "",
                     board=studio.board(p, samples[0]["plan_id"]) if samples and p["kind"] == "montage" else None,
                     gaps=abilities.for_project(studio.db, p),
@@ -787,6 +804,133 @@ def create_app(studio: Studio) -> FastAPI:
         return templates.TemplateResponse(request, "_editor.html", {"user": user, "csrf": sess["csrf"], "p": p,
                                                                     **editor_view(p, user)})
 
+    # ------------------------------------------------------------------ drafts and the instant preview
+    @app.get("/api/p/{pid}/preview")
+    def preview_data(request: Request, pid: str, which: str = "draft"):
+        """What the browser player needs to play a version or the draft at once (see preview.py)."""
+        user, _ = need_user(request, api=True)
+        p = owned(user, pid)
+        try:
+            return studio.preview_of(p, which)
+        except ActionError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/p/{pid}/draft/make")
+    def draft_make(request: Request, pid: str, csrf: str = Form("")):
+        """The draft on screen becomes a real version (rendered in full)."""
+        return act(request, csrf, pid, lambda u, p: studio.make_draft(u, p))
+
+    # ------------------------------------------------------------------ review links (no account needed to watch)
+    def review_film(token: str):
+        found = studio.review_by_token(token)
+        if not found:
+            raise HTTPException(404, "This review link isn't open.")
+        return found
+
+    def review_video(link: dict, p: dict):
+        work = workdir(s, p["user_id"], p["id"])
+        shape = studio.shapes(p)[0].replace(":", "x")
+        path = work.out / f"v{link['version']}-{shape}.mp4"
+        if not path.exists():
+            found = sorted(work.out.glob(f"v{link['version']}-*x*.mp4"))
+            path = next((f for f in found if f.stem.count("-") == 1), path)
+        return path
+
+    @app.get("/r/{token}", response_class=HTMLResponse)
+    def review_page(request: Request, token: str):
+        link, p = review_film(token)
+        resp = page(request, "review.html", None, None, token=token, title=p["title"], version=link["version"],
+                    tall=studio.shapes(p)[0] == "9:16",
+                    notes=[n for n in studio.review_notes(p) if n["token"] == token])
+        resp.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+        return resp
+
+    @app.get("/r/{token}/video")
+    def review_file(token: str):
+        link, p = review_film(token)
+        path = review_video(link, p)
+        if not path.exists():
+            raise HTTPException(404, "Not found.")
+        return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "private, max-age=600"})
+
+    @app.post("/r/{token}/note")
+    def review_note(request: Request, token: str, at: float = Form(0.0), name: str = Form(""), text: str = Form("")):
+        from urllib.parse import urlparse
+
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).netloc != request.url.netloc:  # only our own review page posts here
+            raise HTTPException(403, "Not from this site.")
+        try:
+            studio.add_review_note(token, at, name, text)
+        except ActionError as exc:
+            return back(f"/r/{token}", str(exc))
+        return back(f"/r/{token}", "Thanks: your note is with them.")
+
+    @app.post("/p/{pid}/review")
+    def review_make(request: Request, pid: str, csrf: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.review_link(u, p))
+
+    @app.post("/p/{pid}/review/revoke")
+    def review_revoke(request: Request, pid: str, csrf: str = Form(""), token: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.revoke_review(p, token))
+
+    @app.post("/p/{pid}/notes/{note_id}/done")
+    def review_done(request: Request, pid: str, note_id: int, csrf: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.settle_note(p, note_id))
+
+    @app.get("/api/p/{pid}/timeline")
+    def timeline_api(request: Request, pid: str, which: str = "draft"):
+        user, _ = need_user(request, api=True)
+        p = owned(user, pid)
+        try:
+            return JSONResponse(studio.timeline_of(p, which))
+        except ActionError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=404)
+
+    @app.post("/api/p/{pid}/edit")
+    async def timeline_edit(request: Request, pid: str):
+        """Changes made by hand on the timeline (JSON: ops, said), as a draft."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        p = owned(user, pid)
+        body = await request.json()
+        try:
+            studio.manual_edit(user, p, list(body.get("ops") or []), list(body.get("said") or []))
+        except (ActionError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True})
+
+    @app.post("/p/{pid}/export")
+    def export_make(request: Request, pid: str, csrf: str = Form(""), kind: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.ask_export(u, p, kind))
+
+    @app.post("/p/{pid}/fix")
+    def ready_fix(request: Request, pid: str, csrf: str = Form(""), part: str = Form("")):
+        """A weak part of the ready-to-post score, fixed as a draft."""
+        return act(request, csrf, pid, lambda u, p: studio.fix_ready(u, p, part))
+
+    @app.post("/p/{pid}/style")
+    def style_try(request: Request, pid: str, csrf: str = Form(""), style: str = Form("")):
+        """Their film in an edit style, as a draft to watch at once."""
+        return act(request, csrf, pid, lambda u, p: studio.try_style(u, p, style))
+
+    @app.post("/p/{pid}/draft/discard")
+    def draft_discard(request: Request, pid: str, csrf: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.discard_draft(p))
+
+    @app.post("/p/{pid}/people")
+    def people_edit(request: Request, pid: str, csrf: str = Form(""), person: str = Form(""), op: str = Form(""),
+                    name: str = Form("")):
+        """Someone in the footage: this is me, their name, never show them, or cut the shots they're in."""
+        def go(u, p):
+            if op == "cut":
+                studio.person_draft(u, p, person)
+            elif op == "look":
+                studio.find_people(p)
+            else:
+                studio.set_person(u, p, person, op, name)
+        return act(request, csrf, pid, go)
+
     @app.post("/p/{pid}/card")
     def card(request: Request, pid: str, csrf: str = Form(""), mid: int = Form(0), k: int = Form(0),
              choice: str = Form("")):
@@ -971,12 +1115,21 @@ def create_app(studio: Studio) -> FastAPI:
     def media(request: Request, pid: str, kind: str, name: str, dl: int = 0):
         user, _ = need_user(request, api=True)
         p = owned(user, pid)
-        if kind not in ("out", "stills", "beats"):
+        if kind not in ("out", "stills", "beats", "preview", "music"):
             raise HTTPException(404, "Not found.")
-        folder = getattr(workdir(s, p["user_id"], pid), kind)
+        from ..preview import AUDIO_TYPES, FOLDER
+
+        work = workdir(s, p["user_id"], pid)
+        folder = work.root / FOLDER if kind == "preview" else getattr(work, kind)
         path = safe_child(folder, name)
-        types = {".mp4": "video/mp4", ".jpg": "image/jpeg", ".mp3": "audio/mpeg", ".wav": "audio/wav"}
-        if path is None or path.suffix.lower() not in types or (kind == "beats") != (path.suffix.lower() in (".mp3", ".wav")):
+        types = {".mp4": "video/mp4", ".jpg": "image/jpeg", **AUDIO_TYPES, ".srt": "application/x-subrip",
+                 ".mov": "video/quicktime", ".gif": "image/gif", ".fcpxml": "application/xml", ".edl": "text/plain"}
+        sound = kind in ("beats", "music")
+        audio = path is not None and path.suffix.lower() in AUDIO_TYPES
+        if path is None or path.suffix.lower() not in types or (sound and not audio) or (audio and kind not in ("beats", "music", "out")) \
+                or (kind != "out" and path.suffix.lower() in (".srt", ".mov", ".gif", ".fcpxml", ".edl")) \
+                or (kind == "preview" and path.suffix.lower() != ".mp4") or (kind == "music" and path.stem != "song"
+                                                                              and not path.stem.startswith("original")):
             raise HTTPException(404, "Not found.")
         media_type = types[path.suffix.lower()]
         headers = {"Cache-Control": "private, max-age=3600"}
@@ -985,11 +1138,38 @@ def create_app(studio: Studio) -> FastAPI:
             headers["Content-Disposition"] = f'attachment; filename="{safe_title} {path.stem}{path.suffix}"'
         return FileResponse(path, media_type=media_type, headers=headers)
 
+    @app.get("/motion/{name:path}")
+    def motion_asset(name: str):
+        """The motion graphics' scripts, stylesheets and fonts, for the instant preview (the same the render uses)."""
+        from ...motion import asset
+
+        found = asset(name)
+        if found is None:
+            raise HTTPException(404, "Not found.")
+        body, media_type = found
+        return Response(body, media_type=media_type, headers={"Cache-Control": "public, max-age=300"})
+
     # ------------------------------------------------------------------ my style and account
     @app.get("/style", response_class=HTMLResponse)
     def style(request: Request):
         user, sess = need_user(request)
         return page(request, "style.html", user, sess, profile=studio.profile(user))
+
+    @app.post("/style/brand")
+    async def style_brand(request: Request):
+        user, sess = need_user(request)
+        form = await request.form()
+        check_csrf(sess, str(form.get("csrf", "")))
+        logo = form.get("logo")
+        data = await logo.read() if hasattr(logo, "read") else None
+        if data is not None and len(data) > 5_000_000:
+            return back("/style", "That logo file is too big (5 MB at most).")
+        try:
+            studio.set_brand(user, str(form.get("name", "")), str(form.get("color", "")), str(form.get("font", "")),
+                             data or None, drop_logo=form.get("drop_logo") == "1")
+        except ActionError as exc:
+            return back("/style", str(exc))
+        return back("/style", "Your brand is saved: your next films and changes use it.")
 
     @app.post("/style/forget-looks")
     def style_forget_looks(request: Request, csrf: str = Form("")):

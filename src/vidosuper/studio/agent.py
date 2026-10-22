@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 
@@ -68,6 +69,14 @@ ACTIONS = (
            "read the changes in `text` into exact edits on the numbered shots, shown to them before anything is made"),
     Action("continue_from", ("done",), "Work on this version", None, False, "version",
            "make version N the one the next change starts from"),
+    Action("make_draft", ("done",), "Make it", "revise", False, "",
+           "make the draft on screen (the change they watched in the instant preview) into a real version"),
+    Action("discard_draft", ("done",), "Discard the draft", None, False, "",
+           "drop the draft on screen; the version stays as it was"),
+    Action("cut_person", ("done",), "Cut their shots", "draft", False, "person",
+           "a draft without the shots this person is close up in (person id in `person`)"),
+    Action("never_person", ("setup", "understood", "choose", "review", "done"), "Never show them", None, False, "person",
+           "never show this person in this film: every shot of them is kept out from now on (person id in `person`)"),
     Action("confirm_change", ("confirm",), "Make these changes", "revise", False, "",
            "make the changes as read (on screen)"),
     Action("cancel_change", ("confirm",), "Don't change anything", None, False, "",
@@ -98,6 +107,10 @@ def available(studio, project: dict, user: dict) -> list[str]:
         if a.id == "sample_again" and studio.sample_tries_left(project) <= 0:
             continue
         if a.id == "continue_from" and len(studio.versions_list(project)) < 2:
+            continue
+        if a.id in ("make_draft", "discard_draft") and not studio.draft_of(project):
+            continue
+        if a.id in ("cut_person", "never_person") and not (studio.people_of(project) or {}).get("people"):
             continue
         out.append(a.id)
     return out
@@ -145,6 +158,14 @@ def run_action(studio, user: dict, project: dict, action: str, params: dict) -> 
         studio.ask_change(user, project, str(params.get("text") or ""))
     elif action == "continue_from":
         studio.continue_from(project, int(params.get("version") or 0))
+    elif action == "cut_person":
+        studio.person_draft(user, project, str(params.get("person") or ""))
+    elif action == "never_person":
+        studio.set_person(user, project, str(params.get("person") or ""), "never")
+    elif action == "make_draft":
+        studio.make_draft(user, project)
+    elif action == "discard_draft":
+        studio.discard_draft(project)
     elif action == "confirm_change":
         studio.confirm_change(user, project)
     elif action == "cancel_change":
@@ -297,6 +318,42 @@ def _screen_text(studio, project: dict, facts: dict) -> str:
     return "\n".join(lines)
 
 
+def _people_text(studio, project: dict) -> str:
+    from . import faces
+
+    people = (studio.people_of(project) or {}).get("people") or []
+    if not people:
+        return "# People in the footage\n(not looked at yet, or nobody's face is in it)"
+    lines = ["# People in the footage (faces found and grouped; ids as listed)"]
+    for p in people[:12]:
+        flags = [x for x, on in (("it's them", p.get("me")), ("never show", p.get("never"))) if on]
+        lines.append(f"- {p['id']}: {faces.label(p)}, {p['seconds']:g} s on screen in {', '.join(p['clips'])}, "
+                     f"{'close up' if p.get('near') else 'only far off'}" + (f" ({'; '.join(flags)})" if flags else ""))
+    return "\n".join(lines)
+
+
+def _notes_text(studio, project: dict) -> str:
+    """What their clients and teammates said on review links, not yet done."""
+    notes = studio.review_notes(project, open_only=True)[:20]
+    if not notes:
+        return ""
+    return "# Review notes from their clients (not done yet; in their words, at the moment of the film they mean)\n" + "\n".join(
+        f"- v{n['version']} at {int(n['at']) // 60}:{int(n['at']) % 60:02d}, {n['name'] or 'someone'}: {n['text']}" for n in notes)
+
+
+def _graphics_text(studio, project: dict) -> str:
+    """The graphics on the version they're working on (titles, captions, names)."""
+    from . import versions
+
+    if project["stage"] != "done":
+        return ""
+    try:
+        plan = studio._version_plan(project, studio.work_version(project))[1]
+    except Exception:  # noqa: BLE001 - an old film without its plan: nothing to say about graphics
+        return ""
+    return "# Graphics on this version\n" + "\n".join(versions.graphics_text(plan.graphics) or ["- none"])
+
+
 def _actions_text(studio, ids: list[str]) -> str:
     if not ids:
         return "# What you can offer now\nNothing at this step: answer, or change the spec."
@@ -324,13 +381,16 @@ def view(studio, project: dict, user: dict, words: str, refs: list[str], message
     ids = available(studio, project, user)
     shown = [p for p in studio.pitches(project) if not p["rejected"]] if project["stage"] == "choose" else []
     versions = [v["version"] for v in studio.versions_list(project)] if project["stage"] in ("done", "confirm") else []
-    steady = "\n\n".join([_person_text(studio, user, project), _spec_text(items), _screen_text(studio, project, {}),
-                          _actions_text(studio, ids)])
+    steady = "\n\n".join(x for x in [_person_text(studio, user, project), _spec_text(items),
+                                     _screen_text(studio, project, {}), _people_text(studio, project),
+                                     _graphics_text(studio, project), _notes_text(studio, project),
+                                     _actions_text(studio, ids)] if x)
     talk = "\n\n".join([_talk_text(messages), "# Their new message\n" + words
                         + (f"\n(They pointed at: {', '.join(refs)})" if refs else "")])
     text = steady + CACHE_SPLIT + talk  # the steady part is cached on its own: the next turn in this step reuses it
+    people = [p["id"] for p in (studio.people_of(project) or {}).get("people") or []]
     return text, {"items": items, "actions": ids, "pitches": len(shown), "versions": versions,
-                  "stage": project["stage"]}
+                  "stage": project["stage"], "people": people}
 
 
 def check_reply(reply, facts: dict) -> list[str]:
@@ -363,6 +423,8 @@ def check_reply(reply, facts: dict) -> list[str]:
                 out.append(f"continue_from: give one of the versions: {', '.join(map(str, facts['versions']))}")
             if need == "text" and not o.text.strip():
                 out.append(f"{o.action}: say what, in their words, in `text`")
+            if need == "person" and o.person not in facts.get("people", []):
+                out.append(f"{o.action}: give the person's id as listed ({', '.join(facts.get('people', [])) or 'none'})")
     return out
 
 
@@ -375,7 +437,8 @@ def trim(reply, facts: dict):
         if need is None or o.action not in facts["actions"] \
                 or (need == "pitch" and not (o.pitch and 1 <= o.pitch <= facts["pitches"])) \
                 or (need == "version" and o.version not in facts["versions"]) \
-                or (need == "text" and not o.text.strip()):
+                or (need == "text" and not o.text.strip()) \
+                or (need == "person" and o.person not in facts.get("people", [])):
             reply.offer = None
     known = {it["id"] for it in facts["items"] if it.get("switchable", True)}
     reply.off = [x for x in reply.off if x in known]
@@ -423,13 +486,203 @@ def _cards(studio, project: dict, reply, facts: dict) -> list[dict]:
     o = reply.offer
     if o is not None and o.action in facts["actions"]:
         a = ACTION[o.action]
-        params = {k: v for k, v in (("pitch", o.pitch), ("version", o.version), ("text", _clean(o.text, 1500))) if v}
+        params = {k: v for k, v in (("pitch", o.pitch), ("version", o.version), ("text", _clean(o.text, 1500)),
+                                    ("person", o.person)) if v}
         cards.append({"type": "offer", "action": a.id, "label": a.label, "why": _clean(o.why, 200), "params": params,
                       "takes": takes(studio, a), "ai": a.ai, "stage": project["stage"]})
     for r in reply.remember[:1]:
         if _clean(r.text, 240):
             cards.append({"type": "remember", "text": _clean(r.text, 240), "why": _clean(r.why, 240)})
     return cards
+
+
+FAST_WORDS = 12  # a plain ask is short: "swap 2 and 3", "remove 4 and 5", "extend 8 by one beat"
+
+
+EXPORTS = [(r"\bsrt\b|\bsubtitles?\s+file\b|\bcaptions?\s+file\b", "srt"),
+           (r"\b4\s*[:x]\s*5\b|\bfeed\s+(?:cut|version)\b", "feed"), (r"\b1\s*[:x]\s*1\b|\bsquare\b", "square"),
+           (r"\bpro\s?res\b|\bmaster\s+file\b", "prores"), (r"\bgif\b", "gif"),
+           (r"\bthumbnail\b|\bcover\s+(?:image|photo)\b", "thumb"),
+           (r"\bmp3\b|\baudio\s+only\b|\bjust\s+the\s+(?:sound|audio)\b", "mp3"),
+           (r"\bfcpxml\b|\bfinal\s+cut\b|\bresolve\b|\bdavinci\b", "fcpxml"), (r"\bedl\b|\bpremiere\b|\bavid\b", "edl")]
+GENERATE = re.compile(r"\b(?:generate|make|create|render)\s+(?:me\s+)?(?:an?\s+)?(?:ai\s+|new\s+)?(?:clip|shot|video|scene)\s+"
+                      r"(?:of|showing|with|where)\s+(?P<what>.+?)(?:\s+(?:for|into|as|in|to\s+replace)\s+(?:shot|clip)\s*(?P<shot>\d+))?\s*[.!]?$",
+                      re.I)
+FX_PARALLAX = re.compile(r"\b(?:make\s+)?(?:shot|clip)\s*(\d+)\s+(?:a|into\s+a|as\s+a)\s+(?:3\s*d|three\s*d|parallax|depth)\b|"
+                         r"\b(?:3\s*d|parallax|depth)\s+(?:photo|effect|move)?\s*(?:on|for|in)\s+(?:shot|clip)\s*(\d+)", re.I)
+FX_REMOVE = re.compile(r"\b(?:remove|erase|take\s+out|get\s+rid\s+of|delete|paint\s+out)\s+(?:the\s+|that\s+|this\s+)?"
+                       r"(?P<what>(?!shots?\b|clips?\b)[a-z][\w\s'-]{1,40}?)\s+(?:from|in|out\s+of)\s+(?:shot|clip)\s*(?P<shot>\d+)", re.I)
+FX_UPSCALE = re.compile(r"\b(?:upscale|sharpen|enhance|make\s+sharper)\s+(?:shot|clip)\s*(\d+)", re.I)
+
+
+MUSIC = re.compile(r"\b(?:make|let|have)\s+the\s+(?:music|song|track|beat)\s+(?P<want>.+?)(?:\s+(?P<where>at\s+the\s+"
+                   r"(?:start|beginning|end|ending|middle)|in\s+the\s+(?:middle|end)|from\s+\d+:\d\d\s+to\s+\d+:\d\d))?\s*[.!]?$|"
+                   r"\bmake\s+the\s+(?P<part>ending|end|start|intro|opening|middle)\s+(?:of\s+the\s+(?:music|song|track)\s+)?"
+                   r"(?P<want2>calmer|softer|quieter|bigger|louder|harder|more\s+\w+|less\s+\w+)\b", re.I)
+
+
+def music_asked(words: str, project: dict) -> tuple[float | None, float | None, str] | None:
+    """A stretch of the music to make again ('make the ending calmer', 'make the music bigger from 0:20 to 0:35'):
+    (start, end in film seconds or None for the track's ends, what they want), or None."""
+    m = MUSIC.search(words)
+    if not m:
+        return None
+    want = (m.group("want") or m.group("want2") or "").strip(" .")
+    where = (m.group("where") or m.group("part") or "").lower()
+    length = float(project.get("length") or 30)
+    if t := re.search(r"(\d+):(\d\d)\s+to\s+(\d+):(\d\d)", where):
+        a = int(t.group(1)) * 60 + int(t.group(2))
+        b = int(t.group(3)) * 60 + int(t.group(4))
+        return float(a), float(b), want
+    if "end" in where:
+        return length * 0.7, None, want
+    if any(x in where for x in ("start", "beginning", "intro", "opening")):
+        return None, length * 0.3, want
+    if "middle" in where:
+        return length * 0.35, length * 0.65, want
+    return None, None, want
+
+
+def effect_asked(words: str) -> tuple[str, int, str] | None:
+    """An effect their words ask for: ('parallax' | 'remove' | 'upscale', shot, what to remove), or None."""
+    if m := FX_REMOVE.search(words):
+        return "remove", int(m.group("shot")), m.group("what").strip()
+    if m := FX_PARALLAX.search(words):
+        return "parallax", int(m.group(1) or m.group(2)), ""
+    if m := FX_UPSCALE.search(words):
+        return "upscale", int(m.group(1)), ""
+    return None
+
+
+EXPORT_VERB = re.compile(r"\b(?:export|give|get|make|send|download|want|need)\b", re.I)
+
+
+def export_asked(words: str) -> str | None:
+    """The export format their words ask for ('export the srt', 'give me a gif'), or None."""
+    if not EXPORT_VERB.search(words):
+        return None
+    return next((kind for pattern, kind in EXPORTS if re.search(pattern, words, re.I)), None)
+
+
+def fast_path(studio, project: dict, user: dict, words: str) -> dict | None:
+    """A plain ask about the numbered shots ("swap 2 and 3", "remove 4", "extend 8 by one beat") is read by code and
+    made as a draft at once, with no model in the way: the reply, or None when it needs the editor's thinking."""
+    from . import versions
+
+    from . import exports
+
+    if (platform := exports.read_platform(words)) and len(words.split()) <= FAST_WORDS and project["kind"] == "montage":
+        try:
+            return {"text": studio.set_platform(user, project, platform), "cards": [], "spec": [], "fast": True}
+        except Exception as exc:  # noqa: BLE001 - said plainly
+            return {"text": str(exc), "cards": [], "spec": []}
+    if project["stage"] == "done" and (m := GENERATE.search(words)) and not studio.db.active_job(project["id"]):
+        shot = int(m.group("shot")) if m.group("shot") else None
+        try:
+            studio.generate_clip(user, project, m.group("what"), shot)
+        except Exception as exc:  # noqa: BLE001 - said plainly (no key yet, no changes left)
+            return {"text": str(exc), "cards": [], "spec": []}
+        return {"text": f"Making it with an AI video model (a minute or two){f', then it takes the place of shot {shot} in a draft' if shot else ''}.",
+                "cards": [], "spec": [], "fast": True}
+    if project["stage"] == "done" and (mus := music_asked(words, project)) and not studio.db.active_job(project["id"]):
+        start, end, want = mus
+        try:
+            studio.edit_music(user, project, start, end, want)
+        except Exception as exc:  # noqa: BLE001 - said plainly
+            return {"text": str(exc), "cards": [], "spec": []}
+        return {"text": f"Making that stretch of the music again ({want}); the rest stays note for note, then the film is "
+                        "made on it (a few minutes).", "cards": [], "spec": [], "fast": True}
+    if project["stage"] == "done" and (fx := effect_asked(words)) and not studio.db.active_job(project["id"]):
+        kind, shot, want = fx
+        try:
+            studio.ask_effect(user, project, kind, shot, want)
+        except Exception as exc:  # noqa: BLE001 - said plainly
+            return {"text": str(exc), "cards": [], "spec": []}
+        return {"text": f"On it: shot {shot} {studio.EFFECTS[kind]}. It takes a few minutes, then plays above as a draft.",
+                "cards": [], "spec": [], "fast": True}
+    if project["stage"] == "done" and (kind := export_asked(words)) and not studio.db.active_job(project["id"]):
+        studio.ask_export(user, project, kind)
+        return {"text": f"Making the {exports.KINDS[kind][0]} of this version: it shows under the video in a moment.",
+                "cards": [], "spec": [], "fast": True}
+    if project["stage"] != "done" or project["kind"] != "montage" or len(words.split()) > FAST_WORDS \
+            or studio.db.active_job(project["id"]):
+        return None
+    strip = studio.strip_of(project, studio.work_version(project))
+    cards = (strip or {}).get("cards") or []
+    if not cards:
+        return None
+    draft = studio.draft_plan(project)  # a draft on screen: its shots are the ones they mean
+    req = versions.read_simple(words, len(draft.plan) if draft else len(cards))
+    if not req.ops or req.unclear:
+        return None
+    ops = [o.model_copy(update={"text": o.text or project["title"]}) if o.op == "style" else o for o in req.ops]
+    studio.ask_draft(user, project, [o.model_dump() for o in ops], req.said, words)
+    return {"text": "On it: " + "; ".join(req.said) + ". It plays above in a few seconds as a draft; nothing is made "
+                    "until you say.", "cards": [], "spec": [], "fast": True}
+
+
+ME = re.compile(r"\b(?:my\s+face|myself|me\s+out|(?:remove|cut|hide|take|drop)\s+me\b|(?:of|with)\s+me\b|"
+                r"show\s+me\b|where\s+(?:i|i'?m|i\s+am)\b|i'?m\s+(?:in|visible|seen|showing)\b)", re.I)
+CUT = re.compile(r"\b(?:cut|remove|delete|clip\s+out|take\s+out|drop|hide|get\s+rid\s+of)\b", re.I)
+NEVER = re.compile(r"\b(?:never\s+show|don'?t\s+show|do\s+not\s+show|no\s+shots?\s+(?:of|with))\b", re.I)
+PERSON_N = re.compile(r"\bperson\s+(\d{1,2})\b", re.I)
+
+
+def people_path(studio, project: dict, user: dict, words: str) -> dict | None:
+    """A plain ask about someone in the footage ("cut where my face shows", "never show person 2", "remove the shots
+    with Mia"), answered from the face index without a model: the reply, or None when it isn't one."""
+    from . import faces
+
+    if len(words.split()) > FAST_WORDS + 4 or not (CUT.search(words) or NEVER.search(words)):
+        return None
+    index = studio.people_of(project)
+    people = (index or {}).get("people") or []
+    target, about_me = None, bool(ME.search(words))
+    if m := PERSON_N.search(words):
+        target = next((p for p in people if p["id"] == f"p{int(m.group(1))}"), None)
+    if target is None:
+        for p in people:
+            if p.get("name") and re.search(rf"\b{re.escape(p['name'])}\b", words, re.I):
+                target = p
+                break
+    if target is None and about_me:
+        target = next((p for p in people if p.get("me")), None)
+    if target is None and not about_me and not PERSON_N.search(words):
+        return None  # not about a person we know: the editor's own reading takes over
+    if index is None:
+        if studio.find_people(project):
+            return {"text": "I'm looking at who is in your clips now (about a minute). Ask me again then.", "cards": []}
+        return None
+    then = "never" if NEVER.search(words) else "cut"
+    if target is None:
+        near = [p for p in people if p.get("near")] or people
+        if not near:
+            return {"text": "I don't see anyone's face close up in your clips.", "cards": []}
+        return {"text": "Which one is you? Tap your face and I'll do it.", "cards": [{
+            "type": "who", "question": "Which one is you?", "then": then,
+            "people": [{"id": p["id"], "label": faces.label(p), "thumb": p.get("thumb", ""), "seconds": p["seconds"]}
+                       for p in near[:6]]}]}
+    return person_act(studio, project, user, target, then)
+
+
+def person_act(studio, project: dict, user: dict, person: dict, then: str) -> dict:
+    """Do it for this person: never show them (from now on), and on a finished film, a draft without their shots."""
+    from . import faces
+
+    name = faces.label(person)
+    lines = []
+    if then == "never":
+        studio.set_person(user, project, person["id"], "never")
+        lines.append(f"{name} won't be shown in this film again (it's in the brief).")
+    if project["stage"] == "done" and not studio.db.active_job(project["id"]):
+        try:
+            hits = studio.person_draft(user, project, person["id"])
+            who = "you're" if person.get("me") else f"{name} is"
+            lines.append(f"On it: cutting shot{'s' if len(hits) > 1 else ''} {', '.join(map(str, hits))}, where {who} "
+                         "close up. It plays above in a few seconds as a draft.")
+        except Exception as exc:  # noqa: BLE001 - said plainly instead
+            lines.append(str(exc))
+    return {"text": " ".join(lines) or f"{name} noted.", "cards": [], "fast": True}
 
 
 def turn(studio, pid: str, mid: int) -> None:
@@ -442,6 +695,15 @@ def turn(studio, pid: str, mid: int) -> None:
     body = json.loads(row["body"] or "{}")
     words = body.get("text", "")
     out: dict
+    try:
+        fast = people_path(studio, project, user, words) or fast_path(studio, project, user, words)
+        if fast is not None:
+            post(studio.db, project, "editor", "text", fast)
+            body["pending"] = False
+            studio.db.run("UPDATE messages SET body=? WHERE id=?", (json.dumps(body), mid))
+            return
+    except Exception:  # noqa: BLE001 - the editor's own reading takes over
+        log.warning("fast path failed for %s", pid, exc_info=True)
     try:
         messages = [m for m in thread(studio.db, pid) if m["id"] < mid]
         text, facts = view(studio, project, user, words, body.get("refs") or [], messages)
@@ -499,6 +761,15 @@ def answer(studio, user: dict, project: dict, mid: int, k: int, choice: str) -> 
         run_action(studio, user, project, card["action"], card.get("params") or {})
         save("yes")
         post(studio.db, project, "you", "tap", {"text": f"✓ {card['label']}"})
+    elif card["type"] == "who":
+        person = next((p for p in (studio.people_of(project) or {}).get("people") or [] if p["id"] == choice), None)
+        if person is None:
+            raise TalkError("Tap one of the faces.")
+        save(choice)
+        studio.set_person(user, project, person["id"], "me")
+        person["me"] = True
+        post(studio.db, project, "you", "tap", {"text": "✓ That's me"})
+        post(studio.db, project, "editor", "text", person_act(studio, project, user, person, card.get("then", "cut")))
     elif card["type"] == "remember":
         if choice == "yes":
             prof = studio.profile(user)
@@ -644,6 +915,16 @@ def _after_changes(studio, p: dict) -> dict | None:
             "cards": [_offer(studio, p, "confirm_change", "Make the changes as read")]}
 
 
+def _after_draft(studio, p: dict) -> dict | None:
+    draft = studio.draft_of(p)
+    if not draft:
+        return None
+    text = ("Your draft is ready, playing above: " + "; ".join(draft.get("said") or []) + ". Every other shot is exactly "
+            "as it was. Make it for real, or tell me what to change.")
+    return {"text": _clean(text, 1500), "stage": "done",
+            "cards": [_offer(studio, p, "make_draft", "Render this draft in full quality")]}
+
+
 def _after_beat(studio, p: dict) -> dict | None:
     row = studio.db.one("SELECT * FROM beats WHERE project_id=? ORDER BY id DESC LIMIT 1", (p["id"],))
     if row is None:
@@ -675,6 +956,8 @@ def checkin(studio, job: dict, project: dict) -> None:
         body = _after_changes(studio, p)
     elif kind == "beat":
         body = _after_beat(studio, p)
+    elif kind == "draft":
+        body = _after_draft(studio, p)
     else:
         body = None
     if body:

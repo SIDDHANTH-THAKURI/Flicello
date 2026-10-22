@@ -28,6 +28,29 @@ they count those repeats as clips, work out which shot they mean from what they 
   single shots: "fast cuts on every beat from shot 10", "the second half is worse, fix it", "add more clips at the
   end". `shot` is its first shot, `other` its last, `want` their words with what matters (beat sync, no repeats,
   which places). Use redo only for such requests: a named shot gets a named change.
+- `title`: a title comes in on `shot` and holds `beats` (4 if they don't say), with exactly the words they want in
+  `text` (their spelling and capitals) and an optional short line under it in `sub`. `style`: rise (letters land
+  one by one, the usual), slam (arrives from huge: for a hit or the drop), mask (wiped in) or split (two halves
+  meet). "At the start" is shot 1; "on the drop" is the shot that starts on the drop. `off: true` takes titles away.
+- `captions`: what is said in the film, word by word, at the bottom of the safe area (`shot` 1). `style`: pop (the
+  word being said lights up, the usual), karaoke (the words stay lit once said) or box (a colour block on the word
+  being said). `off: true` takes them away. Only speech gets captions: a film of music alone has nothing to caption,
+  so say so in `unclear` instead.
+- `lowerthird`: a name or a place on `shot` (`text`, and `sub` for the line under it: a role, a city), held `beats`
+  (6 if they don't say); it follows its picture if shots move. `off: true` takes it away.
+- `transition`: a designed transition on the cut into `shot` (never shot 1): panels (slanted panels whip across),
+  iris (a disc closes and opens), bars, or flash (a streak of light burning white on the cut). Use them where the
+  film changes place or mood, not on every cut.
+- `kinetic`: words cut in one per beat, big, from `shot` (`text`: a few words).
+- `callout`: a ring (circle), corner brackets (box) or an arrow on something in `shot`, following it as the camera
+  moves: `want` is what it points at in plain words ("the Opera House"), `text` its label. It is found in the shot
+  by looking at it.
+- `route`: a route drawing itself between places, from `shot`: `text` is the stops in order, 'Sydney|Wollongong|Kiama'.
+- `accent`: a finish over `shot`: brackets (a camera viewfinder), sweep (a sheen of light), leak (warm light leaks)
+  or lines (lines on the beat).
+- A title can stand behind the person in the shot (`behind: true`): huge, with their head in front of the letters.
+The film's graphics are listed with the shots. Every graphic is placed by the tool: clear of faces and of the apps'
+buttons, with professional timing; you only say what, where in the film and which style.
 
 ## Reading them right
 - A repeat ("the Opera House comes twice", "10 is the same as 9", "duplicate"): find the two shots that show the

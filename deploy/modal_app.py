@@ -34,18 +34,35 @@ app = modal.App("flicello-render")
 secret = modal.Secret.from_name("flicello-worker")
 models = modal.Volume.from_name("flicello-models", create_if_missing=True)
 
+# Node 22 for the motion engine (HyperFrames needs >= 22; trixie ships 20): the official build, checked against the
+# release's own SHA-256 list
+NODE = ("cd /tmp && curl -fsSLO https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt"
+        " && f=$(grep -o 'node-v22[.0-9]*-linux-x64.tar.xz' SHASUMS256.txt | head -1)"
+        " && curl -fsSLO https://nodejs.org/dist/latest-v22.x/$f && grep \" $f\\$\" SHASUMS256.txt | sha256sum -c -"
+        " && tar -xJf $f -C /usr/local --strip-components=1 && rm -f $f SHASUMS256.txt && node --version")
+
 image = (
     # FFmpeg 7 (Debian trixie) for -/filter_complex, vidstab and zscale; cairo and fonts for the graphics; Noto Color
-    # Emoji for the explainers' emoji; the build tools for pycairo
+    # Emoji for the explainers' emoji; the build tools for pycairo; the libraries headless Chrome needs (motion
+    # graphics are web pages rendered frame by frame)
     modal.Image.from_registry("python:3.12-slim-trixie")
     .apt_install("ffmpeg", "libcairo2", "libsndfile1", "fonts-dejavu-core", "fonts-noto-color-emoji",
-                 "build-essential", "pkg-config", "libcairo2-dev")
+                 "build-essential", "pkg-config", "libcairo2-dev", "curl", "xz-utils", "ca-certificates",
+                 "libnss3", "libatk1.0-0t64", "libatk-bridge2.0-0t64", "libcups2t64", "libdrm2", "libxkbcommon0",
+                 "libxcomposite1", "libxdamage1", "libxfixes3", "libxrandr2", "libgbm1", "libpango-1.0-0",
+                 "libasound2t64", "libxshmfence1", "libx11-xcb1")
+    .run_commands(NODE)
+    # the motion engine at the repo's place for it (vidosuper.motion.ENGINE), its exact versions, and its Chrome
+    .add_local_file(ROOT / "motion" / "package.json", "/app/motion/package.json", copy=True)
+    .add_local_file(ROOT / "motion" / "package-lock.json", "/app/motion/package-lock.json", copy=True)
+    .run_commands("cd /app/motion && npm ci --no-audit --no-fund && HYPERFRAMES_NO_TELEMETRY=1 "
+                  "./node_modules/.bin/hyperframes browser ensure")
     .pip_install_from_pyproject(str(ROOT / "pyproject.toml"), optional_dependencies=["ai", "studio"])
     .env({
         "PYTHONPATH": "/app/src", "PYTHONUNBUFFERED": "1",
         "VIDO_MODELS_DIR": "/models", "HF_HOME": "/models/hf", "VIDO_LOTTIE_DIR": "/models/lottie",
         "VIDO_REMOTE_HOME": "/tmp/flicello", "NUMBA_CACHE_DIR": "/tmp/numba", "MPLCONFIGDIR": "/tmp/mpl",
-        "VIDO_STUDIO_SERVER": SERVER,
+        "VIDO_STUDIO_SERVER": SERVER, "HYPERFRAMES_NO_TELEMETRY": "1", "DO_NOT_TRACK": "1",
         # 16 vCPUs: four drawing processes for designed talks (each cut-out on 3 threads), four FFmpeg jobs at once
         "VIDO_STUDIO_RENDER_PROCESSES": "4", "VIDO_MATTE_THREADS": "3", "VIDO_STUDIO_PIPELINE_WORKERS": "4",
         "VIDO_CPUS": "16",  # threads sized to the 8 cores (16 vCPUs) asked for: bursting past them is billed too

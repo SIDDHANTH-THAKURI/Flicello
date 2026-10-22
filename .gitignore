@@ -40,3 +40,5 @@ frontend/node_modules/
 story/node_modules/
 story/public/
 story/out/
+
+motion/node_modules/

@@ -11,7 +11,8 @@ from ..settings import BrainKind, StudioSettings
 from .backends import ApiBackend, BrainError, BudgetExceeded, ClaudeCodeBackend, PersonLimit, SpendFn, Usage
 from .core import Brain, LocalBrain, StoryContext
 
-__all__ = ["Brain", "LocalBrain", "StoryContext", "BrainError", "BudgetExceeded", "PersonLimit", "Usage", "make_brain", "brain_kind_for"]
+__all__ = ["Brain", "LocalBrain", "StoryContext", "BrainError", "BudgetExceeded", "PersonLimit", "Usage", "make_brain",
+           "brain_kind_for", "make_watcher"]
 
 
 def brain_kind_for(settings: StudioSettings, owner: bool) -> BrainKind:
@@ -21,6 +22,21 @@ def brain_kind_for(settings: StudioSettings, owner: bool) -> BrainKind:
     if kind == "claude_code" and not owner:
         raise BrainError("Claude Code is only for the owner's own videos; set the studio brain to 'api'.")
     return kind
+
+
+def make_watcher(kind: BrainKind, settings: StudioSettings, spend: SpendFn, log_dir: Path | None = None):
+    """Gemini watching each clip with its sound (brain/gemini.py), when there is a key and a model for it; None: the
+    contact-sheet analyst logs the clips (and always does without the AI)."""
+    import os
+
+    if kind == "local" or not settings.models.watcher or not os.environ.get("GEMINI_API_KEY"):
+        return None
+    try:
+        from .gemini import GeminiWatcher
+
+        return GeminiWatcher(settings.models.watcher, spend, log_dir)
+    except Exception:  # noqa: BLE001 - no SDK or no key: the analyst logs the clips, as before
+        return None
 
 
 def make_brain(kind: BrainKind, settings: StudioSettings, spend: SpendFn, log_dir: Path | None = None,

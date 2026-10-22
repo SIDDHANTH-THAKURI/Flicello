@@ -330,7 +330,7 @@ def test_a_film_made_by_talking_to_your_editor(studio, media, monkeypatch):
                     follow_redirects=False)
     pid = r.headers["location"].rsplit("/", 1)[1]
     page = client.get(f"/p/{pid}").text
-    assert "Your editor" in page and "your editor for this film" in page and "The brief" in page
+    assert "Cello" in page and "your editor for this film" in page and "The brief" in page
     for name in ("a_stable.mp4", "c_pan.mp4", "f_portrait60.mov"):
         _upload(client, csrf, pid, media / "clips" / name, "clip")
     _upload(client, csrf, pid, media / "music.wav", "song")
@@ -382,8 +382,20 @@ def test_a_film_made_by_talking_to_your_editor(studio, media, monkeypatch):
     assert m["kind"] == "checkin" and m["body"]["text"].startswith("Version 1 is ready"), m
     checks = json.loads(studio.db.project(pid)["info"])["checks"]["1"]
     assert {c["check"] for c in checks} >= {"sync", "no_people", "length"}
-    # a change in their words: read, shown, then made; only the shots named change
+    # a plain ask: read by code, a draft to watch at once, made only on "make it"
     m = say("swap 1 and 2")
+    assert m["body"].get("fast") and m["body"]["text"].startswith("On it:")
+    _drain(studio)
+    m = last()
+    assert m["kind"] == "checkin" and m["body"]["text"].startswith("Your draft is ready")
+    assert m["body"]["cards"][0]["action"] == "make_draft"
+    tap(m)
+    _drain(studio)
+    m = last()
+    assert studio.db.project(pid)["version"] == 2 and m["body"]["text"].startswith("Version 2 is ready")
+    assert "What changed" in m["body"]["text"] and "exactly as it was in version 1" in m["body"]["text"]
+    # a change explained at length: the editor reads it into exact changes, shows them, then they're made
+    m = say("please swap 1 and 2 again because the opening feels slow and the other shot is much the stronger start")
     assert m["body"]["cards"][0]["action"] == "change"
     tap(m)
     assert studio.db.project(pid)["stage"] == "reading"
@@ -394,8 +406,8 @@ def test_a_film_made_by_talking_to_your_editor(studio, media, monkeypatch):
     tap(m)
     _drain(studio)
     m = last()
-    assert studio.db.project(pid)["version"] == 2 and m["body"]["text"].startswith("Version 2 is ready")
-    assert "What changed" in m["body"]["text"] and "exactly as it was in version 1" in m["body"]["text"]
+    assert studio.db.project(pid)["version"] == 3 and m["body"]["text"].startswith("Version 3 is ready")
+    assert "exactly as it was in version 2" in m["body"]["text"]
     # an old card can't run again
     r = client.post(f"/p/{pid}/card", data={"csrf": csrf, "mid": start_card["id"], "k": 0, "choice": "yes"},
                     follow_redirects=False)
@@ -409,7 +421,7 @@ def test_a_film_made_by_talking_to_your_editor(studio, media, monkeypatch):
     assert "not wanted for this film: nobody in shot" in ask_text(studio.db.project(pid))
     # the panel alone, for the page to swap in; signed out it is refused
     panel = client.get(f"/p/{pid}/editor")
-    assert panel.status_code == 200 and 'id="editor"' in panel.text and "Version 2 is ready" in panel.text
+    assert panel.status_code == 200 and 'id="editor"' in panel.text and "Version 3 is ready" in panel.text
     assert TestClient(create_app(studio)).get(f"/p/{pid}/editor").status_code == 401
     # their conversation is theirs: in their export, and gone with the film
     talk = studio.export(friend)["projects"][0]["conversation"]

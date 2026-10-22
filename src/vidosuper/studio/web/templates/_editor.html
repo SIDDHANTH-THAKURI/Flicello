@@ -28,6 +28,12 @@
       {% elif c.done or stale %}<p class="help">That step has passed</p>
       {% else %}<div class="m-taps">{{ card_form(m.id, k, 'yes', c.label, 'btn-sun') }}{{ card_form(m.id, k, 'no', 'Not now', 'btn quiet') }}</div>{% endif %}
     </div>
+    {% elif c.type == 'who' %}
+    <div class="m-card">
+      <p class="m-q">{{ c.question }}</p>
+      {% if c.done %}<p class="help">✓ Done</p>
+      {% else %}<div class="m-faces">{% for f in c.people %}<form method="post" action="/p/{{ p.id }}/card"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="mid" value="{{ m.id }}"><input type="hidden" name="k" value="{{ k }}"><input type="hidden" name="choice" value="{{ f.id }}"><button class="face-btn" type="submit">{% if f.thumb %}<img src="/m/{{ p.id }}/stills/{{ f.thumb }}" alt="">{% endif %}<span>{{ f.label }}<small>{{ f.seconds }} s</small></span></button></form>{% endfor %}</div>{% endif %}
+    </div>
     {% elif c.type == 'remember' %}
     <div class="m-card">
       <p>Keep this for your next films? <q>{{ c.text }}</q></p>
@@ -45,8 +51,8 @@
   <header class="editor-head">
     <span class="editor-mark" aria-hidden="true"></span>
     <div>
-      <h2 id="editor-title">Your editor</h2>
-      <p class="help">Tell me anything about this film, any time. Nothing is made until you tap.</p>
+      <h2 id="editor-title">Cello <small>your editor</small></h2>
+      <p class="help">Say or type anything about this film, any time. Plain changes play at once as a draft; nothing is made until you say.</p>
     </div>
   </header>
   {% set shown = 4 %}
@@ -66,6 +72,32 @@
     <textarea id="talk-text" name="text" rows="2" maxlength="2000" required placeholder="{{ editor_placeholder }}"{% if editor_thinking %} disabled{% endif %}></textarea>
     <button class="btn-sun" type="submit"{% if editor_thinking %} disabled{% endif %}><span>Send</span></button>
   </form>
+  {% set ppl = people|default([]) %}
+  {% if ppl %}
+  <details class="people" id="people">
+    <summary><b>People in your clips</b><span class="muted"> &middot; {{ ppl|length }} found &middot; tap one to say who it is</span></summary>
+    <ul class="people-list">
+      {% for f in ppl[:12] %}
+      <li class="{{ 'never' if f.never else '' }}">
+        {% if f.thumb %}<img src="/m/{{ p.id }}/stills/{{ f.thumb }}" alt="" loading="lazy">{% endif %}
+        <div class="pp-body">
+          <b>{{ 'You' if f.me else (f.name or 'Person ' ~ f.id[1:]) }}</b>
+          <small>{{ f.seconds }} s in {{ f.clips|join(', ') }}{% if not f.near %} &middot; far off{% endif %}{% if f.never %} &middot; never shown{% endif %}</small>
+          {% if editable_spec %}
+          <div class="pp-acts">
+            {% if not f.me %}<form method="post" action="/p/{{ p.id }}/people"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="person" value="{{ f.id }}"><input type="hidden" name="op" value="me"><button class="link" type="submit">That's me</button></form>{% endif %}
+            <form method="post" action="/p/{{ p.id }}/people"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="person" value="{{ f.id }}"><input type="hidden" name="op" value="{{ 'show' if f.never else 'never' }}"><button class="link" type="submit">{{ 'Show again' if f.never else 'Never show' }}</button></form>
+            {% if p.stage == 'done' %}<form method="post" action="/p/{{ p.id }}/people"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="person" value="{{ f.id }}"><input type="hidden" name="op" value="cut"><button class="link" type="submit">Cut their shots</button></form>{% endif %}
+            <form method="post" action="/p/{{ p.id }}/people" class="pp-name"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="person" value="{{ f.id }}"><input type="hidden" name="op" value="name"><input name="name" maxlength="40" placeholder="Name" value="{{ f.name }}" aria-label="Their name"><button class="link" type="submit">Save</button></form>
+          </div>
+          {% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="help">Faces found in your clips and grouped by who they are. Tell me who is who, and say &ldquo;cut where my face shows&rdquo; or &ldquo;never show person 2&rdquo;.</p>
+  </details>
+  {% endif %}
   {% if items %}
   {% set on_items = items|selectattr('on')|list %}
   <details class="brief" id="brief"{% if brief_open %} open{% endif %}>

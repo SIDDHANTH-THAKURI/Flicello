@@ -1,0 +1,17 @@
+.fm-title { position: absolute; inset: 0; }
+.fm-title .title-box { position: absolute; transform: translate(-50%, -50%); text-align: center; white-space: nowrap; }
+/* a soft dark pad behind the type, so it reads on a bright sky as well as at night */
+.fm-title .title-scrim { position: absolute; left: 50%; top: 50%; width: 165%; height: 210%; transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, rgba(0, 0, 0, .34), rgba(0, 0, 0, .2) 40%, rgba(0, 0, 0, .07) 72%, rgba(0, 0, 0, 0));
+  z-index: -1; }
+.fm-title .title-main { display: block; width: max-content; margin: 0 auto; font-weight: 800; line-height: .92; letter-spacing: -0.035em;
+  text-shadow: 0 0.02em 0.14em rgba(0, 0, 0, .42), 0 0.01em 0.02em rgba(0, 0, 0, .3); }
+.fm-title .title-line { display: block; }
+.fm-title .ch { display: inline-block; will-change: transform, opacity, filter; }
+.fm-title .title-sub { display: block; width: max-content; margin: .55em auto 0; font-size: .34em; font-weight: 700; letter-spacing: .3em;
+  text-transform: uppercase; text-shadow: 0 0.05em 0.35em rgba(0, 0, 0, .65), 0 0.02em 0.04em rgba(0, 0, 0, .45); }
+.fm-title .title-bar { display: block; height: .07em; width: .9em; margin: .38em auto 0; border-radius: 1em; transform-origin: 50% 50%;
+  box-shadow: 0 0.03em 0.2em rgba(0, 0, 0, .35); }
+.fm-title .align-left { text-align: left; transform: translate(0, -50%); }
+.fm-title .align-left .title-bar, .fm-title .align-left .title-main, .fm-title .align-left .title-sub { margin-left: 0; }
+.fm-title .align-left .title-bar { transform-origin: 0 50%; }

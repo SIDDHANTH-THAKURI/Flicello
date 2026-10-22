@@ -76,6 +76,7 @@ class Models(_Strict):
     editor: str = "claude-opus-5-5"  # designs and revises the cut
     coach: str = "claude-haiku-4-5-20251001"  # turns feedback into style rules
     assistant: str = "claude-opus-5-5"  # your editor: talks with the person through the whole film (agent.py)
+    watcher: str = "gemini-pro-latest"  # watches each clip with its sound (brain/gemini.py); "" = contact sheets only
     images: str = "gemini-nano-banana-2.1"  # paints the looks' previews and the backdrops (GEMINI_API_KEY)
 
 
@@ -84,6 +85,11 @@ PRICES: dict[str, tuple[float, float, float, float]] = {
     "claude-opus-5-5": (4.0, 20.0, 5.0, 0.2),
     "claude-sonnet-5-5": (2.0, 10.0, 2.5, 0.1),
     "claude-haiku-4-5": (1.0, 5.0, 1.25, 0.1),
+    # Gemini (approximate list prices; video and audio count as input tokens)
+    "gemini-pro": (2.0, 12.0, 0.0, 0.0),
+    "gemini-3.1-pro": (2.0, 12.0, 0.0, 0.0),
+    "gemini-3.8-flash": (0.5, 3.0, 0.0, 0.0),
+    "gemini-3.7-flash": (0.5, 3.0, 0.0, 0.0),
 }
 
 

@@ -1,0 +1,10 @@
+.fm-route { position: absolute; inset: 0; }
+.fm-route .dim { position: absolute; inset: 0; opacity: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, .18), rgba(0, 0, 0, .42)); }
+.fm-route .map { position: absolute; left: 0; top: 0; overflow: visible; }
+.fm-route .dot { position: absolute; left: 0; top: 0; border-radius: 50%; opacity: 0;
+  box-shadow: 0 0 0 .25em rgba(255, 255, 255, .85), 0 0 1.2em .4em rgba(255, 220, 160, .7); }
+.fm-route .pin { position: absolute; border-radius: 50%; background: #fff; transform: translate(-50%, -50%) scale(0);
+  box-shadow: 0 0 0 .32em var(--c), 0 .2em .6em rgba(0, 0, 0, .45); }
+.fm-route .name { position: absolute; white-space: nowrap; color: #fff; font-weight: 800; letter-spacing: -0.01em; opacity: 0;
+  padding: .2em .55em; border-radius: .45em; background: rgba(12, 13, 16, .68); }

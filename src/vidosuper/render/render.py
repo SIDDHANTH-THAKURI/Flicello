@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,7 +17,7 @@ from ..config import Config
 from ..edit.timeline import build_timeline
 from ..edit.validate import Issue, validate_edl
 from ..ffmpeg import ffprobe_json, run_ffmpeg
-from ..schemas import EDL
+from ..schemas import EDL, TextOverlay
 from ..workspace import Project, write_text_atomic
 from .assemble import assemble_video
 from .audio_mix import decode_music, frames_to_samples, mix_timeline, normalize, write_wav
@@ -119,6 +120,51 @@ class RenderResult:
     warnings: list[str] = field(default_factory=list)
 
 
+def motion_layers(edl: EDL, project: Project, timeline, width: int, height: int, faces: list[dict] | None = None,
+                  shots: list | None = None, work: Path | None = None) -> tuple[list[tuple], list[TextOverlay], list[str]]:
+    """The edit's motion graphics, rendered at this size (cached in the project's motion folder): (start, end, video)
+    for each. Where the motion engine can't make one, a title or a name is drawn as still text instead and captions are
+    left out, and the notes say so."""
+    if not edl.motion:
+        return [], [], []
+    from ..motion import MotionError, render as render_block
+    from ..motion.place import layers
+    from ..perceive.prep import load_transcript
+
+    said = {cid: t for cid in {s.clip_id for s in edl.segments} if (t := load_transcript(project, cid)) is not None}
+
+    def make(layer):
+        try:
+            return render_block(layer.block, layer.variables, width, height, timeline.fps, layer.duration,
+                                project.root / "motion"), None
+        except MotionError as e:
+            return None, e
+
+    planned = layers(edl, timeline, said, faces)
+    with ThreadPoolExecutor(max_workers=2) as pool:  # each starts its own Chrome: two at a time
+        results = list(pool.map(make, planned))
+    made, still, notes = [], [], []
+    for layer, (video, e) in zip(planned, results):
+        if video is not None:
+            matte = None
+            if layer.graphic.behind and shots is not None and work is not None:  # the person stands in front of it
+                from .behind import subject_matte
+
+                matte = subject_matte(timeline, shots, layer.start, layer.end, (width, height),
+                                      work / f"matte_{len(made)}.mkv")
+                if matte is None:
+                    notes.append(f"the {layer.block} at {layer.start:.1f} s is in front of the person (no cut-out model)")
+            made.append((layer.start, layer.end, video, matte))
+        elif layer.block == "captions":
+            notes.append(f"captions {layer.start:.1f}-{layer.end:.1f} s left out: {e}")
+        else:
+            notes.append(f"the {layer.block} at {layer.start:.1f} s is still text: {e}")
+            still.append(TextOverlay(text=layer.graphic.text.replace("\n", " "), start=layer.start, end=layer.end,
+                                     position="center" if layer.block == "title" else "lower-third",
+                                     size="large" if layer.block == "title" else "medium", style="bold"))
+    return made, still, notes
+
+
 def draft_canvas(width: int, height: int, short_side: int) -> tuple[int, int]:
     scale = short_side / min(width, height)
     return max(2, round(width * scale / 2) * 2), max(2, round(height * scale / 2) * 2)
@@ -126,9 +172,10 @@ def draft_canvas(width: int, height: int, short_side: int) -> tuple[int, int]:
 
 def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft",
                out_path: Path | None = None, on_shot: Callable[[], None] | None = None,
-               tail: Tail | None = None, head: Tail | None = None) -> RenderResult:
+               tail: Tail | None = None, head: Tail | None = None, faces: list[dict] | None = None) -> RenderResult:
     """tail / head: something to play after / before the film (the outro / the intro), already rendered at
-    this size and fps, with its own sound at its own level."""
+    this size and fps, with its own sound at its own level. faces: where people's faces are in the clips (the face
+    index's appearances), which the motion graphics keep clear of."""
     if quality not in ("draft", "final"):
         raise ValueError("quality must be 'draft' or 'final'")
     started = time.perf_counter()
@@ -152,11 +199,12 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
     shots = render_segments(timeline, width, height, quality, cfg, project.segments / quality, on_shot,
                             look_name=meta.look, item_looks=adaptive_looks(timeline, project, meta.look),
                             stabilize=meta.stabilize)
-    texts = [(t, render_text_png(t, width, height, work / f"text_{k}.png")) for k, t in enumerate(edl.texts)]
+    graphics, still, motion_notes = motion_layers(edl, project, timeline, width, height, faces, shots, work)
+    texts = [(t, render_text_png(t, width, height, work / f"text_{k}.png")) for k, t in enumerate([*edl.texts, *still])]
     video_only = assemble_video(timeline, shots, meta, quality, cfg, work / "picture.mp4", work,
                                 texts=texts, size=(width, height),
                                 tail=(tail.video, tail.frames) if tail else None,
-                                head=(head.video, head.frames) if head else None)
+                                head=(head.video, head.frames) if head else None, graphics=graphics)
 
     music_wav = decode_music(edl.music.path, project.music) if edl.music and edl.music.path else None
     layers = [(layer, resolve_sound(layer.source, clips, project)) for layer in edl.sounds]
@@ -198,7 +246,7 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
         shots_rendered=sum(1 for s in shots if not s.cached), seconds=round(time.perf_counter() - started, 1),
         loudness_measured=None if measured is None else round(measured, 1),
         loudness_gain_db=None if gain_db is None else round(gain_db, 1),
-        warnings=[str(i) for i in issues if i.level == "warning"] + timeline.notes,
+        warnings=[str(i) for i in issues if i.level == "warning"] + timeline.notes + motion_notes,
     )
     sidecar = project.renders / f"{out_path.stem}.render.json"
     write_text_atomic(sidecar, json.dumps({"result": asdict(result), "edl": edl.model_dump(mode="json")}, indent=2))

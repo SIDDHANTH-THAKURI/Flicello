@@ -16,6 +16,7 @@ stage is one job in the queue; the worker runs them one at a time.
 from __future__ import annotations
 
 import json
+import re
 import logging
 import secrets
 import time
@@ -24,7 +25,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .alerts import alert
-from .brain import BrainError, BudgetExceeded, PersonLimit, Usage, brain_kind_for, make_brain
+from .brain import BrainError, BudgetExceeded, PersonLimit, Usage, brain_kind_for, make_brain, make_watcher
 from .brain.context import look_from_note, pace_from_note
 from .brain.schemas import ChangeOp, DesignPlan, Direction, StoryPitch
 from .db import DB, JobStopped
@@ -57,8 +58,8 @@ BUSY = {"preparing", "pitching", "sampling", "rendering", "revising", "composing
 log = logging.getLogger("vidosuper.studio.service")
 JOB_STAGE = {"prepare": "preparing", "pitch": "pitching", "sample": "sampling", "render": "rendering",
              "revise": "revising", "beat": "composing", "changes": "reading"}
-PRIORITY = {"changes": 1, "strip": 2, "beat": 2, "pitch": 2, "sample": 3, "learn": 4, "prepare": 5, "render": 6,
-            "revise": 6}  # short jobs first
+PRIORITY = {"changes": 1, "draft": 1, "export": 1, "generate": 2, "effect": 2, "music_edit": 2, "strip": 2, "beat": 2, "copies": 2, "pitch": 2, "sample": 3, "learn": 4,
+            "prepare": 5, "render": 6, "revise": 6}  # short jobs first
 FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad shots", "shaky", "too short",
                  "too long", "didn't follow my idea", "colour", "sound"]
 LENGTHS = (15, 30, 45, 60, 90, 120, 180, 300, 600)  # who may ask for which: Studio.lengths_for (access levels)
@@ -154,6 +155,18 @@ def service_refused(exc: BaseException) -> bool:
         or "credit balance is too low" in text
 
 
+def graphics_notes(edl_path: Path) -> list[str]:
+    """What they should know about the graphics they asked for: captions with nobody heard have nothing to show."""
+    from ..schemas import EDL
+
+    edl = EDL.model_validate_json(edl_path.read_text(encoding="utf-8"))
+    captions = [g for g in edl.motion if g.kind == "captions"]
+    if captions and not any(g.words for g in captions):
+        return ["Nobody is heard in this film (its shots play the music, not their own sound), so the captions have "
+                "nothing to show"]
+    return []
+
+
 class Studio:
     def __init__(self, s: StudioSettings):
         self.s = s.ensure()
@@ -171,6 +184,42 @@ class Studio:
     @staticmethod
     def is_owner(user: dict) -> bool:
         return user["role"] == "owner"
+
+    def set_brand(self, user: dict, name: str = "", color: str = "", font: str = "", logo: bytes | None = None,
+                  drop_logo: bool = False) -> dict:
+        """Their brand kit, kept with their style: a name, a colour every graphic takes, a type, and a logo shown in a
+        corner of their films (a picture, made a small PNG and kept inside their profile)."""
+        import base64
+        import io
+        import re as _re
+
+        from PIL import Image
+
+        prof = self.profile(user)
+        brand = dict(prof.answers.get("brand") or {})
+        brand["name"] = " ".join(str(name).split())[:40]
+        if color and not _re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            raise ActionError("A colour like #ff5a36.")
+        brand["color"] = color.lower()
+        brand["font"] = font if font in ("display", "serif", "mono") else "display"
+        if drop_logo:
+            brand.pop("logo", None)
+        elif logo:
+            try:
+                img = Image.open(io.BytesIO(logo))
+                img.load()
+            except Exception as exc:  # noqa: BLE001 - not a picture
+                raise ActionError("The logo must be a picture (PNG, JPG or WebP).") from exc
+            img = img.convert("RGBA")
+            img.thumbnail((512, 512))
+            buf = io.BytesIO()
+            img.save(buf, "PNG", optimize=True)
+            if buf.tell() > 400_000:
+                raise ActionError("That logo is too detailed: try a simpler PNG.")
+            brand["logo"] = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        prof.answers["brand"] = brand
+        prof.save()
+        return brand
 
     def profile(self, user: dict) -> Profile:
         p = Profile.load(user_dir(self.s, user["id"]) / "profile.json")
@@ -550,6 +599,8 @@ class Studio:
         remove_project_files(workdir(self.s, project["user_id"], project["id"]), self.cfg)
         self.db.run("UPDATE projects SET deleted=1, updated=? WHERE id=?", (time.time(), project["id"]))
         self.db.run("DELETE FROM messages WHERE project_id=?", (project["id"],))
+        self.db.run("DELETE FROM review_notes WHERE project_id=?", (project["id"],))
+        self.db.run("DELETE FROM review_links WHERE project_id=?", (project["id"],))
         owner = self.user(project["user_id"])
         if owner and int(project.get("credits") or 0) > 0 and not project["version"]:  # never finished
             self._refund(owner, project, int(project["credits"]), "deleted before it was finished")
@@ -1100,11 +1151,11 @@ class Studio:
             sections = made.layout(seconds, sound.bpm, purpose)
             try:
                 done = compose_plan(made.plan(sections, sound, purpose, reference=ref if row["song_id"] else None),
-                                    work.beats / name)
+                                    work.beats / name, store=True)  # kept there: a stretch of it can be made again
             except ComposeError:
                 if not row["song_id"]:
                     raise
-                done = compose_plan(made.plan(sections, sound, purpose), work.beats / name)
+                done = compose_plan(made.plan(sections, sound, purpose), work.beats / name, store=True)
                 note = " (made from the same description: the taste itself could no longer be used as a reference)"
             self._spend_music(project, user, job, done["seconds"], time.time() - t0)
         except ComposeError as exc:
@@ -1114,6 +1165,8 @@ class Studio:
             note = " The music service couldn't make the full track, so the film uses our own simple beat."
         self.db.run("UPDATE beats SET full_file=?, facts=?, seconds=? WHERE id=?",  # seconds: the length it's made for
                     (name, (self._beat_facts(work.beats / name, purpose) + note).strip(), seconds, row["id"]))
+        if not note and "done" in locals() and done.get("song_id"):
+            self.db.run("UPDATE beats SET full_song_id=? WHERE id=?", (done["song_id"], row["id"]))
         return self.beat_row(project, row["id"])
 
     def _track_fits(self, project: dict, row: dict) -> bool:
@@ -1612,7 +1665,7 @@ class Studio:
         before = [r["text"] for r in self.db.all("SELECT text FROM feedback WHERE project_id=? AND stage='change' AND "
                                                  "text<>'' ORDER BY id", (project["id"],))][:-1]
         text = versions.request_text(version, cards, ctx.beats, versions.unused_moments(plan, ctx.facts, ctx.bans),
-                                     earlier, ctx.bans, params["text"], before)
+                                     earlier, ctx.bans, params["text"], before, graphics=plan.graphics)
         self.db.job_progress(job["id"], 0.3, "Reading what you asked for")
         try:
             req = pipe.brain.read_changes(text, params["text"], len(cards), ctx.facts, counts)
@@ -1707,15 +1760,32 @@ class Studio:
         pipe.natural_sound = project.get("sound") == "natural"
         # no sound from the clips: asked for in this film's words (the mix obeys, music or not), or their style says
         # "music only" and music plays (unless this film's own words ask to hear its clips)
-        pipe.mute_clips = project.get("sound") == "silent" or (
-            project["kind"] == "montage" and not pipe.no_music and self.profile(user).answers.get("sound") == "music"
-            and not requirements.wants_clip_sound(ask_text(project)))
+        pipe.mute_clips = self._mutes_clips(project, user, pipe.no_music)
+        pipe.brand = dict(self.profile(user).answers.get("brand") or {})
+        pipe.mute_effects = project.get("sound") == "silent" or bool(
+            re.search(r"\b(?:no|without)\s+(?:sound\s+)?effects?\b|\bno\s+sfx\b", ask_text(project), re.I))
         kind = brain_kind_for(self.s, owner)
         pipe.brain = make_brain(kind, self.s, self._spender(project, user["id"], job["id"]), work.brain,
                                 pipe.project.load_signals)
+        pipe.watcher = make_watcher(kind, self.s, self._spender(project, user["id"], job["id"]), work.brain)
         if hasattr(getattr(pipe.brain, "backend", None), "pulse"):
             pipe.brain.backend.pulse = pulse
         return pipe
+
+    def _grade(self, project: dict, user: dict, plan: DesignPlan | None = None) -> str:
+        """The film's grade: its edit style's, else their words and their style's."""
+        from . import styles
+
+        if plan is not None and plan.style in styles.STYLES:
+            return styles.STYLES[plan.style].look
+        return look_from_note(project["intent"], self.profile(user).look)
+
+    def _mutes_clips(self, project: dict, user: dict, no_music: bool) -> bool:
+        """No sound from the clips: asked for in this film's words (the mix obeys, music or not), or their style says
+        "music only" and music plays (unless this film's own words ask to hear its clips)."""
+        return project.get("sound") == "silent" or (
+            project["kind"] == "montage" and not no_music and self.profile(user).answers.get("sound") == "music"
+            and not requirements.wants_clip_sound(ask_text(project)))
 
     def _context(self, pipe: Pipeline, project: dict, user: dict, start_at: float | None = None):
         items = self.spec_items(project, user)
@@ -2495,7 +2565,7 @@ class Studio:
             self._save_checks(project, "sample", specs.checklist(self.spec_items(project, user), plan, ctx, rows=rows))
         except Exception:  # noqa: BLE001 - the checklist reports; the sample is made without it
             log.warning("could not check the sample of %s", project["id"], exc_info=True)
-        info = pipe.sample(ctx, plan, shape, f"sample-{plan_id}", look=look_from_note(project["intent"], self.profile(user).look))
+        info = pipe.sample(ctx, plan, shape, f"sample-{plan_id}", look=self._grade(project, user, plan))
         self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, created) "
                     "VALUES (?,?,?,?,?,?,?,?,?)", (project["id"], plan_id, project["version"], "sample", shape, info.path,
                                                    info.seconds, info.render_seconds, time.time()))
@@ -2508,7 +2578,7 @@ class Studio:
         used = sum(1 for clip, t in impacts if any(m.clip == clip and m.start - 0.05 <= t <= m.end + 0.05 for m in plan.pool))
         return requirements.montage(project, mean_shot=mean, shots=shots, hits_total=len(impacts), hits_used=used,
                                     seconds=seconds, music_playing=not (project["music"] == "none" and not project["song"]),
-                                    look=look_from_note(project["intent"], self.profile(user).look))
+                                    look=self._grade(project, user, plan))
 
     def _note_requirements(self, project: dict, rows: list[dict], where: str) -> None:
         bad = requirements.unmet(rows)
@@ -2518,7 +2588,7 @@ class Studio:
     def _render_plan(self, job, project, user, pipe: Pipeline, ctx, plan: DesignPlan, plan_id: int,
                      base: int | None = None, changes: list[str] | None = None) -> None:
         version = project["version"] + 1
-        infos = pipe.render(ctx, plan, self.shapes(project), version, look=look_from_note(project["intent"], self.profile(user).look))
+        infos = pipe.render(ctx, plan, self.shapes(project), version, look=self._grade(project, user, plan))
         for info in infos:
             rows = self._montage_requirements(project, user, ctx, plan, info.seconds)
             info.findings.extend(rows)
@@ -2545,7 +2615,54 @@ class Studio:
                 first.seconds if first else None, float(project["length"])))
         except Exception:  # noqa: BLE001 - the checklist reports; the film is made without it
             log.warning("could not check version %s of %s", version, project["id"], exc_info=True)
+        try:  # ready to post? measured on the version as made
+            self._save_ready(pipe, self.db.project(project["id"]), plan, ctx, strip, version,
+                             infos[0].seconds if infos else 0.0)
+        except Exception:  # noqa: BLE001 - a score to help; the film is made without it
+            log.warning("could not score version %s of %s", version, project["id"], exc_info=True)
         self.db.set_stage(project["id"], "done")
+
+    def _save_ready(self, pipe: Pipeline, project: dict, plan: DesignPlan, ctx, strip, version: int,
+                    seconds: float) -> dict:
+        from ..edit.timeline import build_timeline
+        from ..motion.place import speech_words
+        from ..perceive.prep import load_transcript
+        from ..schemas import EDL
+        from . import ready, versions
+
+        shape = self.shapes(project)[0]
+        edl = EDL.model_validate_json(versions.edl_path(pipe.work.out, version, shape).read_text(encoding="utf-8"))
+        said = {cid: t for cid in {seg.clip_id for seg in edl.segments}
+                if (t := load_transcript(pipe.project, cid)) is not None}
+        speech = bool(speech_words(build_timeline(edl, pipe.project.clips()), said))
+        checks = (self._info(project).get("checks") or {}).get(str(version))
+        viewer = None
+        if getattr(pipe, "watcher", None) is not None and hasattr(pipe.watcher, "review"):
+            try:  # an AI viewer watches the version itself
+                self.db.event(project["id"], "A viewer's eye: watching the version", "info")
+                viewer = pipe.watcher.review(pipe.work.out / f"v{version}-{shape.replace(':', 'x')}.mp4",
+                                             "Instagram Reels and TikTok" if shape == "9:16" else "YouTube")
+            except Exception:  # noqa: BLE001 - the measured parts still score it
+                log.warning("the viewer couldn't watch v%s of %s", version, project["id"], exc_info=True)
+        result = ready.assess(plan, ctx.facts, (strip or {}).get("cards") or [], edl.motion, seconds, shape == "9:16",
+                              speech, checks, viewer)
+        board = self._info(project).get("ready") or {}
+        board[str(version)] = result
+        self._set_info(project, ready={k: board[k] for k in sorted(board, key=int)[-10:]})
+        return result
+
+    def ready_of(self, project: dict) -> dict | None:
+        """The ready-to-post score of the version they work on."""
+        return (self._info(project).get("ready") or {}).get(str(self.work_version(project)))
+
+    def fix_ready(self, user: dict, project: dict, part: str) -> int:
+        """One weak part of the score fixed as a draft (seconds): open on the stronger shot, a title, captions."""
+        board = self.ready_of(project) or {}
+        found = next((x for x in board.get("parts") or [] if x["id"] == part and x.get("fix")), None)
+        if found is None:
+            raise ActionError("That part has nothing to fix.")
+        op = ChangeOp.model_validate({**found["fix"], **({"text": project["title"]} if found["fix"]["op"] == "title" else {})})
+        return self.ask_draft(user, project, [op.model_dump()], [found["fix_says"]], found["fix_says"])
 
     def _job_render(self, job, project, user):
         if project["kind"] != "montage":
@@ -2560,6 +2677,8 @@ class Studio:
     def _job_revise(self, job, project, user):
         if project["kind"] != "montage":
             return self._job_explainer(job, project, user, "revise")
+        if "plan_id" in job["params"]:
+            return self._revise_plan(job, project, user)
         if "ops" in job["params"]:
             return self._revise_ops(job, project, user)
         pipe = self._pipeline(job, project, user, 0.0, 0.25)
@@ -2580,13 +2699,26 @@ class Studio:
     def _revise_ops(self, job, project, user):
         """Make the changes they checked on the version they picked: by code on the plan pinned to that version's
         frames (every shot not named stays as it was), and the AI only for a stretch they want made again."""
+        pipe = self._pipeline(job, project, user, 0.0, 0.3)
+        version, row, ctx, new, lines = self._apply_ops(job, project, user, pipe)
+        plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
+                              (project["id"], "change", row["pitch_id"], new.model_dump_json(), time.time()))
+        pipe.progress = lambda f, m: self.db.job_progress(job["id"], 0.3 + 0.7 * f, m)
+        self._render_plan(job, project, user, pipe, ctx, new, plan_id, base=version, changes=lines)
+
+    def _apply_ops(self, job, project, user, pipe):
+        """The changes in the job made on the plan of the version they work on: (version, its plan row, context, the
+        new plan, what was done in words)."""
         from . import versions
         from .brain.core import check_plan
 
         params = job["params"]
         version = int(params.get("base") or self.work_version(project))
         row, plan, _ = self._version_plan(project, version)
-        pipe = self._pipeline(job, project, user, 0.0, 0.3)
+        on = params.get("on") and self.db.one("SELECT data FROM plans WHERE id=? AND project_id=?",
+                                              (int(params["on"]), project["id"]))
+        if on:  # made on the draft they were watching (its shots, its numbers)
+            plan = DesignPlan.model_validate_json(on["data"])
         ctx = self._context(pipe, project, user, start_at=plan.start_at)
         _, pitch = self._chosen(project, row["pitch_id"])
         ops = [ChangeOp.model_validate(o) for o in params["ops"]]
@@ -2597,7 +2729,7 @@ class Studio:
                     earlier[o.from_version] = self._version_plan(project, o.from_version)[1]
                 except ActionError:
                     pass
-        strip = self.strip_of(project, version)
+        strip = None if on else self.strip_of(project, version)
         labels = ({c["n"]: c["what"] for c in strip["cards"]} if strip and strip.get("cards")
                   else {n: what for n, _, what in versions.labels_from_plan(plan, ctx.facts)})
         self.db.job_progress(job["id"], 0.05, f"Changing version {version}: only the shots you named")
@@ -2613,11 +2745,579 @@ class Studio:
         problems = check_plan(new, ctx, taste=False)
         if problems:
             self.db.event(project["id"], "changes left: " + "; ".join(problems)[:500], "info", job["id"])
+        return version, row, ctx, new, done.lines + [f"Not done: {x}" for x in done.skipped]
+
+    # ------------------------------------------------------------------ drafts and the instant preview (preview.py)
+    def ask_draft(self, user: dict, project: dict, ops: list[dict], said: list[str], text: str = "",
+                  on_draft: bool = True) -> int:
+        """Their changes as a draft: the edit list only (a few seconds, no render), played at once in the browser.
+        Nothing is made, and no change is used up, until they say "make it". With a draft on screen the changes are
+        made on it (its shot numbers), unless `on_draft` is False (numbers from the version itself)."""
+        self._guard(project, "done")
+        if not ops:
+            raise ActionError("Say which shots to change.")
+        version = self.work_version(project)
+        params = {"ops": ops, "said": said, "text": " ".join(str(text).split())[:600], "base": version}
+        draft = self.draft_of(project)
+        if on_draft and draft and int(draft.get("base") or 0) == version:  # watching a draft: made on it
+            params["on"] = draft["plan_id"]
+        return self._enqueue(project, "draft", params)
+
+    # ------------------------------------------------------------------ the hands-on timeline (frontend timeline.js)
+    def timeline_of(self, project: dict, which: str) -> dict:
+        """The film as the timeline shows it: each shot (numbered as they see them) with its time, beats, kind and
+        still, and the graphics on it; for the draft on screen or a version."""
+        from . import versions
+
+        data = self.preview_of(project, which)
+        plan = self.draft_plan(project) if which == "draft" else self._version_plan(project, int(which))[1]
+        strip = self.strip_of(project, self.work_version(project)) or {}
+        thumbs = {}
+        for c in strip.get("cards") or []:
+            thumbs.setdefault(c.get("moment"), c.get("thumb"))
+        by_key = {}
+        for c, s in zip(strip.get("cards") or [], (self._version_plan(project, self.work_version(project))[1].plan
+                                                   if strip.get("cards") else [])):
+            by_key.setdefault(s.key, c.get("thumb"))
+        shots = []
+        for n, s in enumerate(plan.plan, start=1):
+            pieces = [x for x in data["shots"] if x["n"] == n]
+            if not pieces:
+                continue
+            shots.append({"n": n, "start": pieces[0]["start"], "end": pieces[-1]["end"], "beats": versions.span(s),
+                          "kind": s.kind, "thumb": by_key.get(s.key) or "", "clip": pieces[0]["clip"]})
+        return {"which": which, "duration": data["duration"], "shots": shots,
+                "graphics": [g.model_dump(exclude={"x", "y", "accent", "by"}) for g in plan.graphics],
+                "motion": [{"block": m["block"], "start": m["start"], "end": m["end"]} for m in data.get("motion", [])],
+                "style": plan.style}
+
+    def manual_edit(self, user: dict, project: dict, ops: list[dict], said: list[str]) -> int:
+        """Changes made by hand on the timeline: a draft at once, like a plain ask, and remembered as what they do by
+        hand (the learning pass reads it)."""
+        clean = [ChangeOp.model_validate(o).model_dump() for o in ops][:12]
+        if not clean:
+            raise ActionError("Nothing to change.")
+        self.db.run("INSERT INTO feedback(project_id, user_id, stage, version, text, created) VALUES (?,?,?,?,?,?)",
+                    (project["id"], user["id"], "manual", self.work_version(project), "; ".join(said)[:600], time.time()))
+        return self.ask_draft(user, project, clean, [str(x)[:200] for x in said][:12], "; ".join(said)[:600])
+
+    # ------------------------------------------------------------------ review links (for clients and teammates)
+    def review_link(self, user: dict, project: dict) -> str:
+        """A private link to the version they work on: anyone with it can watch it and leave notes at a moment. One live
+        link per version (asking again gives the same one)."""
+        self._guard(project, "done")
+        version = self.work_version(project)
+        row = self.db.one("SELECT token FROM review_links WHERE project_id=? AND version=? AND revoked=0",
+                          (project["id"], version))
+        if row:
+            return row["token"]
+        token = secrets.token_urlsafe(18)
+        self.db.run("INSERT INTO review_links(token, project_id, version, created) VALUES (?,?,?,?)",
+                    (token, project["id"], version, time.time()))
+        return token
+
+    def revoke_review(self, project: dict, token: str) -> None:
+        self.db.run("UPDATE review_links SET revoked=1 WHERE token=? AND project_id=?", (token, project["id"]))
+
+    def review_by_token(self, token: str) -> tuple[dict, dict] | None:
+        """(link, film) for a live link (None: no such link, or switched off, or the film is gone)."""
+        link = self.db.one("SELECT * FROM review_links WHERE token=? AND revoked=0", (str(token)[:64],))
+        project = self.db.project(link["project_id"]) if link else None
+        if not link or not project or project.get("deleted"):
+            return None
+        return dict(link), project
+
+    def add_review_note(self, token: str, at: float, name: str, text: str) -> None:
+        found = self.review_by_token(token)
+        if not found:
+            raise ActionError("This review link isn't open any more.")
+        link, project = found
+        text = " ".join(str(text).split())[:1000]
+        if not text:
+            raise ActionError("Write a note.")
+        if self.db.one("SELECT COUNT(*) AS n FROM review_notes WHERE token=?", (token,))["n"] >= 300:
+            raise ActionError("This link has as many notes as it can take.")
+        self.db.run("INSERT INTO review_notes(token, project_id, version, at, name, text, created) VALUES (?,?,?,?,?,?,?)",
+                    (token, project["id"], link["version"], max(0.0, min(3600.0, float(at))),
+                     " ".join(str(name).split())[:40], text, time.time()))
+
+    def review_notes(self, project: dict, open_only: bool = False) -> list[dict]:
+        rows = self.db.all("SELECT * FROM review_notes WHERE project_id=?" + (" AND done=0" if open_only else "")
+                           + " ORDER BY version DESC, at, id", (project["id"],))
+        return [dict(r) for r in rows]
+
+    def settle_note(self, project: dict, note_id: int) -> None:
+        self.db.run("UPDATE review_notes SET done=1 WHERE id=? AND project_id=?", (int(note_id), project["id"]))
+
+    # ------------------------------------------------------------------ platforms and exports (exports.py)
+    def set_platform(self, user: dict, project: dict, platform: str) -> str:
+        """'Make it for Instagram': the film's shape for that platform, kept for their next films; a finished film in
+        another shape gets a version in this one (the same cut, laid out again). Returns what Cello says."""
+        from . import exports
+
+        spec = exports.PLATFORMS[platform]
+        prof = self.profile(user)
+        prof.answers["platform"] = platform
+        prof.save()
+        said = [f"For {spec['name']}: {spec['shape']}, and {spec['best'][0]}-{spec['best'][1]} s does best there."]
+        if project["shapes"] in (spec["shape"], "both"):
+            return " ".join(said + ["This film is already in that shape. Your next films start this way too."])
+        old = project["shapes"]
+        self.db.run("UPDATE projects SET shapes=? WHERE id=?", (spec["shape"], project["id"]))
+        if project["stage"] == "done" and not self.db.active_job(project["id"]):
+            row = self._version_plan(project, self.work_version(project))[0]
+            self._check_revisions(user, project)
+            self.db.run("UPDATE projects SET revisions=revisions+1 WHERE id=?", (project["id"],))
+            self._enqueue(self.db.project(project["id"]), "revise", {
+                "plan_id": row["id"], "base": self.work_version(project),
+                "said": [f"The same cut in {spec['shape']} for {spec['name']} (it was {old})"], "text": spec["name"]})
+            said.append(f"I'm making this film in {spec['shape']} now (a few minutes); your next films start that way too.")
+        else:
+            said.append("This film will be made in that shape, and your next films start that way too.")
+        return " ".join(said)
+
+    # ------------------------------------------------------------------ AI-made clips (create/higgsfield.py)
+    def generate_clip(self, user: dict, project: dict, prompt: str, shot: int | None = None, seconds: int = 5) -> int:
+        """A clip made from their words by an AI video model; with a shot number it takes that shot's place, as a draft."""
+        from ..create import higgsfield
+
+        self._guard(project, "done")
+        prompt = " ".join(str(prompt).split())[:600]
+        if len(prompt) < 4:
+            raise ActionError("Say what the clip should show.")
+        if not higgsfield.available():
+            raise ActionError("AI clips need the Higgsfield API key (HF_API_KEY_ID and HF_API_KEY_SECRET in .env).")
+        self._check_revisions(user, project)
+        return self._enqueue(project, "generate", {"prompt": prompt, "shot": shot, "seconds": seconds})
+
+    def _job_generate(self, job, project, user):
+        from ..create import higgsfield
+        from .brain.backends import Usage
+
+        params = job["params"]
+        pipe = self._pipeline(job, project, user)
+        k = len(list(pipe.work.clips.glob("ai-*.mp4"))) + 1
+        out = pipe.work.clips / f"ai-{k:02d}.mp4"
+        shape = self.shapes(project)[0]
+        self.db.job_progress(job["id"], 0.1, "An AI video model is making your clip (a minute or two)")
+        t0 = time.monotonic()
+        made = higgsfield.generate(params["prompt"], out, seconds=int(params.get("seconds") or 5), aspect=shape)
+        self._spender(project, user["id"], job["id"])(Usage("generate", made["model"], "higgsfield", usd=made["usd"],
+                                                            seconds=round(time.monotonic() - t0, 1)))
+        self.db.event(project["id"], f"AI clip ai-{k:02d} made: {params['prompt'][:120]} (${made['usd']:.2f})", "info", job["id"])
+        self._swap_in(job, project, user, pipe, out, params.get("shot"), params["prompt"])
+
+    def _swap_in(self, job, project, user, pipe, out: Path, shot: int | None, what: str) -> None:
+        """A new clip (made by AI or by an effect) logged, then in the place of a shot as a draft."""
+        self.db.job_progress(job["id"], 0.75, "Watching the new clip")
+        pipe.analyse(project["length"], project["pace"])
+        params = {"shot": shot, "prompt": what}
+        if params.get("shot"):
+            from ..perceive.catalog import short_ids
+
+            shorts = short_ids(pipe.project)
+            cid = next((c.clip_id for c in pipe.project.clips().values() if Path(c.rel_path).name == out.name), None)
+            short = shorts.get(cid) if cid else None
+            if short:  # the draft is made in this same step (on the draft on screen, if any)
+                project = self.db.project(project["id"])
+                draft = self.draft_of(project)
+                version = self.work_version(project)
+                self._job_draft({**job, "params": {
+                    "ops": [ChangeOp(op="replace", shot=int(params["shot"]), moment=f"{short}#1").model_dump()],
+                    "said": [f"Shot {params['shot']} is your AI clip: {params['prompt'][:80]}"], "text": params["prompt"],
+                    "base": version, **({"on": draft["plan_id"]} if draft and int(draft.get("base") or 0) == version else {})}},
+                    project, user)
+
+    # ------------------------------------------------------------------ effects that make a new clip (create/effects.py)
+    EFFECTS = {"parallax": "a 3D photo (a slow camera move with depth)", "remove": "the object taken out",
+               "upscale": "sharpened and upscaled"}
+
+    def ask_effect(self, user: dict, project: dict, kind: str, shot: int, want: str = "") -> int:
+        self._guard(project, "done")
+        if kind not in self.EFFECTS:
+            raise ActionError("Pick an effect.")
+        if kind == "remove" and not want.strip():
+            raise ActionError("Say what to take out of the shot.")
+        self._check_revisions(user, project)
+        return self._enqueue(project, "effect", {"kind": kind, "shot": int(shot), "want": want.strip()[:120]})
+
+    def _job_effect(self, job, project, user):
+        import cv2
+        import numpy as np
+
+        from ..create import effects
+        from ..graphics.track import SceneTracker, transform_point
+        from ..perceive.catalog import short_ids
+
+        params = job["params"]
+        kind, n = params["kind"], int(params["shot"])
+        pipe = self._pipeline(job, project, user)
+        plan = self.draft_plan(project) or self._version_plan(project, self.work_version(project))[1]
+        if not 1 <= n <= len(plan.plan):
+            raise ActionError(f"There is no shot {n}.")
+        m = {x.key: x for x in plan.pool}[plan.plan[n - 1].key]
+        cid = next((c for c, sh in short_ids(pipe.project).items() if sh == m.clip), None)
+        clip = pipe.project.clips().get(cid) if cid else None
+        if clip is None:
+            raise ActionError(f"Shot {n}'s clip can't be found.")
+        video = Path(clip.path)
+        k = len(list(pipe.work.clips.glob("fx-*.mp4"))) + 1
+        out = pipe.work.clips / f"fx-{k:02d}.mp4"
+        start, end = float(m.start), float(m.end)
+        self.db.job_progress(job["id"], 0.1, f"Making shot {n} {self.EFFECTS[kind]}")
+        if kind == "parallax":
+            rgb = next(effects.frames(video, start + 0.3, start + 0.4, 1920))
+            effects.parallax(rgb, out, seconds=max(3.0, end - start + 0.5), fps=clip.fps or 30.0)
+        elif kind == "upscale":
+            effects.upscale(video, start, end, out)
+        else:
+            if pipe.watcher is None or not hasattr(pipe.watcher, "find_box"):
+                raise ActionError("Finding things in shots needs the Gemini key (GEMINI_API_KEY).")
+            first = next(effects.frames(video, start, start + 0.1, 1280))
+            ok, jpeg = cv2.imencode(".jpg", first[..., ::-1])
+            box = pipe.watcher.find_box(jpeg.tobytes(), params["want"]) if ok else None
+            if box is None:
+                raise ActionError(f"I couldn't find {params['want']} in shot {n}.")
+            tracker, track, t = None, [], 0.0
+            for rgb in effects.frames(video, start, end, 960):  # the box follows it as the camera moves
+                if tracker is None:
+                    tracker = SceneTracker(rgb.shape[1], rgb.shape[0])
+                h = tracker.update(rgb)
+                x, y = transform_point(h, box[0] * rgb.shape[1], box[1] * rgb.shape[0])
+                track.append([round(t, 3), x / rgb.shape[1], y / rgb.shape[0]])
+                t += 1.0 / (clip.fps or 30.0)
+            effects.remove(video, start, end, track or [[0, box[0], box[1]]], (box[2], box[3]), out)
+        self.db.event(project["id"], f"Effect: shot {n} {self.EFFECTS[kind]} ({out.name})", "info", job["id"])
+        self._swap_in(job, project, user, pipe, out, n, f"shot {n} {self.EFFECTS[kind]}")
+
+    # ------------------------------------------------------------------ a stretch of the music made again (music/sections.py)
+    def edit_music(self, user: dict, project: dict, start: float | None, end: float | None, want: str) -> int:
+        """'Make the ending calmer': that stretch of the film's made track written again, the rest kept note for note,
+        then the film made again on it (a new version: the cut stays exactly as it was)."""
+        self._guard(project, "done")
+        row = self.beat_row(project, project.get("beat"))
+        song_id = (row or {}).get("full_song_id") or ((row or {}).get("song_id") if (row or {}).get("whole") else None)
+        if not song_id:
+            raise ActionError("Only music made here can be changed in one stretch; this film's track can't (yet).")
+        self._check_revisions(user, project)
+        return self._enqueue(project, "music_edit", {"start": start, "end": end, "want": " ".join(want.split())[:200]})
+
+    def _job_music_edit(self, job, project, user):
+        import soundfile as sf
+
+        from ..music.sections import remake
+
+        params = job["params"]
+        row = self.beat_row(project, project.get("beat"))
+        work = workdir(self.s, project["user_id"], project["id"]).ensure()
+        song_id = row.get("full_song_id") or row.get("song_id")
+        current = work.beats / (row["full_file"] or row["file"])
+        length = float(sf.info(str(current)).duration)
+        start = float(params["start"]) if params.get("start") is not None else 0.0
+        end = float(params["end"]) if params.get("end") is not None else length
+        words = params["want"]
+        styles = [w.strip() for w in re.split(r",|\band\b", words) if w.strip()][:6] or ["calmer"]
+        k = len(list(work.beats.glob(f"{current.stem.split('-e')[0]}-e*.mp3"))) + 1
+        out = work.beats / f"{current.stem.split('-e')[0]}-e{k}.mp3"
+        self.db.job_progress(job["id"], 0.1, f"Writing {int(start) // 60}:{int(start) % 60:02d}-"
+                             f"{int(end) // 60}:{int(end) % 60:02d} of the music again: {words}")
+        t0 = time.time()
+        done = remake(song_id, length, start, end, styles, [], out)
+        self._spend_music(project, user, job, max(3.0, end - start), time.time() - t0)
+        self.db.run("UPDATE beats SET full_file=?, full_song_id=? WHERE id=?", (out.name, done.get("song_id") or song_id, row["id"]))
+        self._choose_beat(self.db.project(project["id"]), self.beat_row(project, row["id"]))
+        plan_row = self._version_plan(project, self.work_version(project))[0]
+        self.db.run("UPDATE projects SET revisions=revisions+1 WHERE id=?", (project["id"],))
+        self._revise_plan({**job, "params": {"plan_id": plan_row["id"], "base": self.work_version(project),
+                                             "said": [f"The music from {int(start) // 60}:{int(start) % 60:02d} to "
+                                                      f"{int(end) // 60}:{int(end) % 60:02d} made again: {words}"]}},
+                          self.db.project(project["id"]), user)
+
+    def ask_export(self, user: dict, project: dict, kind: str) -> int:
+        from . import exports
+
+        self._guard(project, "done")
+        if kind not in exports.KINDS:
+            raise ActionError("Pick a format.")
+        return self._enqueue(project, "export", {"version": self.work_version(project), "kind": kind})
+
+    def _job_export(self, job, project, user):
+        from ..edit.timeline import build_timeline
+        from ..motion.place import speech_words
+        from ..perceive.prep import load_transcript
+        from ..schemas import EDL
+        from . import exports, versions
+
+        params = job["params"]
+        version, kind = int(params["version"]), params["kind"]
+        pipe = self._pipeline(job, project, user)
+        found = sorted(pipe.work.out.glob(f"v{version}-*x*.mp4"))
+        shape = self.shapes(project)[0].replace(":", "x")
+        video = pipe.work.out / f"v{version}-{shape}.mp4"
+        if not video.exists():
+            video = next((f for f in found if f.stem.count("-") == 1), video)
+        if not video.exists():
+            raise ActionError(f"Version {version}'s video isn't here.")
+        edl = EDL.model_validate_json(versions.edl_path(pipe.work.out, version, video.stem.split("-", 1)[1].replace("x", ":"))
+                                      .read_text(encoding="utf-8"))
+        words = None
+        if kind == "srt" and not any(g.kind == "captions" and g.words for g in edl.motion):
+            said = {cid: t for cid in {seg.clip_id for seg in edl.segments}
+                    if (t := load_transcript(pipe.project, cid)) is not None}
+            words = speech_words(build_timeline(edl, pipe.project.clips()), said)
+            if not words:
+                raise ActionError("Nobody is heard in this film, so there are no captions to export.")
+        self.db.job_progress(job["id"], 0.2, f"Making the {exports.KINDS[kind][0]}")
+        out = pipe.work.out / f"{video.stem}-{kind}.{exports.KINDS[kind][1]}"
+        if kind in ("fcpxml", "edl"):  # the cut for an editor's own software, on the original clips
+            from . import nle
+
+            timeline = build_timeline(edl, pipe.project.clips())
+            text = (nle.fcpxml if kind == "fcpxml" else nle.cmx3600)(edl, timeline, pipe.project.clips(), project["title"])
+            out.write_text(text, encoding="utf-8")
+        else:
+            out = exports.make(kind, video, edl, out, words)
+        made = self._info(project).get("exports") or {}
+        made.setdefault(str(version), {})[kind] = out.name
+        self._set_info(project, exports=made)
+
+    def exports_of(self, project: dict) -> list[dict]:
+        """The formats for the version they work on: made ones with their file, the others to make."""
+        from . import exports
+
+        made = (self._info(project).get("exports") or {}).get(str(self.work_version(project))) or {}
+        return [{"kind": k, "name": name, "file": made.get(k, "")} for k, (name, _) in exports.KINDS.items()]
+
+    def try_style(self, user: dict, project: dict, style_id: str) -> int:
+        """Their film in an edit style, as a draft (seconds): its grade, title move, transitions and finishes."""
+        from . import styles
+
+        style = styles.STYLES.get(style_id)
+        if style is None:
+            raise ActionError("Pick a style.")
+        op = ChangeOp(op="style", shot=1, want=style_id, text=project["title"])
+        return self.ask_draft(user, project, [op.model_dump()], [f"The film in the {style.name} style: {style.says}"],
+                              f"{style.name} style")
+
+    def style_cards(self, project: dict) -> list[dict]:
+        """The edit styles for the film page: each with what its title does (for the live preview on the card), and
+        which one the version they work on is in."""
+        from . import styles
+
+        try:
+            current = self._version_plan(project, self.work_version(project))[1].style
+        except Exception:  # noqa: BLE001 - an old film: none picked
+            current = ""
+        draft = self.draft_plan(project)
+        return [{"id": st.id, "name": st.name, "says": st.says, "on": st.id == current,
+                 "trying": bool(draft and draft.style == st.id and st.id != current),
+                 "preview": {"text": (project["title"] or "Your film")[:28], "style": st.title, "accent": st.color,
+                             "sub": st.name, "bar": True, "look": st.look}} for st in styles.STYLES.values()]
+
+    def draft_plan(self, project: dict) -> DesignPlan | None:
+        """The plan of the draft on screen (None: no draft)."""
+        draft = self.draft_of(project)
+        row = draft and self.db.one("SELECT data FROM plans WHERE id=? AND project_id=?",
+                                    (int(draft["plan_id"]), project["id"]))
+        return DesignPlan.model_validate_json(row["data"]) if row else None
+
+    def _job_draft(self, job, project, user):
+        pipe = self._pipeline(job, project, user)
+        self.db.job_progress(job["id"], 0.1, "Changing only the shots you named")
+        version, row, ctx, new, lines = self._apply_ops(job, project, user, pipe)
         plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
-                              (project["id"], "change", row["pitch_id"], new.model_dump_json(), time.time()))
-        lines = done.lines + [f"Not done: {x}" for x in done.skipped]
-        pipe.progress = lambda f, m: self.db.job_progress(job["id"], 0.3 + 0.7 * f, m)
-        self._render_plan(job, project, user, pipe, ctx, new, plan_id, base=version, changes=lines)
+                              (project["id"], "draft", row["pitch_id"], new.model_dump_json(), time.time()))
+        k = int(self._info(project).get("drafts") or 0) + 1
+        shape = self.shapes(project)[0]
+        name = f"draft-{k}-{shape.replace(':', 'x')}"
+        self.db.job_progress(job["id"], 0.6, "Laying out the draft")
+        path = pipe.draft(ctx, new, shape, name, look=self._grade(project, user, new))
+        lines = [*lines, *graphics_notes(path), *getattr(pipe, "motion_notes", [])]
+        text = job["params"].get("text", "")
+        prev = self.draft_of(project)
+        if job["params"].get("on") and prev and prev.get("plan_id") == job["params"]["on"]:  # all its changes so far
+            lines = list(dict.fromkeys([*(x for x in prev.get("said") or [] if not x.startswith("Nobody is heard")),
+                                        *lines]))
+            text = " · ".join(x for x in (prev.get("text", ""), text) if x)[:1200]
+        try:  # a film made before the light copies existed gets them now (a few seconds per clip)
+            self.db.job_progress(job["id"], 0.8, "Making quick previews of your clips")
+            pipe.make_previews()
+        except Exception:  # noqa: BLE001 - the draft is made; its shots show their stills without copies
+            log.warning("could not make preview copies for %s", project["id"], exc_info=True)
+        self._set_info(project, drafts=k, draft={"k": k, "base": version, "plan_id": plan_id, "edl": f"{name}.edl.json",
+                                                 "said": lines, "text": text, "made": time.time()})
+
+    def _job_copies(self, job, project, user):
+        """Light copies of the clips for the instant preview, and who is in the footage, for a film made before
+        they existed."""
+        from . import faces
+
+        pipe = self._pipeline(job, project, user)
+        self.db.job_progress(job["id"], 0.1, "Making quick previews of your clips")
+        pipe.make_previews()
+        if not (pipe.work.root / faces.INDEX).exists():
+            self.db.job_progress(job["id"], 0.6, "Looking at who is in your clips")
+            pipe.index_faces()
+
+    # ------------------------------------------------------------------ who is in the footage (faces.py)
+    def people_of(self, project: dict) -> dict | None:
+        from . import faces
+
+        return faces.load(workdir(self.s, project["user_id"], project["id"]).root / faces.INDEX)
+
+    def find_people(self, project: dict) -> bool:
+        """Start looking at who is in the clips of a film made before the face index (False: already there, or busy)."""
+        if self.people_of(project) is not None or self.db.active_job(project["id"]):
+            return False
+        self.db.enqueue("copies", project["id"], project["user_id"], {}, PRIORITY["copies"])
+        return True
+
+    def set_person(self, user: dict, project: dict, person_id: str, op: str, name: str = "") -> dict:
+        """They said who someone is: "this is me", a name, or never show them (every appearance becomes a scene no
+        plan may use, and the brief says so). Returns the person."""
+        from . import faces
+
+        path = workdir(self.s, project["user_id"], project["id"]).root / faces.INDEX
+        index = faces.load(path)
+        person = next((p for p in (index or {}).get("people") or [] if p["id"] == person_id), None)
+        if person is None:
+            raise ActionError("That person isn't in this film's clips.")
+        before = faces.label(person)
+        if op == "me":
+            for p in index["people"]:
+                p["me"] = p is person
+        elif op == "not_me":
+            person["me"] = False
+        elif op == "name":
+            person["name"] = " ".join(str(name).split())[:40]
+        elif op in ("never", "show"):
+            person["never"] = op == "never"
+            info_bans = [b for b in self._info(project).get("bans") or [] if b.get("what") != f"{before} in shot"]
+            if op == "never":
+                info_bans += faces.bans(person)
+            self._set_info(project, bans=info_bans[-120:])
+            text = f"Never show {faces.label(person) if person.get('name') or person.get('me') else before}"
+            if op == "never":
+                ov, _ = specs.add(project, text, "never", None, "", "you", self.spec_items(project, user))
+                self.db.run("UPDATE projects SET spec=? WHERE id=?", (json.dumps(ov), project["id"]))
+        else:
+            raise ActionError("What should I do with them?")
+        faces.save(path, index)
+        return person
+
+    def person_draft(self, user: dict, project: dict, person_id: str) -> list[int]:
+        """A draft of the version they work on without the shots this person is in. Returns the shots cut."""
+        from . import faces
+
+        person = next((p for p in (self.people_of(project) or {}).get("people") or [] if p["id"] == person_id), None)
+        if person is None:
+            raise ActionError("That person isn't in this film's clips.")
+        version = self.work_version(project)
+        strip = self.strip_of(project, version) or {}
+        hits = faces.shots_with(person, strip.get("cards") or [])
+        if not hits:
+            raise ActionError(f"{faces.label(person)} isn't close up in any shot of version {version}.")
+        ops = [ChangeOp(op="remove", shot=n).model_dump() for n in hits]
+        who = "you're" if person.get("me") else f"{faces.label(person)} is"
+        said = [f"Shot {n} is cut ({who} in it)" for n in hits]
+        self.ask_draft(user, project, ops, said, f"cut where {faces.label(person)} shows", on_draft=False)
+        return hits
+
+    def draft_of(self, project: dict) -> dict | None:
+        return self._info(project).get("draft")
+
+    def make_draft(self, user: dict, project: dict) -> None:
+        """The draft on screen becomes a real version: rendered in full quality from exactly that plan."""
+        self._guard(project, "done")
+        draft = self.draft_of(project)
+        if not draft:
+            raise ActionError("There's no draft to make.")
+        self._check_revisions(user, project)
+        self.db.run("UPDATE projects SET revisions=revisions+1 WHERE id=?", (project["id"],))
+        self._set_info(project, draft=None)
+        self._enqueue(project, "revise", {"plan_id": draft["plan_id"], "base": draft["base"], "said": draft["said"],
+                                          "text": draft.get("text", "")})
+
+    def discard_draft(self, project: dict) -> None:
+        if not self.draft_of(project):
+            raise ActionError("There's no draft to discard.")
+        self._set_info(project, draft=None)
+
+    def _revise_plan(self, job, project, user):
+        """A version rendered from a plan already made (a draft they watched and said "make it" to)."""
+        params = job["params"]
+        row = self.db.one("SELECT * FROM plans WHERE id=? AND project_id=?", (int(params["plan_id"]), project["id"]))
+        if row is None:
+            raise ActionError("That draft is gone: make the change again.")
+        plan = DesignPlan.model_validate_json(row["data"])
+        pipe = self._pipeline(job, project, user)
+        ctx = self._context(pipe, project, user, start_at=plan.start_at)
+        self._render_plan(job, project, user, pipe, ctx, plan, row["id"], base=params.get("base"),
+                          changes=list(params.get("said") or []))
+
+    def preview_of(self, project: dict, which: str) -> dict:
+        """What the browser player needs for a version ('3') or the draft ('draft'): see preview.timeline. Clips
+        without their light copy yet get them made in the background (the page tries again when they're there)."""
+        from ..schemas import EDL
+        from . import faces, preview
+
+        work = workdir(self.s, project["user_id"], project["id"])
+        if which == "draft":
+            draft = self.draft_of(project)
+            if not draft:
+                raise ActionError("There's no draft.")
+            path = work.out / draft["edl"]
+        else:
+            if not str(which).isdigit():
+                raise ActionError("Which version?")
+            shape = self.shapes(project)[0].replace(":", "x")
+            path = work.out / f"v{int(which)}-{shape}.edl.json"
+            if not path.exists():
+                found = sorted(work.out.glob(f"v{int(which)}-*.edl.json"))
+                path = found[0] if found else path
+        if not path.exists():
+            raise ActionError("That version can't be previewed.")
+        edl = EDL.model_validate_json(path.read_text(encoding="utf-8"))
+        numbers: dict[str, int] = {}
+        try:  # each segment's shot number as the strip counts them (a stutter's pieces share one)
+            from . import versions
+
+            if which == "draft":
+                row = self.db.one("SELECT data FROM plans WHERE id=?", (int(draft["plan_id"]),))
+                plan = DesignPlan.model_validate_json(row["data"]) if row else None
+            else:
+                plan = self._version_plan(project, int(which))[1]
+            if plan is not None:
+                numbers = {sid: n for n, ids in enumerate(versions.slot_ids(plan), start=1) for sid in ids}
+        except Exception:  # noqa: BLE001 - numbers are a help; the preview plays without them
+            numbers = {}
+        missing = set()
+
+        def copy_url(clip_id: str) -> str | None:
+            if preview.copy_path(work.root, clip_id).exists():
+                return f"/m/{project['id']}/preview/{clip_id}.mp4"
+            missing.add(clip_id)
+            return None
+
+        music_url = None
+        if edl.music and edl.music.path:
+            name = Path(edl.music.path).name
+            if (work.music / name).exists():
+                music_url = f"/m/{project['id']}/music/{name}"
+            elif (work.beats / name).exists():
+                music_url = f"/m/{project['id']}/beats/{name}"
+            elif work.song_path() is not None:
+                music_url = f"/m/{project['id']}/music/{work.song_path().name}"
+        user = self.user(project["user_id"])
+        no_music = project["music"] == "none" and not project["song"]
+        data = preview.timeline(edl, copy_url, music_url, numbers,
+                                clip_sound=not (user and self._mutes_clips(project, user, no_music)),
+                                seen=faces.appearances(faces.load(work.root / faces.INDEX)))
+        data["missing"] = sorted(missing)
+        if missing and not self.db.active_job(project["id"]):
+            self.db.enqueue("copies", project["id"], project["user_id"], {}, PRIORITY["copies"])
+            data["making"] = True
+        return data
 
     def _job_learn(self, job, project, user):
         events = []
@@ -2630,6 +3330,9 @@ class Studio:
                 events.append(f"Picked the look '{d.get('title')}' ({d.get('art_style')}; {d.get('world', '')[:140]})"
                               + (f" over: {', '.join(shown[:5])}" if shown else ""))
         for f in self.db.all("SELECT * FROM feedback WHERE project_id=? ORDER BY id", (project["id"],)):
+            if f["stage"] == "manual":  # what they changed by hand on the timeline
+                events.append(f"Changed by hand on version {f['version']}: {f['text']}")
+                continue
             if f["stage"] == "sample":
                 events.append(("Approved the sample" if f["liked"] else "Rejected the sample") +
                               (f": \"{f['text']}\"" if f["text"] else ""))

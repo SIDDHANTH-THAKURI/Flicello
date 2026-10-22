@@ -625,6 +625,95 @@
 {% elif p.stage in ('done', 'confirm') %}
 {% set wv = work.version if work else p.version %}
 {% set can_change = revisions_left is none or revisions_left > 0 %}
+{% if p.stage == 'done' and (draft or drafting) %}
+<section class="panel draft-card rise d2" id="draft"{% if drafting %} data-reload-when-done{% endif %}>
+  <div class="draft-head">
+    <h2>{% if drafting %}Making your draft&hellip;{% else %}Your draft{% endif %}</h2>
+    <span class="v-tag">instant preview &middot; not made yet</span>
+  </div>
+  {% if draft %}
+  <div class="pv" data-preview="{{ p.id }}" data-which="draft"></div>
+  <ul class="change-list">{% for line in draft.said %}<li>{{ line }}</li>{% endfor %}</ul>
+  <div class="choices draft-acts">
+    <form method="post" action="/p/{{ p.id }}/draft/make"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn-sun" type="submit"{% if not can_change %} disabled{% endif %}><span>Make it &middot; about {{ [1, (render_eta / 60)|round|int]|max }} min</span></button></form>
+    <form method="post" action="/p/{{ p.id }}/draft/discard"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn quiet" type="submit">Discard</button></form>
+  </div>
+  <p class="help">This plays your change straight away from light copies of your clips. &ldquo;Make it&rdquo; renders it in full quality as a new version{% if revisions_left is not none %} (it uses one of your {{ revisions_left }} changes){% endif %}; every shot you didn't name stays exactly as it was.</p>
+  {% else %}
+  <p class="help">Changing only the shots you named: it plays here in a few seconds.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% if p.stage == 'done' %}
+<section class="panel review-share rise d2" id="review">
+  <div class="draft-head"><h2>Review</h2><span class="v-tag">a private link for a client or a teammate</span></div>
+  {% for r in review_links %}
+  <div class="review-link"><code>{{ site_url|default('') }}/r/{{ r.token }}</code> <span class="help">version {{ r.version }}</span>
+    <form method="post" action="/p/{{ p.id }}/review/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="token" value="{{ r.token }}"><button class="link" type="submit">Switch off</button></form></div>
+  {% endfor %}
+  {% if not review_links or review_links[0].version != wv %}
+  <form method="post" action="/p/{{ p.id }}/review"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit">Make a review link for version {{ wv }}</button></form>
+  {% endif %}
+  {% if review_notes %}
+  <ol class="review-notes">
+    {% for n in review_notes %}
+    <li class="{{ 'done' if n.done }}"><span class="v-tag">v{{ n.version }} &middot; {{ n.at|mmss }}</span> <b>{{ n.name or 'Someone' }}</b> {{ n.text }}
+      {% if not n.done %}<form method="post" action="/p/{{ p.id }}/notes/{{ n.id }}/done"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link" type="submit">Done</button></form>{% endif %}</li>
+    {% endfor %}
+  </ol>
+  <p class="help">Cello reads these notes too: ask it to make them ("do the client's notes").</p>
+  {% endif %}
+</section>
+{% endif %}
+{% if exports %}
+<section class="panel exports-card rise d2" id="exports">
+  <div class="draft-head"><h2>Export</h2><span class="v-tag">version {{ wv }}</span></div>
+  <div class="export-grid">
+    {% for x in exports %}
+    {% if x.file %}<a class="btn" href="/m/{{ p.id }}/out/{{ x.file }}?dl=1">{{ x.name }} &darr;</a>
+    {% else %}<form method="post" action="/p/{{ p.id }}/export"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ x.kind }}"><button class="btn quiet" type="submit"{% if job %} disabled{% endif %}>{{ x.name }}</button></form>{% endif %}
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% if ready %}
+<section class="panel ready-card rise d2" id="ready">
+  <div class="draft-head"><h2>Ready to post? <span class="ready-score {{ 'good' if ready.score >= 80 else 'mid' if ready.score >= 60 else 'low' }}">{{ ready.score }}/100</span></h2><span class="v-tag">{{ ready.verdict }}</span></div>
+  <ul class="ready-parts">
+    {% for part in ready.parts %}
+    <li>
+      <span class="ready-name">{{ part.name }}</span>
+      <span class="ready-bar"><i class="w{{ (part.score * 10)|round|int }}"></i></span>
+      <span class="ready-why">{{ part.why }}</span>
+      {% if part.fix and part.score < 0.8 %}<form method="post" action="/p/{{ p.id }}/fix"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="part" value="{{ part.id }}"><button class="btn btn-sun" type="submit"{% if drafting %} disabled{% endif %}><span>{{ part.fix_says }}</span></button></form>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="help">Measured on this version: what holds people in a feed. Each fix plays as a draft in seconds.</p>
+</section>
+{% endif %}
+{% if style_cards %}
+<section class="panel styles-card rise d2" id="styles">
+  <div class="draft-head"><h2>Edit styles</h2><span class="v-tag">your film in each, in seconds</span></div>
+  <div class="style-grid">
+    {% for st in style_cards %}
+    <form class="style-tile{% if st.on %} on{% endif %}{% if st.trying %} trying{% endif %}" method="post" action="/p/{{ p.id }}/style">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="style" value="{{ st.id }}">
+      <div class="style-sample {{ 'tall' if look_shape == '9:16' else 'wide' }} look-{{ st.preview.look }}" data-style-preview="{{ st.preview|tojson|forceescape }}"{% if strip and strip.cards and strip.cards[0].thumb %} data-still="/m/{{ p.id }}/stills/{{ strip.cards[0].thumb }}"{% endif %}></div>
+      <b>{{ st.name }}</b>
+      <p>{{ st.says }}</p>
+      <button class="btn{% if not st.on %} btn-sun{% endif %}" type="submit"{% if st.on or drafting %} disabled{% endif %}><span>{% if st.on %}This version{% elif st.trying %}In your draft{% else %}Try it{% endif %}</span></button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% if p.stage == 'done' and p.kind == 'montage' %}
+<section class="panel timeline-card rise d2" id="timeline" data-timeline="{{ p.id }}" data-which="{{ 'draft' if draft else wv }}" data-csrf="{{ csrf }}" data-stills="/m/{{ p.id }}/stills/">
+  <div class="draft-head"><h2>Timeline</h2><span class="v-tag">drag a shot to move it &middot; drag its edge to change its length &middot; tap for more</span></div>
+  <div class="tl-body" aria-live="polite">Loading the timeline&hellip;</div>
+</section>
+{% endif %}
 <div class="screens rise d2">
   {% for r in latest %}
   <figure class="device {{ 'tall' if r.shape == '9:16' else 'wide' }}"{% if shot_times %} data-shots="{{ shot_times }}"{% endif %}>

@@ -95,7 +95,71 @@ def synthesize(name: str) -> np.ndarray:
     return np.stack([y, y], axis=1).astype(np.float32)
 
 
-def sfx_path(name: str, library: Path) -> Path:
+# The pro library: each effect made once by ElevenLabs' sound generation from a sound designer's description, kept and
+# reused for every film (a few cents once). Without a key, or before it's made, the synthesized effect plays.
+PRO = {
+    "whoosh": ("a fast clean cinematic whoosh passing left to right, airy, crisp, no music, no voice", 0.8),
+    "whoosh_long": ("a long smooth cinematic swoosh sweeping past, airy and wide, no music, no voice", 1.6),
+    "riser": ("a short tense cinematic riser building up to a hit, rising pitch, no music, no voice", 1.5),
+    "impact": ("a deep punchy cinematic impact hit with a short sub boom, tight, no music, no voice", 1.2),
+    "subdrop": ("a deep sub bass drop, cinematic, no music, no voice", 1.5),
+    "swell": ("a soft warm reverse cymbal swell rising into a reveal, no music, no voice", 1.5),
+    "tick": ("a single crisp clean UI tick, very short, no music", 0.5),
+    "pop": ("a soft satisfying bubbly pop, short, no music", 0.5),
+    "shutter": ("a single camera shutter click, mechanical, no music", 0.5),
+    "chime": ("a short bright glassy chime, magical shimmer, no music", 1.0),
+}
+
+
+def pro_path(name: str, library: Path) -> Path | None:
+    """The generated (pro) version of an effect, made now if there's a key and it isn't kept yet (None: none)."""
+    import json
+    import os
+    import urllib.request
+
+    if name not in PRO:
+        return None
+    path = library / "pro" / f"{name}.wav"  # 48 kHz stereo, as the mix reads it
+    if path.exists() and path.stat().st_size > 1000:
+        return path
+    from ..music.compose import _load_dotenv
+
+    _load_dotenv()
+    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        return None
+    text, seconds = PRO[name]
+    req = urllib.request.Request("https://api.elevenlabs.io/v1/sound-generation",
+                                 data=json.dumps({"text": text, "duration_seconds": seconds, "prompt_influence": 0.6}).encode(),
+                                 headers={"xi-api-key": key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            audio = r.read()
+    except Exception:  # noqa: BLE001 - the synthesized effect plays instead
+        return None
+    if len(audio) < 1000:
+        return None
+    import subprocess
+
+    from ..ffmpeg import ffmpeg_bin
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = path.with_suffix(".mp3")
+    raw.write_bytes(audio)
+    part = path.with_name(path.stem + ".part.wav")
+    done = subprocess.run([ffmpeg_bin(), "-y", "-loglevel", "error", "-i", str(raw), "-ar", str(SR), "-ac", "2",
+                           "-c:a", "pcm_f32le", str(part)], capture_output=True)
+    raw.unlink(missing_ok=True)
+    if done.returncode != 0 or not part.exists():
+        return None
+    part.replace(path)
+    return path
+
+
+def sfx_path(name: str, library: Path, pro: bool = True) -> Path:
+    """An effect's file: the pro (generated) one when there is one, else the synthesized one."""
+    if pro and (made := pro_path(name, library)) is not None:
+        return made
     path = library / f"{name}.wav"
     if not path.exists():
         library.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,9 @@
+.fm-callout { position: absolute; inset: 0; }
+.fm-callout .pin { position: absolute; left: 0; top: 0; width: 0; height: 0; will-change: transform; }
+.fm-callout .mark { position: absolute; overflow: visible; filter: drop-shadow(0 0.15em 0.35em rgba(0, 0, 0, .45)); }
+.fm-callout .lead { position: absolute; border-radius: 99px; box-shadow: 0 1px 6px rgba(0, 0, 0, .4); }
+.fm-callout .label { position: absolute; white-space: nowrap; padding: .28em .62em .32em; border-radius: .5em;
+  background: rgba(12, 13, 16, .72); border-left: .14em solid; color: #fff; line-height: 1.1;
+  box-shadow: 0 .2em .8em rgba(0, 0, 0, .35); }
+.fm-callout .name { display: block; font-weight: 800; letter-spacing: -0.01em; }
+.fm-callout .sub { display: block; margin-top: .2em; font-size: .52em; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }

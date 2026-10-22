@@ -1,0 +1,3 @@
+.fm-logo { position: absolute; inset: 0; }
+.fm-logo .logo { position: absolute; height: auto; opacity: 0; transform: translate(-50%, -50%);
+  filter: drop-shadow(0 0.2em 0.6em rgba(0, 0, 0, .35)); }

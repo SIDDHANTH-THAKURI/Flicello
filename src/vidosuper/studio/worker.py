@@ -168,6 +168,8 @@ def maintain(studio: Studio) -> None:
         db.run("UPDATE projects SET deleted=1 WHERE id=?", (p["id"],))
         db.run("DELETE FROM clips WHERE project_id=?", (p["id"],))
         db.run("DELETE FROM messages WHERE project_id=?", (p["id"],))  # their words to their editor go with the film
+        db.run("DELETE FROM review_notes WHERE project_id=?", (p["id"],))  # and what their clients said
+        db.run("DELETE FROM review_links WHERE project_id=?", (p["id"],))
         log.info("retention: deleted project %s", p["id"])
     spend_watch(studio, now)
     from .storage import user_dir

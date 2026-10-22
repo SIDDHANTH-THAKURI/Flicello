@@ -1,0 +1,10 @@
+.fm-accent { position: absolute; inset: 0; overflow: hidden; }
+.fm-accent .corner { position: absolute; box-sizing: border-box; filter: drop-shadow(0 0 .3em rgba(0, 0, 0, .45)); }
+.fm-accent .rec { position: absolute; color: #fff; font-family: 'FlicelloMono', monospace; font-weight: 700; letter-spacing: .12em;
+  text-shadow: 0 0 .4em rgba(0, 0, 0, .6); }
+.fm-accent .rec::before { content: ''; display: inline-block; width: .62em; height: .62em; margin-right: .4em; border-radius: 50%;
+  background: #ff3b3b; vertical-align: .02em; }
+.fm-accent .band { position: absolute; top: -40%; left: 0; width: 38%; height: 180%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 250, 235, .38) 45%, rgba(255, 255, 255, .5) 50%, rgba(255, 250, 235, .38) 55%, rgba(255, 255, 255, 0)); }
+.fm-accent .spot { position: absolute; opacity: 0; border-radius: 50%; filter: blur(30px); }
+.fm-accent .line { position: absolute; left: 0; width: 100%; transform: scaleX(0); box-shadow: 0 0 .5em rgba(0, 0, 0, .3); }

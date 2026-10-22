@@ -1,0 +1,26 @@
+{% extends "shell.html" %}
+{% block title %}{{ title }} · review{% endblock %}
+{% block main_class %}page narrow{% endblock %}
+{% block content %}
+<section class="panel review-card rise" data-review>
+  <div class="draft-head"><h2>{{ title }}</h2><span class="v-tag">version {{ version }} &middot; for review</span></div>
+  <figure class="device {{ 'tall' if tall else 'wide' }}"><div class="frame"><video src="/r/{{ token }}/video" controls playsinline preload="metadata" data-review-video></video></div></figure>
+  <form method="post" action="/r/{{ token }}/note" class="review-form">
+    <input type="hidden" name="at" value="0" data-review-at>
+    <label class="sr-only" for="rv-text">Your note</label>
+    <textarea id="rv-text" name="text" rows="2" maxlength="1000" required placeholder="Pause where you mean, then write your note (it's pinned to that moment)"></textarea>
+    <div class="review-row">
+      <input name="name" maxlength="40" placeholder="Your name (optional)" aria-label="Your name">
+      <button class="btn-sun" type="submit"><span>Add note at <b data-review-clock>0:00</b></span></button>
+    </div>
+  </form>
+  {% if notes %}
+  <ol class="review-notes">
+    {% for n in notes %}
+    <li class="{{ 'done' if n.done }}"><button class="link" type="button" data-seek="{{ n.at }}">{{ n.at|mmss }}</button> <b>{{ n.name or 'Someone' }}</b> {{ n.text }}{% if n.done %} <i>done</i>{% endif %}</li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+  <p class="help">Notes go straight to the person who made this film.</p>
+</section>
+{% endblock %}

@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -142,6 +143,9 @@ class Pipeline:
         self.no_music = False  # set by the studio when the person chose no music
         self.natural_sound = False  # ... and that the clips keep their own sound (else the film is silent)
         self.mute_clips = False  # they asked for no sound from the clips: every shot muted, music or not
+        self.watcher = None
+        self.mute_effects = False  # no sound effects under the graphics (a silent film, or they asked)
+        self.brand: dict = {}  # their brand kit: colour, type, logo (profile answers["brand"])  # Gemini watching each clip with its sound (brain/gemini.py), when the studio has one
         self.project = Project(work.clips, cfg)
 
     # ------------------------------------------------------------ analyse
@@ -161,7 +165,8 @@ class Pipeline:
             return None
         from .brain.context import prompt
 
-        return hashlib.sha1((prompt("analyst") + models.analyst).encode("utf-8")).hexdigest()[:10]
+        who = f"gemini:{self.watcher.model}" if self.watcher is not None else models.analyst
+        return hashlib.sha1((prompt("analyst") + who).encode("utf-8")).hexdigest()[:10]
 
     def analyse(self, length: float = 30.0, pace: str = "balanced") -> dict:
         """Everything the story steps need; finished parts are kept, so a retry only redoes what failed."""
@@ -171,6 +176,9 @@ class Pipeline:
         usable = [c for c in clips if c.usable]
         if not usable:
             raise UserError("None of the uploaded files could be read as video.")
+        if self.watcher is not None:  # the watcher watches the clips' light copies (with their sound)
+            self.progress(0.1, "Making quick previews of your clips")
+            self.make_previews(project, usable)
         self.progress(0.15, "Measuring shake, light and motion")
         measure_project(project, self.cfg)
         self.progress(0.3, "Listening for speech and making contact sheets")
@@ -193,7 +201,20 @@ class Pipeline:
 
         def watch(task: dict) -> None:
             clip = by_id[task["clip_id"]]
-            analysis = self.brain.analyse_clip(clip, brief_text(Path(task["brief"])), [Path(s) for s in task["sheets"]])
+            analysis = None
+            if self.watcher is not None:  # picture and sound together; the contact sheets if it can't
+                from . import preview
+
+                video = preview.copy_path(self.work.root, clip.clip_id)
+                if video.exists():
+                    try:
+                        analysis = self.watcher.analyse_clip(clip, brief_text(Path(task["brief"])), video)
+                    except (BudgetExceeded, PersonLimit):
+                        raise
+                    except Exception:  # noqa: BLE001 - the analyst logs this one from its contact sheets
+                        log.warning("the watcher could not log %s; using the contact sheets", clip.clip_id, exc_info=True)
+            if analysis is None:
+                analysis = self.brain.analyse_clip(clip, brief_text(Path(task["brief"])), [Path(s) for s in task["sheets"]])
             write_text_atomic(analysis_path(project, clip.clip_id), analysis.model_dump_json(indent=1))
             if logs and tag:
                 logs.mkdir(parents=True, exist_ok=True)
@@ -201,14 +222,28 @@ class Pipeline:
             done[0] += 1
             self.progress(0.35 + 0.5 * done[0] / len(todo), f"Watched {done[0]} of {len(todo)} clips")
 
+        found: dict = {}
+
+        def people() -> None:
+            try:
+                found["index"] = self.index_faces(project)
+            except Exception:  # noqa: BLE001 - who's in shot helps the editor; the film never waits on it
+                log.warning("could not index the faces", exc_info=True)
+
+        faces_thread = threading.Thread(target=people, name="faces", daemon=True)
+        faces_thread.start()
         if todo:
             self.progress(0.35, f"Watching {len(todo)} clip{'s' if len(todo) > 1 else ''}")
-            with ThreadPoolExecutor(max_workers=max(1, getattr(self.brain, "parallel", 1))) as pool:
+            lanes = getattr(self.watcher, "parallel", None) or getattr(self.brain, "parallel", 1)
+            with ThreadPoolExecutor(max_workers=max(1, lanes)) as pool:
                 list(pool.map(watch, todo))  # the first failure (or a spending cap) stops the step
+        faces_thread.join(timeout=900)
         self.progress(0.86, "Listening for hits")
         self.enrich_with_impacts(project, usable)
         self.progress(0.88, "Making the catalog")
         catalog = build_catalog(project)
+        self.progress(0.91, "Making quick previews of your clips")
+        self.make_previews(project, usable)
         self.progress(0.93, "Listening to the song")
         self.ensure_song(length, pace)
         song = self.song()
@@ -422,6 +457,201 @@ class Pipeline:
             return self.revise_strikes(ctx, pitch, feedback, 1 + len(current.plan) % 7)
         return self.brain.revise(ctx, pitch, current, feedback)
 
+    def make_previews(self, project: Project | None = None, clips: list | None = None) -> int:
+        """Light copies of the clips for the instant preview (see preview.py); a film made before them gets theirs
+        here too (ingest is a no-op for clips it already knows)."""
+        from . import preview
+
+        if project is None or clips is None:
+            project, clips = ingest_folder(self.work.clips, self.cfg)
+        return preview.make_copies(project, clips, self.work.root, log=log.info)
+
+    def index_faces(self, project: Project | None = None) -> dict:
+        """Who is in the footage (see faces.py): every face found, followed and grouped into people."""
+        from ..perceive.catalog import short_ids
+        from . import faces
+
+        if project is None:
+            project, _ = ingest_folder(self.work.clips, self.cfg)
+        shorts = short_ids(project)
+        proxies = [(short, cid, project.proxies / f"{cid}.mp4") for cid, short in shorts.items()]
+        return faces.build(proxies, self.work.stills, self.work.root / faces.INDEX)
+
+    def add_motion(self, edl, plan: DesignPlan, ctx: StoryContext) -> list[str]:
+        """The plan's graphics on this edit's timeline, everything a graphic needs found here, beside the clips, so the
+        preview shows exactly what the render makes:
+        - each comes in with its shot and stays its beats; a transition sits on the cut into its shot;
+        - captions carry the words said in the shots that play their own sound (from the transcripts);
+        - beat words and beat lines land on the music's beats;
+        - a callout's point is found in the shot (Gemini, from their words) and followed as the camera moves;
+        - under each title and name, how bright the picture is sets how deep the pad behind the type is.
+        Returns what they should know (a callout's subject that couldn't be found)."""
+        from ..edit.timeline import build_timeline
+        from ..motion.place import backdrop, boxes, follow, layers, scrim_for, speech_words
+        from ..schemas import MotionGraphic
+        from .versions import slot_ids
+
+        edl.motion = []
+        notes: list[str] = []
+        brand = self.brand or {}
+        if not plan.graphics and not brand.get("logo"):
+            return notes
+        timeline = build_timeline(edl, self.project.clips())
+        fps = timeline.fps
+        starts = {item.seg.id: item.start / fps for item in timeline.items}
+        ends = {item.seg.id: item.end / fps for item in timeline.items}
+        ids = slot_ids(plan)
+        total = timeline.duration
+        aspect = edl.meta.width / edl.meta.height
+        period = ctx.beats.period
+        caps: dict[str, cv2.VideoCapture] = {}
+
+        def read(cid: str, seconds: float):
+            path = self.project.proxies / f"{cid}.mp4"
+            if cid not in caps:
+                if not path.exists():
+                    return None
+                caps[cid] = cv2.VideoCapture(str(path))
+            caps[cid].set(cv2.CAP_PROP_POS_MSEC, max(0.0, seconds) * 1000.0)
+            ok, frame = caps[cid].read()
+            return frame if ok else None
+
+        try:
+            for g in plan.graphics:
+                if g.kind == "captions":
+                    said = {cid: t for cid in {seg.clip_id for seg in edl.segments}
+                            if (t := load_transcript(self.project, cid)) is not None}
+                    edl.motion.append(MotionGraphic(kind="captions", start=0.0, end=round(total, 3), style=g.style,
+                                                    words=speech_words(timeline, said)))
+                    continue
+                n = min(max(1, g.shot), len(ids))
+                # where its shot starts (a shot folded into the one before it: that one's start)
+                at = next((starts[sid] for k in range(n - 1, -1, -1) for sid in ids[k] if sid in starts), 0.0)
+                shot_end = next((ends[sid] for sid in reversed(ids[n - 1]) if sid in ends), total)
+                end = min(total, at + max(1.0, g.beats * period))
+                base = dict(text=g.text, sub=g.sub, style=g.style, behind=g.behind, accent=g.accent)
+                if g.kind == "transition":
+                    if at > 0.3:
+                        edl.motion.append(MotionGraphic(kind="transition", start=round(at - 0.3, 3),
+                                                        end=round(min(total, at + 0.3), 3), style=g.style))
+                    continue
+                if g.kind in ("kinetic", "accent"):
+                    step = period if period >= 0.4 else period * 2  # a word a beat, or every other beat when fast
+                    count = len(g.text.split()) if g.kind == "kinetic" else max(1, round((end - at) / step))
+                    beats = [round(at + k * step, 3) for k in range(count) if at + k * step < total]
+                    if g.kind == "kinetic":
+                        end = min(total, max(end, (beats[-1] if beats else at) + step + 0.4))
+                    edl.motion.append(MotionGraphic(kind=g.kind, start=round(at, 3), end=round(end, 3), beats=beats,
+                                                    **base))
+                    continue
+                if g.kind == "route":
+                    edl.motion.append(MotionGraphic(kind="route", start=round(at, 3), end=round(end, 3),
+                                                    names=[x for x in g.text.split("|") if x], **base))
+                    continue
+                if g.kind == "callout":
+                    point = (g.x, g.y) if g.x is not None and g.y is not None else self.locate(timeline, read, at, g.want or g.text, aspect)
+                    if point is None:
+                        from .versions import the
+
+                        notes.append(f"I couldn't find {the(g.want or g.text)} in shot {n}, so it has no callout")
+                        continue
+                    end = min(end, shot_end)
+                    track = follow(timeline, read, at, end, point[0], point[1], aspect)
+                    inside = [p for p in track if -0.02 <= p[1] <= 1.02 and -0.02 <= p[2] <= 1.02]
+                    if len(inside) < len(track):  # it leaves the frame: the callout goes with it
+                        end = min(end, inside[-1][0] if inside else at)
+                    if end - at >= 0.8:
+                        edl.motion.append(MotionGraphic(kind="callout", start=round(at, 3), end=round(end, 3),
+                                                        points=[[round(point[0], 4), round(point[1], 4)]], track=inside,
+                                                        **base))
+                    continue
+                if end - at >= 0.5:
+                    points = []
+                    if g.kind == "title" and g.behind:  # just above the person's head, so they cross its letters
+                        from ..motion.place import subject_top
+                        from ..render.behind import people_matte
+
+                        find = people_matte()
+                        top = subject_top(timeline, read, at, end, aspect, find) if find else None
+                        if top is None:
+                            notes.append(f"Nobody stands in shot {n} for the title to go behind, so it's in front")
+                            base["behind"] = False
+                        else:
+                            points = [[0.5, round(min(0.6, max(0.12, top + 0.05)), 3)]]
+                    edl.motion.append(MotionGraphic(kind=g.kind, start=round(at, 3), end=round(end, 3), points=points,
+                                                    **base))
+            # their brand: its colour on every graphic that has none of its own, its type, its logo in a corner
+            for g in edl.motion:
+                if brand.get("color") and not g.accent:
+                    g.accent = brand["color"]
+                if brand.get("font") in ("serif", "mono") and not g.font:
+                    g.font = brand["font"]
+            if brand.get("logo"):
+                edl.motion.append(MotionGraphic(kind="logo", start=0.0, end=round(total, 3), image=brand["logo"]))
+            # looked at before anyone sees it: how bright the picture is under each title and name, for a deeper pad
+            # where white type would sink into a bright sky
+            for layer in layers(edl, timeline, {}, self.faces_seen()):
+                if (box := boxes(layer)) is not None:
+                    layer.graphic.scrim = scrim_for(backdrop(timeline, read, layer.start, layer.end, box, aspect))
+            if not self.mute_effects:  # every move makes its sound, under the music
+                from ..motion.sound import graphic_sounds
+
+                edl.sounds = [*edl.sounds, *graphic_sounds(edl)]
+        finally:
+            for cap in caps.values():
+                cap.release()
+        return notes
+
+    def locate(self, timeline, read, at: float, what: str, aspect: float) -> tuple[float, float] | None:
+        """Where `what` is in the film's frame at `at` (shares), found by the watcher in that frame; remembered per shot
+        and words, so a draft and the version made from it agree (and it's asked once)."""
+        import json
+
+        item = next((i for i in timeline.items if i.start / timeline.fps <= at + 0.05 < i.end / timeline.fps), None)
+        if item is None or not what or self.watcher is None or not hasattr(self.watcher, "point_at"):
+            return None
+        seg = item.seg
+        src = round(seg.src_in + (at + 0.3 - item.start / timeline.fps) * seg.speed, 2)
+        key = f"{seg.clip_id}@{src}:{seg.zoom}:{seg.zoom_center}:{seg.frame_center}:{what.lower()}"
+        memo = self.work.root / "located.json"
+        try:
+            known = json.loads(memo.read_text(encoding="utf-8")) if memo.exists() else {}
+        except ValueError:
+            known = {}
+        if key in known:
+            return tuple(known[key]) if known[key] else None
+        frame = read(seg.clip_id, src)
+        if frame is None:
+            return None
+        from ..motion.place import film_crop
+
+        crop = film_crop(frame, seg, aspect)  # as the shot shows it
+        ok, jpeg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        try:
+            point = self.watcher.point_at(jpeg.tobytes(), what) if ok else None
+        except Exception:  # noqa: BLE001 - not found is said plainly; the film goes on
+            log.warning("could not locate %r", what, exc_info=True)
+            point = None
+        known[key] = list(point) if point else None
+        memo.write_text(json.dumps(known), encoding="utf-8")
+        return point
+
+    def faces_seen(self) -> list[dict]:
+        """Where faces are in the clips (the face index, when it has been made): what graphics keep clear of."""
+        from . import faces
+
+        return faces.appearances(faces.load(self.work.root / faces.INDEX))
+
+    def draft(self, ctx: StoryContext, plan: DesignPlan, shape: str, name: str, look: str = "vivid") -> Path:
+        """The edit list of a plan, without rendering it: what the instant preview plays (seconds, not minutes)."""
+        _, template = self._template(ctx, plan, shape, look)
+        w, h = SHAPES[shape]
+        edl, _ = self.edl_for(template, w, h)
+        self.motion_notes = self.add_motion(edl, plan, ctx)
+        path = self.work.out / f"{name}.edl.json"
+        path.write_text(edl.model_dump_json(indent=1), encoding="utf-8")
+        return path
+
     def _template(self, ctx: StoryContext, plan: DesignPlan, shape: str, look: str) -> tuple[Design, Template]:
         design = to_design(plan, ctx, str(self.work.song_path()), vertical=shape == "9:16", look=look)
         return design, heal_template(build_template(design, self.project))
@@ -475,6 +705,7 @@ class Pipeline:
             w, h = SHAPES[shape]
             edl, _ = self.edl_for(template, w, h)
             edl.meta.true_peak_db = -2.3
+            self.motion_notes = self.add_motion(edl, plan, ctx)
             name = f"v{version}-{shape.replace(':', 'x')}"
             (self.work.out / f"{name}.edl.json").write_text(edl.model_dump_json(indent=1), encoding="utf-8")
             t0 = time.monotonic()
@@ -486,7 +717,7 @@ class Pipeline:
                 self.progress(base + span * (0.05 + 0.8 * done[0] / total), f"Rendering the {shape} video")
 
             result = render_edl(edl, self.project, self.cfg, quality="final", out_path=self.work.out / f"{name}.mp4",
-                                on_shot=shot)
+                                on_shot=shot, faces=self.faces_seen())
             seconds = round(time.monotonic() - t0, 1)
             self.progress(base + span * 0.9, "Checking it")
             findings, _sheet = run_checks(Path(result.output), edl, self.project, strict_beats=True)

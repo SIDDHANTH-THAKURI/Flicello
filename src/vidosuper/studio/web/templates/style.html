@@ -12,6 +12,21 @@
   </div>
 </header>
 
+{% set brand = profile.answers.get('brand') or {} %}
+<section class="panel rise d2" id="brand">
+  <h2>Your brand</h2>
+  <p class="help">Its colour goes on every title, caption and graphic, in its type; its logo sits in a corner of your films.</p>
+  <form method="post" action="/style/brand" enctype="multipart/form-data" class="brand-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Name <input name="name" maxlength="40" value="{{ brand.name|default('') }}" placeholder="Your brand"></label>
+    <label>Colour <input name="color" type="color" value="{{ brand.color or '#ffd38a' }}"></label>
+    <label>Type <select name="font">{% for v, t in [('display', 'Bold grotesque'), ('serif', 'Italic serif'), ('mono', 'Mono')] %}<option value="{{ v }}"{% if brand.font == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+    <label>Logo <input name="logo" type="file" accept="image/png,image/jpeg,image/webp"></label>
+    {% if brand.logo %}<img class="brand-logo" src="{{ brand.logo }}" alt="Your logo"><label class="inline"><input type="checkbox" name="drop_logo" value="1"> Take the logo off</label>{% endif %}
+    <button class="btn-sun" type="submit"><span>Save my brand</span></button>
+  </form>
+</section>
+
 <section class="panel rise d2">
   <h2>Rules</h2>
   <p class="lead-s">{{ profile.rules|length }} rule{{ '' if profile.rules|length == 1 else 's' }} so far.</p>

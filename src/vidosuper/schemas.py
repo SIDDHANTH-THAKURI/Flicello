@@ -325,6 +325,40 @@ class TextOverlay(BaseModel):
     fade: float = 0.3
 
 
+class CaptionWord(BaseModel):
+    w: str
+    s: float = Field(..., description="Film seconds the word starts.")
+    e: float = Field(..., description="Film seconds it ends.")
+
+
+class MotionGraphic(BaseModel):
+    """A motion graphic over the finished picture, on the film's timeline, made by the motion engine
+    (vidosuper.motion: the measured professional moves, rendered frame by frame with transparency)."""
+
+    kind: Literal["title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent", "logo"]
+    start: float = Field(..., ge=0.0, description="Film seconds it comes in.")
+    end: float = Field(..., description="Film seconds it's gone.")
+    text: str = Field("", description="title: the headline ('\\n' between lines); lowerthird: the name.")
+    sub: str = Field("", description="title: a short line under it; lowerthird: the line under the name.")
+    style: str = Field("", description="title: rise, slam, mask or split; captions: pop, karaoke or box.")
+    place: Literal["auto", "top", "middle", "bottom"] = "auto"
+    accent: str = Field("", description="#rrggbb (empty: warm yellow).")
+    scrim: float | None = Field(None, ge=0.0, le=1.0, description=(
+        "How dark the soft pad behind the type is (empty: the usual; set by the tool from how bright the picture "
+        "under it is)."))
+    words: list[CaptionWord] = Field(default_factory=list, description=(
+        "captions: the words with their film times (empty: what is said in the shots, from their speech)."))
+    points: list[list[float]] = Field(default_factory=list, description=(
+        "callout: the point it marks [[x, y]] (frame shares); route: its stops [[x, y], ...]."))
+    track: list[list[float]] = Field(default_factory=list, description=(
+        "callout: where its point is as the camera moves, [[film seconds, x, y], ...] (set by the tool's tracker)."))
+    names: list[str] = Field(default_factory=list, description="route: the stops' names.")
+    beats: list[float] = Field(default_factory=list, description="kinetic / accent: the film seconds of the beats it hits.")
+    behind: bool = Field(False, description="title: behind the person in the shot (they stand in front of it).")
+    font: str = Field("", description="display, serif or mono (empty: display): a brand's type.")
+    image: str = Field("", description="logo: the picture, as a data URI (a brand's logo).")
+
+
 class EditMeta(BaseModel):
     title: str = ""
     platform: str = "youtube"
@@ -351,6 +385,7 @@ class EDL(BaseModel):
     music: MusicSpec | None = None
     sounds: list[SoundLayer] = Field(default_factory=list)
     texts: list[TextOverlay] = Field(default_factory=list)
+    motion: list[MotionGraphic] = Field(default_factory=list, description="Motion graphics over the film.")
     notes: str = ""
 
 

@@ -141,6 +141,31 @@ class PlanShot(BaseModel):
     src_in: float | None = Field(None, description="Leave empty: set by the tool for a shot kept from an earlier version.")
 
 
+GraphicKind = Literal["title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent"]
+
+
+class PlanGraphic(BaseModel):
+    """A motion graphic over the film (made by the motion engine with professional timing and placed clear of faces
+    and the apps' buttons)."""
+    kind: GraphicKind
+    shot: int = Field(1, description="The shot it comes in on (1 = the first). Captions: 1 (they follow what is said).")
+    beats: float = Field(4.0, description="How long it stays on, in beats (a title 4-8). Captions: ignored.")
+    text: str = Field("", description="title: the headline, 1-5 words; lowerthird: a name or a place.")
+    sub: str = Field("", description="title: an optional short line under it; lowerthird: the line under the name.")
+    style: str = Field("", description=(
+        "title: rise (letters land one by one), slam (arrives from huge, for a hit or the drop), mask (wiped in) or "
+        "split (two halves meet); captions: pop (the word being said lights up), karaoke (said words stay lit) or box "
+        "(a colour block behind the word being said); transition: panels, iris, bars or flash; callout: circle, box or "
+        "arrow; accent: brackets (a camera viewfinder), sweep (a sheen of light), leak (warm light leaks) or lines "
+        "(lines on the beat). Empty: the first of each."))
+    want: str = Field("", description="callout: what it points at, in words ('the Opera House'), found in the shot.")
+    x: float | None = Field(None, description="callout: where that is across the shot's frame, 0-1 (empty: found).")
+    y: float | None = Field(None, description="callout: where that is down the shot's frame, 0-1 (empty: found).")
+    behind: bool = Field(False, description="title: behind the person in the shot, who stands in front of it.")
+    accent: str = Field("", description="Leave empty (the style's colour).")
+    by: str = Field("", description="Leave empty ('style': put there by a style, replaced when the style changes).")
+
+
 class DesignPlan(BaseModel):
     name: str
     idea: str = Field(..., description="The story in one line (it should match the chosen pitch).")
@@ -148,6 +173,10 @@ class DesignPlan(BaseModel):
     plan: list[PlanShot]
     notes: str = Field("", description="How the plan carries the story: hook, turn, drop, ending.")
     start_at: float | None = Field(None, description="Leave empty: set by the tool (the beat an earlier version started on).")
+    style: str = Field("", description="Leave empty (the edit style they picked, set by the tool).")
+    graphics: list[PlanGraphic] = Field(default_factory=list, description=(
+        "Motion graphics: only what they asked for (a title, captions of what is said, a name or a place). Empty "
+        "unless they asked."))
 
 
 class RangePlan(BaseModel):
@@ -167,7 +196,8 @@ class PlaceTags(BaseModel):
     tags: list[PlaceTag]
 
 
-ChangeKind = Literal["remove", "replace", "swap", "move", "longer", "shorter", "speed", "redo"]
+ChangeKind = Literal["remove", "replace", "swap", "move", "longer", "shorter", "speed", "redo", "title", "captions",
+                     "lowerthird", "transition", "kinetic", "callout", "route", "accent", "style"]
 
 
 class ChangeOp(BaseModel):
@@ -175,7 +205,14 @@ class ChangeOp(BaseModel):
         "remove: take the shot out (a neighbour holds on). replace: show something else in its place. swap: two shots "
         "trade pictures. move: its picture goes to another place. longer / shorter: by some beats (the cut next to "
         "it moves). speed: how it plays. redo: make a stretch of shots again from what they want (the only change "
-        "that goes back to the editor)."))
+        "that goes back to the editor). title: a title comes in on that shot (`text`, `sub`, `style`; `off` takes "
+        "titles away). captions: what is said, word by word (`style`; `off` takes them away; shot 1). lowerthird: a "
+        "name or a place on that shot (`text`, `sub`; `off` takes it away). transition: a designed transition into "
+        "that shot (`style`). kinetic: words cut in one per beat from that shot (`text`). callout: a ring, box or "
+        "arrow on something in that shot that follows it as the camera moves (`want`: what; `text`: its label). "
+        "route: a route drawing itself between places (`text`: 'Sydney|Wollongong|Kiama'). accent: a finish over that "
+        "shot (`style`: brackets, sweep, leak or lines). `off` takes any of them away. style: the whole film in an "
+        "edit style (`want`: cinematic, hype, travel, soft, documentary or camcorder; shot 1)."))
     shot: int = Field(..., description="The shot it is about: its number in the version they watched (1 = first).")
     other: int | None = Field(None, description=(
         "swap: the other shot. move: the number of the shot whose place it takes. redo: the last shot of the stretch "
@@ -196,6 +233,12 @@ class ChangeOp(BaseModel):
     want: str = Field("", description="redo / replace without a moment: what they want there, in their words.")
     never_again: bool = Field(False, description=(
         "remove / replace: they don't want that scene in this film at all (it never comes back)."))
+    text: str = Field("", description="title / lowerthird: the words, exactly as they want them.")
+    sub: str = Field("", description="title: a short line under it; lowerthird: the line under the name.")
+    style: str = Field("", description=(
+        "title: rise, slam, mask or split; captions: pop, karaoke or box (empty: the usual)."))
+    off: bool = Field(False, description="title / captions / lowerthird / any graphic: take it away instead.")
+    behind: bool = Field(False, description="title: behind the person in the shot.")
 
 
 class ChangeRequest(BaseModel):
@@ -233,6 +276,7 @@ class EditorOffer(BaseModel):
     why: str = Field(..., description="One line for the card: what it will do, in their terms.")
     pitch: int | None = Field(None, description="pick: the story's number as listed (1 = first).")
     version: int | None = Field(None, description="continue_from: the version's number.")
+    person: str = Field("", description="cut_person / never_person: the person's id as listed (p1, p2...).")
     text: str = Field("", description=(
         "change: what to change, in their words with shot numbers. sample_again: what the new sample must do "
         "differently. another: what the new story idea should be (their idea, or what was missing)."))

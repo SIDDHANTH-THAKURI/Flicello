@@ -1,6 +1,7 @@
 """Does a renderer machine (a new cloud container) have everything a real video needs? Checked with no one's
-footage: FFmpeg encodes, the person cut-out model runs, the speech model loads, and a short designed talking clip
-(cut-out, captions, emoji, the layouts) renders end to end. Asked for from the admin page (cloud.request_test)."""
+footage: FFmpeg encodes, the person cut-out model runs, the speech model loads, a short designed talking clip
+(cut-out, captions, emoji, the layouts) renders end to end, and the motion engine (Node, HyperFrames and its Chrome)
+renders a title with transparency. Asked for from the admin page (cloud.request_test)."""
 
 from __future__ import annotations
 
@@ -97,6 +98,17 @@ def run(progress: Callable[[float, str], None] = lambda f, m: None, speech_model
         out["render_fps"] = round(info["seconds"] * 30 / took, 2)
     except Exception as exc:  # noqa: BLE001
         out["problems"].append(f"render: {type(exc).__name__}: {exc}"[:300])
+    progress(0.96, "Rendering a motion graphic")
+    try:
+        from .. import motion
+
+        t = time.perf_counter()
+        made = motion.render("title", {"text": "Flicello", "style": "rise"}, 540, 960, 30, 1.0, work / "motion")
+        out["motion_s"] = round(time.perf_counter() - t, 1)
+        if made.stat().st_size < 1000:
+            raise RuntimeError("the title came out empty")
+    except Exception as exc:  # noqa: BLE001
+        out["problems"].append(f"motion graphics: {type(exc).__name__}: {exc}"[:300])
     out["ok"] = not out["problems"]
     return out
 
@@ -107,4 +119,5 @@ def summary(result: dict) -> str:
         return "Cloud test failed: " + "; ".join(result.get("problems") or ["unknown"])[:300]
     return (f"Cloud test passed on {result.get('cpus')} CPUs: designed talk drawn at {result.get('render_fps')} "
             f"frames/s, cut-out {result.get('cutout_ms')} ms a frame on {result.get('cutout_on')}, speech model "
-            f"ready in {result.get('speech_model_s')} s, {result.get('ffmpeg')}.")
+            f"ready in {result.get('speech_model_s')} s, a motion graphic in {result.get('motion_s')} s, "
+            f"{result.get('ffmpeg')}.")

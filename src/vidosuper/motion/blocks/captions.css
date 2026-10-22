@@ -1,0 +1,7 @@
+.fm-captions { position: absolute; inset: 0; }
+.fm-captions .phrase { position: absolute; transform: translateY(-50%); text-align: center; opacity: 0;
+  font-weight: 800; line-height: 1.1; letter-spacing: -0.01em; }
+.fm-captions .wd { display: inline-block; paint-order: stroke fill; -webkit-text-stroke: 0.09em rgba(0, 0, 0, .55);
+  text-shadow: 0 0.04em 0.18em rgba(0, 0, 0, .45); opacity: 0; padding: 0 0.06em; border-radius: 0.14em; }
+.fm-captions.style-box .wd { -webkit-text-stroke: 0; text-shadow: none; }
+.fm-captions.style-upper .wd { text-transform: uppercase; }

@@ -27,7 +27,7 @@ from ..edit.timeline import build_timeline
 from ..schemas import EDL
 from .board import moment_label, still
 from .brain.context import logged_at, people_in
-from .brain.schemas import ChangeOp, ChangeRequest, DesignPlan, PlanShot, PoolMoment, RangePlan
+from .brain.schemas import ChangeOp, ChangeRequest, DesignPlan, PlanGraphic, PlanShot, PoolMoment, RangePlan
 
 SLOWMO_FPS = 47.0  # (as in brain.core) real slow motion only from 50/60 fps footage
 MIN_BEATS = 0.5  # the shortest shot a change may leave
@@ -164,6 +164,110 @@ class Applied:
     touched: set[int] = field(default_factory=set)  # indexes in plan.plan that changed (the rest are as they were)
 
 
+GRAPHIC_OPS = ("title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent")
+TITLE_STYLES = ("rise", "slam", "mask", "split")
+CAPTION_STYLES = {"pop": "the word being said lights up", "karaoke": "the words light up as they're said",
+                  "box": "a colour block on the word being said"}
+STYLES = {"title": TITLE_STYLES, "transition": ("panels", "iris", "bars", "flash"), "callout": ("circle", "box", "arrow"),
+          "accent": ("brackets", "sweep", "leak", "lines")}
+WHAT = {"title": "title", "lowerthird": "name", "transition": "transition", "kinetic": "beat words",
+        "callout": "callout", "route": "route", "accent": "finish"}
+BEATS = {"title": 4.0, "lowerthird": 6.0, "callout": 6.0, "route": 8.0, "accent": 4.0, "transition": 1.0}
+FOLLOW_PICTURE = ("lowerthird", "callout", "accent")  # the rest keep their place in the film
+
+
+def the(what: str) -> str:
+    """'boat' -> 'the boat'; 'my dog', 'the bridge' and 'Sydney' as they are."""
+    w = what.strip()
+    return w if not w or re.match(r"(?:a|an|the|my|our|his|her|their|this|that)", w, re.I) or w.istitle() and " " not in w         else "the " + w
+
+
+def article(word: str) -> str:
+    return ("an " if word[:1].lower() in "aeiou" else "a ") + word
+
+
+def graphic_op(op: ChangeOp, marks: list[PlanGraphic], total: int, done: Applied) -> list[PlanGraphic]:
+    """A graphic added or taken away (shot numbers as in the version they watched)."""
+    kind = op.op
+    if kind == "captions":
+        kept = [g for g in marks if g.kind != "captions"]
+        if op.off:
+            if len(kept) == len(marks):
+                done.skipped.append("there are no captions to take away")
+            else:
+                done.lines.append("The captions are taken away")
+            return kept
+        style = op.style if op.style in CAPTION_STYLES else "pop"
+        done.lines.append(f"Captions of what is said, word by word ({CAPTION_STYLES[style]})")
+        return [*kept, PlanGraphic(kind="captions", style=style)]
+    what = WHAT[kind]
+    if op.off:
+        gone = [g for g in marks if g.kind == kind and g.shot == op.shot] or [g for g in marks if g.kind == kind]
+        if not gone:
+            done.skipped.append(f"there is no {what} to take away")
+            return marks
+        done.lines.append(f"The {what}{'s are' if len(gone) > 1 else ' is'} taken away")
+        return [g for g in marks if all(g is not x for x in gone)]
+    text = " ".join(op.text.split())[:80]
+    if kind == "route":
+        text = "|".join(x.strip() for x in re.split(r"\||\s+(?:to|via|then|and)\s+|,|->|\u2192", text, flags=re.I) if x.strip())
+    want = " ".join(op.want.split())[:80]
+    if kind in ("title", "lowerthird", "kinetic") and not text or kind == "route" and text.count("|") < 1 \
+            or kind == "callout" and not (want or text):
+        done.skipped.append(f"{what} on shot {op.shot}: " + ("which places?" if kind == "route" else "what should it say?"
+                                                             if kind != "callout" else "what should it point at?"))
+        return marks
+    if not 1 <= op.shot <= total or kind == "transition" and op.shot < 2:
+        done.skipped.append(f"{what} on shot {op.shot}: " + ("a transition goes into a shot after the first"
+                                                             if kind == "transition" else f"there are only {total} shots"))
+        return marks
+    style = op.style if op.style in STYLES.get(kind, ()) else ""
+    words = len(text.split())
+    beats = float(op.beats) if op.beats else (float(words + 1) if kind == "kinetic" else BEATS[kind])
+    said = {"title": f'A title "{text}" comes in on shot {op.shot}' + (" behind the person in it" if op.behind else ""),
+            "lowerthird": f'"{text}" is named on shot {op.shot}',
+            "transition": f"{article(style or 'panels').capitalize()} transition into shot {op.shot}",
+            "kinetic": f'"{text}" cuts in word by word on the beat from shot {op.shot}',
+            "callout": f"{article(style or 'circle').capitalize()} on {the(want or text)} in shot {op.shot}, following it"
+                       + (f' ("{text}")' if text else ""),
+            "route": f"A route drawing itself: {text.replace('|', ' to ')}, from shot {op.shot}",
+            "accent": f"{article(style or 'brackets').capitalize()} finish on shot {op.shot}"}[kind]
+    done.lines.append(said)
+    return [g for g in marks if not (g.kind == kind and g.shot == op.shot)] + [PlanGraphic(
+        kind=kind, shot=op.shot, beats=beats, text=text, sub=" ".join(op.sub.split())[:60], style=style,
+        want=want or (text if kind == "callout" else ""), behind=bool(op.behind) and kind == "title")]
+
+
+def placed(marks: list[PlanGraphic], slots: list, total: int, keys: dict[int, str] | None = None) -> list[PlanGraphic]:
+    """The graphics on the shots as they are now. A title, a transition or a route keeps its place in the film (the
+    opening stays the opening when pictures move); a name, a callout or a finish follows its picture (the moment it
+    shows, `keys`: shot number -> moment), and a callout whose picture was replaced goes (what it pointed at is gone).
+    Either moves up when shots before it are gone."""
+    final = {x.orig: q + 1 for q, x in enumerate(slots) if x.orig is not None}
+    removed = set(range(1, total + 1)) - set(final)
+    now = {x.shot.key: q + 1 for q, x in reversed(list(enumerate(slots)))}  # the first shot showing each moment
+
+    def shifted(n: int) -> int:
+        return max(1, min(len(slots), n - sum(1 for r in removed if r < n)))
+
+    out = []
+    for g in marks:
+        if g.kind == "captions":
+            out.append(g)
+            continue
+        if g.kind in FOLLOW_PICTURE and keys and g.shot in keys:
+            if keys[g.shot] in now:
+                out.append(g.model_copy(update={"shot": now[keys[g.shot]]}))
+            elif g.kind != "callout":
+                out.append(g.model_copy(update={"shot": shifted(g.shot)}))
+            continue
+        if g.kind in FOLLOW_PICTURE and g.shot in final:
+            out.append(g.model_copy(update={"shot": final[g.shot]}))
+        else:
+            out.append(g.model_copy(update={"shot": shifted(g.shot)}))
+    return out
+
+
 def play_speed(s: PlanShot, fps: float) -> float | None:
     """How fast a shot plays its clip (None: a ramp, which has no single speed)."""
     if s.kind == "ramp":
@@ -190,6 +294,7 @@ def apply(plan: DesignPlan, ctx, ops: list[ChangeOp], earlier: dict[int, DesignP
     slots = [Slot(s, i + 1) for i, s in enumerate(plan.plan)]
     done = Applied(plan)
     total = len(slots)
+    marks = list(plan.graphics)  # numbered as in the version they watched until placed() at the end
 
     def name(n: int) -> str:
         what = labels.get(n, "")
@@ -252,7 +357,22 @@ def apply(plan: DesignPlan, ctx, ops: list[ChangeOp], earlier: dict[int, DesignP
             key, k = f"{base}_{k}", k + 1
         return key
 
+    style = plan.style
     for k, op in enumerate(ops):
+        if op.op == "style":
+            from . import styles
+
+            if op.want not in styles.STYLES:
+                done.skipped.append(f"there is no {op.want!r} style")
+                continue
+            marks = styles.apply(plan.model_copy(update={"graphics": marks}), op.want, ctx.facts, ctx.beats.drop,
+                                 op.text).graphics
+            style = op.want
+            done.lines.append(f"The film in the {styles.STYLES[op.want].name} style: {styles.STYLES[op.want].says}")
+            continue
+        if op.op in GRAPHIC_OPS:
+            marks = graphic_op(op, marks, total, done)
+            continue
         i = at(op.shot)
         if i is None:
             done.skipped.append(f"{op.op} shot {op.shot}: " + (f"there are only {total} shots" if not 1 <= op.shot <= total
@@ -450,7 +570,9 @@ def apply(plan: DesignPlan, ctx, ops: list[ChangeOp], earlier: dict[int, DesignP
             groups.append((i, i, want))
     used = {x.shot.key for x in slots}
     done.plan = plan.model_copy(update={"plan": [x.shot for x in slots],
-                                        "pool": [m for k, m in pool.items() if k in used]})
+                                        "pool": [m for k, m in pool.items() if k in used],
+                                        "style": style, "graphics": placed(marks, slots, total,
+                                                           {i + 1: x.key for i, x in enumerate(plan.plan)})})
     done.redo = groups
     done.touched = {i for i, x in enumerate(slots) if x.changed or x.redo is not None or x.orig is None}
     return done
@@ -470,7 +592,13 @@ def merge_range(plan: DesignPlan, lo: int, hi: int, part: RangePlan) -> DesignPl
     shots = [s.model_copy(update={"key": rename.get(s.key, s.key), "src_in": None}) for s in part.plan]
     new = plan.plan[:lo] + shots + plan.plan[hi + 1:]
     used = {s.key for s in new}
-    return plan.model_copy(update={"plan": new, "pool": [m for k, m in pool.items() if k in used]})
+    # graphics after the stretch move with their shots; one inside it stays as far into it as it was (or its end)
+    grown = len(shots) - (hi - lo + 1)
+    graphics = [g if g.kind == "captions" or g.shot <= lo else g.model_copy(update={
+        "shot": g.shot + grown if g.shot > hi + 1 else lo + 1 + min(g.shot - lo - 1, max(0, len(shots) - 1))})
+        for g in plan.graphics]
+    return plan.model_copy(update={"plan": new, "pool": [m for k, m in pool.items() if k in used],
+                                   "graphics": graphics})
 
 
 def range_text(plan: DesignPlan, ctx, lo: int, hi: int) -> str:
@@ -500,6 +628,55 @@ def range_beats(plan: DesignPlan, lo: int, hi: int) -> tuple[float, float]:
 WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "eight": 8, "a": 1, "half": 0.5}
 NUM = r"(\d+)(?:\s?(?:st|nd|rd|th)\b)?"  # "9th", and "9 th" as people type it
 SHOT = r"(?:shot|clip|scene|cut)?\s*(?:no\.?|number|#)?\s*"
+CAPTION_WORDS = r"(?:captions?|subtitles?|subs)"
+CAPTIONS_OFF = re.compile(rf"\b(?:no|remove|delete|drop|hide|turn\s+off|take\s+(?:off|away|out)|get\s+rid\s+of|without)"
+                          rf"\s+(?:the\s+|all\s+the\s+|those\s+)?{CAPTION_WORDS}\b", re.I)
+CAPTIONS_ON = re.compile(rf"\b(?:add|put|turn\s+on|show|give|want|need|with|make)\b[^.?!]*?\b{CAPTION_WORDS}\b|"
+                         rf"\b{CAPTION_WORDS}\s+(?:on|please)\b|^\s*{CAPTION_WORDS}\s*[.!]?\s*$", re.I)
+TITLE_OFF = re.compile(r"\b(?:no|remove|delete|drop|hide|take\s+(?:off|away|out)|get\s+rid\s+of)\s+(?:the\s+)?title\b",
+                       re.I)
+TITLE_ON = re.compile(r"\b(?:add|put|give\s+it|make)\s+(?:an?\s+|the\s+)?(?:(?:rise|slam|mask|split|big|bold|opening|intro)\s+)?"
+                      r"title\b(?P<rest>.*)$", re.I)
+QUOTED = re.compile(r"[\"\u201c\u201d'\u2018\u2019](.+?)[\"\u201c\u201d'\u2018\u2019](?:\s|$|[.,!?])")
+TITLE_AT = re.compile(r"\s+(?:on|at|over|in)\s+(?:(?:the\s+)?(?:start|beginning|opening)|(?:shot|clip)\s*(\d+))\s*[.!]?\s*$",
+                      re.I)
+
+
+SHOT_AT = r"(?:on|at|into|before|in|over|to|for)\s+(?:shot|clip|scene)\s*(\d+)"
+TRANSITION_ON = re.compile(r"\b(?:add|put|use|want|give)\b[^.?!]*?\b(?:(panels?|iris|bars?|flash|whip|wipe)\s+)?transition\b"
+                           rf"[^.?!]*?{SHOT_AT}", re.I)
+KINETIC_ON = re.compile(r"\b(?:kinetic\s+(?:text|type|words)|beat\s+(?:text|words)|words?\s+on\s+the\s+beats?)\b", re.I)
+CALLOUT_ON = re.compile(r"\b(circle|point\s+(?:at|to)|highlight|mark|box|arrow\s+(?:at|to|on))\s+(?:the\s+|that\s+)?(.+?)\s+"
+                        rf"{SHOT_AT}", re.I)
+ROUTE_ON = re.compile(r"\b(?:route|map|path|journey|trip)\b[^.?!]*?\bfrom\s+(.+?)\s+to\s+(.+?)(?:\s+via\s+(.+?))?"
+                      rf"(?:\s+{SHOT_AT})?\s*[.!]?$", re.I)
+ACCENT_ON = re.compile(r"\b(viewfinder|brackets|camera\s+frame|light\s+leaks?|leaks?|light\s+sweep|sheen|beat\s+lines|lines\s+on"
+                       rf"\s+the\s+beats?)\b(?:[^.?!]*?{SHOT_AT})?", re.I)
+GRAPHIC_OFF = re.compile(r"\b(?:no|remove|delete|drop|hide|take\s+(?:off|away|out)|get\s+rid\s+of)\s+(?:the\s+|all\s+the\s+|those\s+)?"
+                         r"(transitions?|routes?|maps?|callouts?|circles?|brackets|viewfinder|light\s+leaks?|leaks?|beat\s+words|"
+                         r"kinetic\s+(?:text|type))\b", re.I)
+OFF_KIND = {"transition": "transition", "route": "route", "map": "route", "callout": "callout", "circle": "callout",
+            "brackets": "accent", "viewfinder": "accent", "light": "accent", "leak": "accent", "beat": "kinetic",
+            "kinetic": "kinetic"}
+ACCENT_STYLE = {"viewfinder": "brackets", "brackets": "brackets", "camera": "brackets", "light leak": "leak",
+                "leak": "leak", "light sweep": "sweep", "sheen": "sweep", "beat lines": "lines", "lines": "lines"}
+
+
+def _quoted(text: str) -> str:
+    m = QUOTED.search(text + " ")
+    return m.group(1).strip() if m else ""
+
+
+def _title_words(rest: str) -> tuple[str, int]:
+    """What a title should say and the shot it comes in on, from what follows 'add a title' (default: shot 1)."""
+    shot = 1
+    if m := TITLE_AT.search(rest):
+        shot = int(m.group(1)) if m.group(1) else 1
+        rest = rest[:m.start()]
+    if m := QUOTED.search(rest + " "):
+        return m.group(1).strip(), shot
+    m = re.match(r"\s*(?:saying|that\s+says|which\s+says|reading|that\s+reads|called|with|of|:)\s*(.+)$", rest, re.I)
+    return (m.group(1).strip(" .!") if m else ""), shot
 
 
 def read_simple(text: str, n: int) -> ChangeRequest:
@@ -529,6 +706,66 @@ def read_simple(text: str, n: int) -> ChangeRequest:
         for num in re.findall(r"\d+", m.group(1)):
             ops.append(ChangeOp(op="replace", shot=int(num), want="something else that fits"))
             said.append(f"Shot {num} shows something else")
+    raw = " ".join(text.split())
+    from . import styles
+
+    if sid := styles.read(raw):
+        ops.append(ChangeOp(op="style", shot=1, want=sid))
+        said.append(f"The film in the {styles.STYLES[sid].name} style: {styles.STYLES[sid].says}")
+    if CAPTIONS_OFF.search(raw):
+        ops.append(ChangeOp(op="captions", shot=1, off=True))
+        said.append("The captions are taken away")
+    elif CAPTIONS_ON.search(raw):
+        style = "karaoke" if re.search(r"karaoke", raw, re.I) else "box" if re.search(r"\b(?:box|boxed|highlight)", raw, re.I) \
+            else "pop"
+        ops.append(ChangeOp(op="captions", shot=1, style=style))
+        said.append(f"Captions of what is said, word by word ({CAPTION_STYLES[style]})")
+    if TITLE_OFF.search(raw):
+        ops.append(ChangeOp(op="title", shot=1, off=True))
+        said.append("The title is taken away")
+    elif m := TITLE_ON.search(raw):
+        words, at_shot = _title_words(m.group("rest"))
+        if words:
+            style = next((st for st in TITLE_STYLES if re.search(rf"\b{st}", raw, re.I)), "")
+            ops.append(ChangeOp(op="title", shot=at_shot, text=words, style=style))
+            said.append(f'A title "{words}" comes in on shot {at_shot}')
+    if m := TITLE_ON.search(raw):  # "... behind me": the person stands in front of it
+        if ops and ops[-1].op == "title" and re.search(r"\bbehind\s+(?:me|him|her|them|us|the\s+(?:person|people|guy|girl))\b",
+                                                          raw, re.I):
+            ops[-1] = ops[-1].model_copy(update={"behind": True})
+            said[-1] += ", behind the person in it"
+    for m in GRAPHIC_OFF.finditer(raw):
+        kind = OFF_KIND[m.group(1).lower().split()[0].rstrip("s")] if m.group(1).lower().split()[0].rstrip("s") in OFF_KIND \
+            else OFF_KIND.get(m.group(1).lower().split()[0], "accent")
+        ops.append(ChangeOp(op=kind, shot=1, off=True))
+        said.append(f"The {WHAT[kind]} is taken away")
+    if not GRAPHIC_OFF.search(raw):
+        for m in TRANSITION_ON.finditer(raw):
+            style = {"panel": "panels", "panels": "panels", "iris": "iris", "bar": "bars", "bars": "bars", "flash": "flash",
+                     "whip": "panels", "wipe": "bars"}.get((m.group(1) or "panels").lower(), "panels")
+            ops.append(ChangeOp(op="transition", shot=int(m.group(2)), style=style))
+            said.append(f"{article(style).capitalize()} transition into shot {m.group(2)}")
+        if KINETIC_ON.search(raw) and (words := _quoted(raw)):
+            at = re.search(SHOT_AT, raw, re.I)
+            ops.append(ChangeOp(op="kinetic", shot=int(at.group(1)) if at else 1, text=words))
+            said.append(f'"{words}" cuts in word by word on the beat from shot {ops[-1].shot}')
+        for m in CALLOUT_ON.finditer(raw):
+            verb = m.group(1).lower()
+            style = "box" if verb in ("box", "mark") else "arrow" if verb.startswith(("point", "arrow")) else "circle"
+            want = m.group(2).strip(" '\"\u201c\u201d")
+            label = _quoted(raw) or want[:1].upper() + want[1:]
+            ops.append(ChangeOp(op="callout", shot=int(m.group(3)), want=want, text=label, style=style))
+            said.append(f"{article(style).capitalize()} on {the(want)} in shot {m.group(3)}, following it")
+        if m := ROUTE_ON.search(raw):
+            stops = [m.group(1), *(m.group(3).split(",") if m.group(3) else []), m.group(2)]
+            stops = [x.strip(" .!'\"").title() if x.strip().islower() else x.strip(" .!'\"") for x in stops if x.strip()]
+            ops.append(ChangeOp(op="route", shot=int(m.group(4)) if m.group(4) else 1, text="|".join(stops)))
+            said.append(f"A route drawing itself: {' to '.join(stops)}, from shot {ops[-1].shot}")
+        for m in ACCENT_ON.finditer(raw):
+            key = " ".join(m.group(1).lower().split())
+            style = next((v for k, v in ACCENT_STYLE.items() if key.startswith(k)), "brackets")
+            ops.append(ChangeOp(op="accent", shot=int(m.group(2)) if m.group(2) else 1, style=style))
+            said.append(f"{article(style).capitalize()} finish on shot {ops[-1].shot}")
     keep = [(o, s) for o, s in zip(ops, said) if 1 <= o.shot <= n and (o.other is None or 1 <= o.other <= n)]
     unclear = "" if keep else ("I couldn't tell which shots to change: name them by number, like 'swap 9 and 10' or "
                                "'remove 11'.")
@@ -562,6 +799,16 @@ def check_request(req: ChangeRequest, n: int, facts: dict, earlier: dict[int, in
                 problems.append(f"change {k}: there is no earlier version {op.from_version}")
             elif not op.from_shot or not 1 <= op.from_shot <= earlier[op.from_version]:
                 problems.append(f"change {k}: version {op.from_version} has shots 1 to {earlier[op.from_version]}")
+        if op.op in ("title", "lowerthird") and not op.off and not op.text.strip():
+            problems.append(f"change {k}: {op.op} needs `text`, the words to show")
+        if op.op == "style":
+            from . import styles
+
+            if op.want not in styles.STYLES:
+                problems.append(f"change {k}: style needs `want`, one of {', '.join(styles.STYLES)}")
+            continue
+        if op.op in GRAPHIC_OPS:
+            continue
         if op.op in ("remove", "replace") and seen.get(op.shot) in ("remove", "replace"):
             problems.append(f"change {k}: shot {op.shot} is already {seen[op.shot]}d by an earlier change")
         seen.setdefault(op.shot, op.op)
@@ -613,10 +860,23 @@ def unused_moments(plan: DesignPlan, facts: dict, bans: list[dict], limit: int =
     return out[:limit]
 
 
+def graphics_text(graphics: list[PlanGraphic]) -> list[str]:
+    """The film's graphics, one line each, as the change reader and the editor read them."""
+    out = []
+    for g in graphics:
+        if g.kind == "captions":
+            out.append(f"- captions of what is said ({g.style or 'pop'})")
+        else:
+            out.append(f"- {WHAT.get(g.kind, g.kind)} on shot {g.shot} for {g.beats:g} beats: "
+                       f"\"{g.text}\"" + (f" / \"{g.sub}\"" if g.sub else "") + (f" ({g.style})" if g.style else "")
+                       + (f" on {g.want}" if g.kind == "callout" and g.want else "") + (" behind the person" if g.behind else ""))
+    return out
+
+
 def request_text(version: int, cards: list[dict], beats, unused: list[dict], earlier: list[tuple[int, int | None, list]],
-                 bans: list[dict], text: str, said_before: list[str]) -> str:
-    """Everything the change reader needs: the version shot by shot, the music's hits, what else there is to show,
-    what earlier versions showed, and their words."""
+                 bans: list[dict], text: str, said_before: list[str], graphics: list[PlanGraphic] | None = None) -> str:
+    """Everything the change reader needs: the version shot by shot (and its graphics), the music's hits, what else
+    there is to show, what earlier versions showed, and their words."""
     period = beats.period
     lines = [f"# The version they watched: version {version}, {clock(cards[-1]['end']) if cards else '?'} long, "
              f"{len(cards)} shots, {60 / period:.0f} beats a minute (one beat = {period:.3f} s)"]
@@ -625,6 +885,7 @@ def request_text(version: int, cards: list[dict], beats, unused: list[dict], ear
                      f"{c['what'][:110]} [{c['moment']}]" + (f" · place: {c['place']}" if c.get("place") else "")
                      + (f" · people: {c['people']}" if c.get("people") not in (None, "none", "unknown") else "")
                      + (" · starts on the drop" if c.get("drop") else ""))
+    lines += ["", "# Its graphics", *(graphics_text(graphics or []) or ["- none"])]
     hits = [b * period for b in beats.booms]
     if hits:
         lines += ["", "# The music's heavy hits (seconds into the film)", ", ".join(clock(t) for t in hits[:80])]

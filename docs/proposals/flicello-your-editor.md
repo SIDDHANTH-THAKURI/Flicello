@@ -2,9 +2,10 @@
 
 One AI editor per person, working with you from the first clip to the final export.
 
-Status: plan (22 Oct 2026), waiting for the owner's approval. **No clip work until it is approved.** Slice 1 (the
-editor's backbone: the film spec, the conversation, the check-ins; no clip work) is built locally for testing with
-dev.cmd; nothing is deployed. This plan takes in `flicello-together.md` (its principles, research and the engine
+Status: approved and under way (22 Oct 2026). Slice 1 (the editor's backbone: the film spec, the conversation, the
+check-ins) is **live** (f405492). After the owner's fuller goal ("Jarvis" on screen, instant edits, pro motion graphics,
+generation, virality) and a research pass (`docs/research/flicello-stack-2026-10.md`), the order of work is
+**section 9b** below; everything else in this plan stands. This plan takes in `flicello-together.md` (its principles, research and the engine
 fixes it lists all stay) and replaces its order of work. It also takes in what `flicello-for-creators.md` (written
 the same day in another session, nothing built) adds: cutting by editing the transcript, the song started at its hook,
 a licensed music library, the "Ready to post?" verdict, voice clean-up and posting to platforms. One plan should stay.
@@ -374,6 +375,131 @@ people and sync problems. Every rated film adds checks. Nothing is ever trained 
 
 Each slice is tested (the regression set, plus a walkthrough on a throwaway server) and goes live only on "push to
 live".
+
+## 9b. Order of work after the research (22 Oct, replaces the order above)
+
+The owner's words that set it:
+- "Jarvis on the screen beside you, you say it and it's done right away";
+- "super fast low-quality outputs first, then the perfect one";
+- "motion graphics like the insane stuff people make";
+- "a virality score from a real trained model";
+- "accuracy is the main thing".
+
+| Phase | What | Why now |
+|---|---|---|
+| **A1. Instant preview** | The edit is data: the timeline plays in the browser from small proxies the moment it changes. The full-quality render runs in the background only when you say "make it". | Speed is the product. Every later feature previews this way. |
+| **A2. Jarvis fast path** | Plain asks become exact edits by code in milliseconds, with no AI: cut, trim, swap, move, longer, shorter, speed, mute, brighter, "for Instagram". They're applied to a draft and shown at once, with undo. A fast model (Haiku 5.5, low effort) routes what code can't read; Opus only for creative work. | "Say it, it's done." |
+| **A3. The index** | On upload: Gemini Flash watches every clip (picture and sound); SAM 3 tracks people and things named in words; faces are grouped (SFace); search embeddings; word-level speech with speakers. Questions become lookups. | "Cut where my face shows", answered in a second. |
+| **B1. Pro motion graphics** | HyperFrames (HTML to video, Apache 2.0) as the graphics layer: titles, kinetic text, word-by-word captions, lower thirds, transitions. Placed by the face and subject masks, the word timings, the beats and the safe zones. The measured pro-motion rules and quality gates; the agent renders stills and looks before you see it. | The biggest quality gap today. |
+| **B2. Styles and samples** | The style library on HyperFrames blocks and our recipes, with sample videos and "your film next to the style". | Pick, don't explain. |
+| **C. Ready to post?** | Higgsfield's Virality Predictor (via their CLI/MCP; API access requested), our own model trained on SnapUGC engagement data, the rule checks and the critic panel. One-tap fixes. | Reach is why they pay. |
+| **D. Create** | AI video (Higgsfield API: a Wan or LTX draft, then Kling, Seedance or Veo final), music v2 section edits and stems, SFX matched to the picture, VFX (remove an object, upscale, 3D parallax). | The "crazy" part. |
+| **E. Hands-on and phone** | A timeline editor for manual tweaks (study OpenReel, MIT) that Jarvis watches and learns from; a phone layout; Jarvis by voice (streaming speech-to-text plus a voice). | Portable, and for people who want control. |
+| **F. Agencies and editors** | Brand kits, review links, deliverables, NLE export (section 8.9-8.10). | Next audiences. |
+| **Exports** | Presets and formats (section 8.8), with settings Jarvis remembers. | Small; built alongside A2. |
+
+### Built so far (23 Oct): A1, A2, A3 (faces, the Gemini watcher) and B1's first blocks
+- **A1, the instant preview** (`studio/preview.py`, `frontend/src/app/player.js`). Light copies of the clips (540 px).
+  The edit list becomes a timeline the browser plays at once with two video layers. A plain ask makes a draft (the edit
+  list, no render) in seconds; "make it" renders exactly that draft. A new ask is made on the draft on screen, with its
+  numbers, so "add a title" then "add captions" gives both.
+- **A2, plain asks without a model.** Swap, remove, extend, shorten and replace; titles, captions, and taking them away
+  (`versions.read_simple`). A longer ask goes to the change reader, which now knows the graphics too.
+- **A3, who is in the footage** (`studio/faces.py`). YuNet finds faces and SFace groups them into people. "Cut where my
+  face shows" or "never show person 2" is answered from the index; a tap on a face settles which one is them.
+- **A3, the watcher** (`studio/brain/gemini.py`). Gemini watches each clip's light copy with its sound. The contact-sheet
+  reader takes over if it fails.
+- **B1, motion graphics** (`vidosuper/motion`). Three blocks so far, each a Web Animations page with the measured
+  professional timing (about 10 frames a move, arrivals easing in from oversize, exits accelerating, little overshoot):
+  - a title (rise, slam, mask or split);
+  - word-by-word captions (pop, karaoke or box), with phrases that break at pauses and never a blank frame between them;
+  - a lower third.
+
+  HyperFrames renders each one in headless Chrome to ProRes 4444 with transparency, cached, and FFmpeg lays it over the
+  film at its time.
+
+  **Placement** (`motion/place.py`):
+  - the apps' safe zones per frame shape;
+  - off the near faces in the shots under a graphic;
+  - captions from the words said in shots that play their own sound;
+  - long titles broken in two;
+  - a place name moves to the top left in a tall frame when captions are on;
+  - the picture under each title and name is looked at before anyone sees it: its brightness, from the proxies, sets
+    how deep the soft pad behind the type is (a bright sky gets a deeper one).
+
+  The preview mounts the same blocks in the player (shadow DOM, film-sized stage, seeked by the player's clock), so it
+  shows what the render makes.
+
+  **In the studio:**
+  - The plan carries the graphics: a title keeps its place in the film, and a name follows its picture through swaps,
+    moves and removals.
+  - Captions on a film where nobody is heard are reported plainly.
+  - Without the engine, a title falls back to still text and the render notes say so.
+
+  **Real motion graphics (23 Oct, second round)**, beyond type:
+  - designed transitions on cuts (panels, iris, bars, flash), covering the frame on the cut's own frame;
+  - kinetic words cut in one per beat;
+  - callouts (ring, corner box, arrow) on something in a shot, found by Gemini from their words and followed as the
+    camera moves (the scene tracker: KLT and RANSAC), ending when it leaves the frame;
+  - a route drawing itself between places, with pins and names as the line reaches them;
+  - finishes: viewfinder brackets, a light sweep, light leaks, beat lines;
+  - a title behind the people in the shot: huge, placed at the top of the person (u2net's human segmentation), with
+    the people cut back over it in the render (u2net plus the guided filter, steadied over time).
+
+  Cello reads them in plain words. A name, callout or finish follows its picture through changes, by the moment it
+  shows; a callout whose picture is replaced goes.
+
+  **Still to come:** the preview shows a behind-title in front of the person (the matte is made in the render).
+
+### Built 23 Oct, later the same day: the rest of the list, without approval stops (the owner's word)
+- **B2, styles:**
+  - Six whole edit styles in `studio/styles.py`: Clean cinematic, Hype, Travel diary, Soft and warm, Documentary and
+    Camcorder.
+  - Each style sets the grade, the title move, the colour, transitions where the film changes place, what happens on
+    the drop, a finish, and place names or a route.
+  - A style is applied to their own film as a draft in seconds, and graphics they asked for themselves stay.
+  - The film page shows a card per style, with a live sample of its title over a still of their film.
+- **C, ready to post** (`studio/ready.py`):
+  - A score out of 100 from measured parts: the hook, words on screen early, pace, length, captions when people speak,
+    a person early, on the beat, and a loop.
+  - Each weak part has a one-tap fix (open on the stronger shot, a title, captions) that plays as a draft.
+  - Gemini also watches the version as a viewer: would it stop the scroll, would it hold, where people would leave,
+    and why.
+- **D, create:**
+  - AI clips through Higgsfield's API (Kling 3, `create/higgsfield.py`): "make an AI clip of X for shot 4" makes the
+    clip, logs it, and puts it in that shot's place as a draft.
+  - Effects that make a new clip (`create/effects.py`), each swapped in the same way:
+    - a 3D photo (Depth Anything V2 Small parallax);
+    - an object removed (Gemini finds its box, the scene tracker follows it, LaMa fills it);
+    - an upscale (Real-ESRGAN in tiles).
+  - Sound for every graphic's move (`motion/sound.py`), from a pro library generated once with ElevenLabs sound
+    generation, with the synthesized effects as the fallback.
+  - A stretch of the music made again ("make the ending calmer"), the rest kept note for note (ElevenLabs inpainting,
+    `music/sections.py`; full tracks are now stored for it).
+- **E, hands-on:**
+  - A timeline under the film: drag a shot to move it, drag its edge to change its length in half beats, tap a shot
+    for its changes, and drag graphics between shots. Every change is a draft at once.
+  - Hand changes are kept as feedback that the learning pass reads.
+  - Cello can be spoken to (the browser's speech recognition), and there is a hands-free mode that reads replies
+    aloud and listens again.
+  - The microphone is allowed for our own pages only.
+- **F, agencies and editors:**
+  - Review links: a private link to a version; a client watches it without an account and leaves notes pinned to a
+    second. The notes show on the film page and Cello reads them.
+  - A brand kit on My style: colour, type and logo. Every graphic takes the colour and type, and the logo sits in a
+    corner, embedded in the edit so the render and the preview match.
+  - The cut for editors: FCPXML 1.10 and CMX 3600 EDL on the original clips.
+- **Exports:**
+  - SRT captions, 4:5 and 1:1 cuts, a ProRes 422 HQ master, a GIF, a thumbnail and MP3, from the version as made.
+  - "Make it for Instagram / TikTok / YouTube / Shorts" sets the shape, makes the version in it, and is remembered
+    for new films.
+
+**Deploy needs:**
+- `modal volume put flicello-models` the depth, inpaint and upscale models;
+- HF_API_KEY_ID and HF_API_KEY_SECRET in .env and the Modal secret once the owner makes the Higgsfield key;
+- GEMINI_API_KEY in the Modal secret.
+  - **The engine on Modal:** the image installs Node 22 and the engine; the self-test renders a title. Both are first
+    exercised on the next deploy.
 
 ### Slice 1 in detail (what is built)
 - **The film spec** (`studio/spec.py`). It is built from the note, the cut note, the brief they confirmed, their answers,

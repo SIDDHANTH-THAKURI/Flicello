@@ -1,0 +1,4 @@
+/* The stage every block draws on: the film's frame, transparent. */
+.fm-stage { position: absolute; left: 0; top: 0; overflow: hidden; background: transparent; transform-origin: 0 0;
+  font-family: 'FlicelloDisplay', sans-serif; color: #fff; -webkit-font-smoothing: antialiased; }
+.fm-stage * { box-sizing: content-box; }

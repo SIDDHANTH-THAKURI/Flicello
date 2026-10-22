@@ -127,6 +127,14 @@ CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'text', body TEXT NOT NULL DEFAULT '{}', created REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS messages_project ON messages(project_id, id);
+CREATE TABLE IF NOT EXISTS review_links(
+  token TEXT PRIMARY KEY, project_id TEXT NOT NULL, version INTEGER NOT NULL, created REAL NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS review_notes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL, project_id TEXT NOT NULL, version INTEGER NOT NULL,
+  at REAL NOT NULL, name TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created REAL NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS review_notes_project ON review_notes(project_id, id);
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, priority, id);
 CREATE INDEX IF NOT EXISTS projects_user ON projects(user_id, deleted);
 CREATE INDEX IF NOT EXISTS spend_at ON spend(at);
@@ -160,6 +168,9 @@ class DB:
     @staticmethod
     def _migrate(con: sqlite3.Connection) -> None:
         """Columns added after the first release (CREATE TABLE IF NOT EXISTS leaves older databases as they were)."""
+        beat_cols = {r[1] for r in con.execute("PRAGMA table_info(beats)")}
+        if beat_cols and "full_song_id" not in beat_cols:  # the full track kept at ElevenLabs, for section edits
+            con.execute("ALTER TABLE beats ADD COLUMN full_song_id TEXT")
         have = {r[1] for r in con.execute("PRAGMA table_info(projects)")}
         if "song_seconds" not in have:
             con.execute("ALTER TABLE projects ADD COLUMN song_seconds REAL")

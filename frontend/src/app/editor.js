@@ -109,7 +109,87 @@ function wire(pid) {
       }
     });
   }
+  voice(box, form, area, pid);
   if (box.dataset.thinking === '1') waitForReply(pid);
+}
+
+// ---------------------------------------------------------------- talking to Cello out loud
+// The browser hears them (its own speech recognition) and reads Cello's replies aloud (its own voices). Push the mic to
+// say one thing; hands-free keeps listening after each reply, as a conversation.
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const HANDS_FREE = 'cello-hands-free';
+let spokenLast = '';
+
+function lastReply(box) {
+  const replies = [...box.querySelectorAll('li.m-editor:not(.m-thinking)')];
+  const li = replies[replies.length - 1];
+  return li ? (li.querySelector('.m-text, p') || li).textContent.trim() : '';
+}
+
+function say(text, then) {
+  if (!('speechSynthesis' in window) || !text) { if (then) then(); return; }
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text.slice(0, 600));
+  u.rate = 1.05;
+  u.onend = () => { if (then) then(); };
+  u.onerror = () => { if (then) then(); };
+  window.speechSynthesis.speak(u);
+}
+
+function listen(form, area, mic, auto) {
+  if (!Recognition || !area || area.disabled) return;
+  const rec = new Recognition();
+  rec.lang = navigator.language || 'en-US';
+  rec.interimResults = true;
+  rec.continuous = false;
+  let heard = '';
+  mic.classList.add('on');
+  mic.setAttribute('aria-pressed', 'true');
+  rec.onresult = (e) => {
+    heard = [...e.results].map((r) => r[0].transcript).join(' ');
+    area.value = heard;
+  };
+  rec.onerror = () => { mic.classList.remove('on'); mic.setAttribute('aria-pressed', 'false'); };
+  rec.onend = () => {
+    mic.classList.remove('on');
+    mic.setAttribute('aria-pressed', 'false');
+    if (heard.trim()) form.requestSubmit(); // said it: it goes, as if typed
+    else if (auto && localStorage.getItem(HANDS_FREE) === '1') setTimeout(() => listen(form, area, mic, true), 600);
+  };
+  rec.start();
+}
+
+function voice(box, form, area, pid) {
+  if (!form || !area || !Recognition || form.querySelector('.mic')) return;
+  const mic = document.createElement('button');
+  mic.type = 'button';
+  mic.className = 'mic';
+  mic.title = 'Say it';
+  mic.setAttribute('aria-label', 'Say it to Cello');
+  mic.setAttribute('aria-pressed', 'false');
+  form.insertBefore(mic, form.querySelector('button[type="submit"]'));
+  mic.addEventListener('click', () => listen(form, area, mic, false));
+  const free = document.createElement('label');
+  free.className = 'hands-free';
+  const tick = document.createElement('input');
+  tick.type = 'checkbox';
+  tick.checked = localStorage.getItem(HANDS_FREE) === '1';
+  free.append(tick, document.createTextNode(' Hands-free'));
+  form.after(free);
+  tick.addEventListener('change', () => {
+    localStorage.setItem(HANDS_FREE, tick.checked ? '1' : '0');
+    if (tick.checked) listen(form, area, mic, true);
+    else if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  });
+  // hands-free: a new reply is read out, then it listens again
+  const reply = lastReply(box);
+  if (localStorage.getItem(HANDS_FREE) === '1' && box.dataset.thinking !== '1' && reply && reply !== spokenLast) {
+    const first = !spokenLast;
+    spokenLast = reply;
+    if (!first) say(reply, () => listen(form, area, mic, true));
+  } else if (!spokenLast) {
+    spokenLast = reply;
+  }
 }
 
 export function editor() {
