@@ -96,6 +96,12 @@ class RemoteDB(DB):
         else:
             DB.job_done(self, *args, **kw)
 
+    def post_message(self, *args, **kw) -> int | None:
+        if self.hold:
+            self._held.append(("post_message", args, kw))
+            return None
+        return DB.post_message(self, *args, **kw)
+
     def release(self) -> None:
         held, self._held, self.hold = self._held, [], False
         for name, args, kw in held:

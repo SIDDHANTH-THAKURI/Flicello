@@ -94,7 +94,7 @@ def beat_findings(cuts: list[float], grid: np.ndarray, start: float, end: float,
 
 
 def hit_findings(hard: list[float], booms: np.ndarray, bars: np.ndarray, joins: int, start: float, end: float,
-                 tolerance: float = 0.05) -> list[Finding]:
+                 tolerance: float = 0.05, drop: float | None = None) -> list[Finding]:
     """Beat sync as a person feels it: how many of the film's cuts land on the music's heavy hits (the kick, the 808)
     or bar starts, and how many joins are soft (a dissolve hides the hit). On a beat is not enough: a cut on the snare
     one beat before every 808 measured 'perfect' and felt off."""
@@ -105,6 +105,11 @@ def hit_findings(hard: list[float], booms: np.ndarray, bars: np.ndarray, joins: 
     on = sum(1 for c in inside if len(marks) and np.min(np.abs(marks - c)) <= tolerance)
     soft = max(0, joins - len(hard))
     detail = f"{on} of {joins} cuts on a heavy hit or bar start" + (f"; {soft} soft (dissolves)" if soft else "")
+    if drop is not None and start < drop < end:  # how often the pictures change once the music is at full power
+        heavy = [b for b in booms if drop <= b < end - 0.3]
+        cut = [c for c in inside if c >= drop - tolerance]
+        if heavy:
+            detail += f"; after the drop {len(cut)} cuts for {len(heavy)} heavy hits"
     return [Finding("ok" if on >= 0.6 * joins else "warn", "hits", detail)]
 
 
@@ -239,7 +244,9 @@ def run_checks(video: Path, edl: EDL, project: Project, *, head: float = 0.0, ta
             findings += beat_findings(m.cuts, grid, head, head + film, strict=strict_beats, planned=hard)
             booms = np.asarray(getattr(song, "booms", []) or [], dtype=float) + edl.music.grid_shift - edl.music.start + head
             bars = np.asarray(song.downbeats) + edl.music.grid_shift - edl.music.start + head
-            findings += hit_findings(hard, booms, bars, len(timeline.items) - 1, head, head + film)
+            drop = next((d + edl.music.grid_shift - edl.music.start + head for d in song.drops
+                         if d + edl.music.grid_shift - edl.music.start > 1.0), None)
+            findings += hit_findings(hard, booms, bars, len(timeline.items) - 1, head, head + film, drop=drop)
         else:
             findings.append(Finding("warn", "beat sync", "music jumps off the beat grid: not checked"))
     fades = [0.0, head, head + film, m.duration] if (head or tail) else [0.0, m.duration]

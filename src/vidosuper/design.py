@@ -43,6 +43,7 @@ class Moment(BaseModel):
     start: float
     end: float
     peak: float | None = None  # where the action is; None = find the busiest frame
+    hero: float | None = None  # where its subject is best and whole in frame: a shot without action is cut around it
 
 
 class Shot(BaseModel):
@@ -63,6 +64,8 @@ class Shot(BaseModel):
     flip: bool = Field(False, description="Mirror the shot left-right (another take, in effect).")
     crack_db: float | None = Field(None, description=(
         "How loud the real sound of the action peak is played (dB peak, default -5): lower it for a hit shown many times."))
+    src_in: float | None = Field(None, description=(
+        "Pinned: the clip second this shot starts at. A shot kept from an earlier version shows the same frames."))
 
 
 class Design(BaseModel):
@@ -81,6 +84,9 @@ class Design(BaseModel):
         "Song seconds where a beat certainly is (the opening hit, the drop): the beat grid is shifted to "
         "it when the analysis put the beat on the off-beat."))
     bar_pulses: bool = Field(True, description="A zoom pulse on every cut that starts a bar (off = fewer effects).")
+    start_at: float | None = Field(None, description=(
+        "Pinned: the song second the film starts at, on a beat (the grid an earlier version was cut on, kept when "
+        "the music analysis has changed since)."))
     pool: dict[str, Moment]
     plan: list[Shot]
     sfx: list[tuple[float, str, float]] = Field(default_factory=list, description=(
@@ -182,9 +188,13 @@ class _Footage:
 
     def source_in(self, m: Moment, need: float, lead: float | None, refine: bool | str = False) -> float:
         """Where the shot starts: on the action (peak - lead) or the steadiest stretch of the moment."""
-        peak = self.peak_of(m, refine) if lead is not None else None
+        # a real action peak leads; a moment with none but a best-framed instant is cut around that instead of
+        # around its busiest frame
+        peak = self.peak_of(m, refine) if lead is not None and (m.peak is not None or m.hero is None) else None
         if lead is not None and peak is not None:
             s = peak - lead
+        elif m.hero is not None:  # the landmark whole and centred a little before the middle of the shot
+            s = max(m.start - 0.3, min(m.hero - 0.45 * need, max(m.start, m.end - need)))
         else:
             s = self.steadiest(m.clip, m.start, max(m.end, m.start + need), need)
         return round(max(0.0, min(s, self.clip(m.clip).duration - need - 0.05)), 2)
@@ -268,6 +278,8 @@ def build_template(design: Design, project: Project) -> Template:
         start = design.beat_at % period  # the same regular grid, through the heard beat, from the top
         beats = start + period * np.arange(int((song.duration - start) / period) + 1)
         first = int(np.argmin(np.abs(beats - design.beat_at))) % 4
+    elif design.start_at is not None:  # the beat an earlier version started on
+        first = int(np.argmin(np.abs(beats - design.start_at)))
     else:
         first = int(np.argmin(np.abs(beats - song.downbeats[0]))) if song.downbeats else 0
 
@@ -321,7 +333,11 @@ def build_template(design: Design, project: Project) -> Template:
         refine = True if synced else ("sound" if shot.kind == "hit" else False)
         if refine == "sound" and (heard := footage.peak_of(moment, "sound")) is not None and heard != footage.peak_of(moment):
             lead = 0.04  # a sound marks the impact: it lands on the downbeat (a frame early, so the flash meets it)
-        src = footage.source_in(moment, need, lead, refine=refine)
+        if shot.src_in is not None:  # pinned: the frames of the version it was kept from (inside the clip)
+            limit = footage.clip(moment.clip).duration - need - 0.05
+            src = round(max(0.0, shot.src_in if shot.src_in <= limit + 0.011 else limit), 3)  # (it was rounded to 0.01)
+        else:
+            src = footage.source_in(moment, need, lead, refine=refine)
         if shot.kind == "stutter":  # A A B C ...: repeat, then step on
             src = round(src + max(0, rep - 1) * 0.12, 2)
         slots.append(slot.model_copy(update={"src_in": src}))

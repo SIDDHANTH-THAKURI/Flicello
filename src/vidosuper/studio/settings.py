@@ -75,6 +75,7 @@ class Models(_Strict):
     director: str = "claude-opus-5-5"  # pitches the stories
     editor: str = "claude-opus-5-5"  # designs and revises the cut
     coach: str = "claude-haiku-4-5-20251001"  # turns feedback into style rules
+    assistant: str = "claude-opus-5-5"  # your editor: talks with the person through the whole film (agent.py)
     images: str = "gemini-nano-banana-2.1"  # paints the looks' previews and the backdrops (GEMINI_API_KEY)
 
 

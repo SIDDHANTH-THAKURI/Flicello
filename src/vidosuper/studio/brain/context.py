@@ -38,9 +38,51 @@ FAST_WORDS = re.compile(r"\b(fast|quick|rapid|punchy|snappy|energetic|hype|frant
 EVERY_WORDS = re.compile(r"\b(?:every|each|per)\s+(?:single\s+)?(?:beat|strike|drum\s?hit|drum)s?\b|"
                          r"\bone\s+(?:shot|cut|clip)\s+(?:per|for\s+(?:each|every)|on\s+(?:each|every))\b", re.IGNORECASE)
 BRIGHT_WORDS = re.compile(r"\b(bright|brighter|light|airy|sunny|vibrant)\b", re.IGNORECASE)
-SYNC_WORDS = re.compile(r"\bbeat[\s-]*sync\w*|\bsync\w*\s+(?:\w+\s+){0,3}(?:beats?|music|song|track|drums?)\b|"
+SYNC_WORDS = re.compile(r"\bbeat[\s-]*sync\w*|\bsync\w*\s+(?:\w+\s+){0,6}(?:beats?|music|song|track|drums?)\b|"
                         r"\b(?:cuts?|cutting|transitions?)\s+(?:\w+\s+){0,3}on\s+(?:the\s+)?(?:beats?|hits?|drops?|bass|808s?|kicks?)\b|"
                         r"\bon\s+(?:the\s+)?beat\b", re.IGNORECASE)
+NO_PEOPLE_WORDS = re.compile(r"\bno\s+(?:faces?|people|persons?|humans?|strangers?)\b|\bwithout\s+(?:faces?|people)\b|"
+                             r"\bno\s*(?:one|body)\s+in\b|\bnobody\b", re.IGNORECASE)
+NO_REPEAT_WORDS = re.compile(r"\bno\s+(?:duplicat\w*|repeat\w*|repetit\w*)|\bnon[- ]?duplicat\w*|\bdon'?t\s+repeat|"
+                             r"\bnothing\s+twice\b|\bonce\s+is\s+enough\b|\bnot\s+(?:the\s+same|twice)\b|"
+                             r"\b(?:remove|avoid|cut|drop)\s+(?:the\s+)?(?:repeat\w*|duplicat\w*)|"
+                             r"\b(?:each|every)\s+(?:location|place|landmark|scene)\s+(?:\w+\s+){0,2}once\b|"
+                             r"\bno\s+(?:place|location|landmark|scene)\s+twice\b", re.IGNORECASE)
+HOLD_WORDS = re.compile(r"\b\d+(?:\.\d+)?\s*(?:-|to)?\s*\d*\s*(?:s|secs?|seconds)\b|\b(?:hold|linger|breathe|long\s+takes?|"
+                        r"longer\s+shots?|more\s+screen\s*time)\b", re.IGNORECASE)
+PEOPLE_TEXT = re.compile(r"\b(?:person|people|man|men|woman|women|boy|girl|kids?|child(?:ren)?|passengers?|crowd|couple|"
+                         r"someone|friends?|tourists?|selfie|faces?|guy|lady|family|group|walker|pedestrians?|figures?|swimmers?|surfers?)\b", re.IGNORECASE)
+FAR_TEXT = re.compile(r"\b(?:distant|far[- ]off|far away|tiny|small figures?|silhouett\w*|specks?)\b", re.IGNORECASE)
+
+
+def people_in(m: dict) -> str:
+    """Who is in a logged moment: none, far, near, face, or unknown. Logs from before the analyst said so are read
+    from the description (a person named in it is near unless it says they are far off)."""
+    said = m.get("people")
+    if said and said != "unknown":
+        return said
+    text = f"{m.get('description', '')} {m.get('notes', '')}"
+    if not PEOPLE_TEXT.search(text):
+        return "unknown"
+    return "far" if FAR_TEXT.search(text) else "near"
+
+
+def place_of(m: dict) -> str:
+    """The place a logged moment shows, as a key (empty: no particular place)."""
+    p = " ".join(str(m.get("place") or "").lower().replace("the ", " ").split())
+    return p
+
+
+def logged_at(f, start: float, end: float) -> dict | None:
+    """The logged moment a window of a clip sits in (the one it overlaps most)."""
+    best, out = 0.0, None
+    for m in f.moments:
+        o = min(end, m["end"]) - max(start, m["start"])
+        if o > best:
+            best, out = o, m
+    return out
+
+
 HITS_WORDS = re.compile(r"\b(hit|hits|hitting|crack|bat|impact|punch|slam|smash)\b", re.IGNORECASE)
 
 
@@ -127,10 +169,15 @@ class BeatMap:
         return "\n".join(lines)
 
 
-def beat_map(song: MusicAnalysis, target_seconds: float) -> BeatMap:
+def beat_map(song: MusicAnalysis, target_seconds: float, start_at: float | None = None) -> BeatMap:
+    """The song from the edit's point of view. `start_at`: the beat a version was cut from (kept when a later
+    music analysis would put the first downbeat elsewhere)."""
     beats = np.asarray(song.beats, dtype=float)
     period = float(np.median(np.diff(beats)))
-    first = int(np.argmin(np.abs(beats - song.downbeats[0]))) if song.downbeats else 0
+    if start_at is not None:
+        first = int(np.argmin(np.abs(beats - start_at)))
+    else:
+        first = int(np.argmin(np.abs(beats - song.downbeats[0]))) if song.downbeats else 0
     t0 = float(beats[first])
     end = audible_end(song)
     available = int((end - t0) / period)

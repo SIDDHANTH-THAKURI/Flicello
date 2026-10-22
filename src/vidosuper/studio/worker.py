@@ -167,6 +167,7 @@ def maintain(studio: Studio) -> None:
         remove_project_files(workdir(s, p["user_id"], p["id"]), studio.cfg)
         db.run("UPDATE projects SET deleted=1 WHERE id=?", (p["id"],))
         db.run("DELETE FROM clips WHERE project_id=?", (p["id"],))
+        db.run("DELETE FROM messages WHERE project_id=?", (p["id"],))  # their words to their editor go with the film
         log.info("retention: deleted project %s", p["id"])
     spend_watch(studio, now)
     from .storage import user_dir

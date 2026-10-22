@@ -2,6 +2,7 @@
 // finished uploading), live progress while a step runs, the rating slider, and the new-film form.
 import { toast } from './ui.js';
 import { ask } from './asks.js';
+import { editor } from './editor.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -425,9 +426,102 @@ function swatches() {  // a look's colours (set from script: the page allows no 
   });
 }
 
+// A finished film's shots, numbered as on the strip under it: the number of the shot playing now sits on the video,
+// that shot's card lights up, and tapping a card's frame plays the film from that shot. The numbers are the ones a
+// change names ("swap 9 and 10"), so nobody has to count cuts by eye.
+function shotNumbers() {
+  const figs = document.querySelectorAll('figure[data-shots]');
+  if (!figs.length) return;
+  const cards = new Map([...document.querySelectorAll('.shot-strip [data-shot]')].map((el) => [el.dataset.shot, el]));
+  const videos = [];
+  figs.forEach((fig) => {
+    let shots;
+    try { shots = JSON.parse(fig.dataset.shots); } catch { return; }
+    const video = fig.querySelector('video');
+    const badge = fig.querySelector('.shot-badge');
+    if (!video || !badge || !shots.length) return;
+    videos.push(video);
+    let last = null;
+    const now = () => {
+      const t = video.currentTime;
+      let n = shots[0][1];
+      for (const [start, k] of shots) {
+        if (t + 0.02 >= start) n = k;
+        else break;
+      }
+      badge.hidden = false;
+      if (n === last) return;
+      last = n;
+      badge.textContent = `Shot ${n}`;
+      cards.forEach((el, k) => el.classList.toggle('now', String(n) === k));
+      const card = cards.get(String(n));
+      const row = card && card.parentElement;
+      if (row && row.scrollWidth > row.clientWidth) { // the strip follows the film (sideways only: the page stays put)
+        const left = card.offsetLeft - row.offsetLeft;
+        if (left < row.scrollLeft || left + card.offsetWidth > row.scrollLeft + row.clientWidth) {
+          row.scrollTo({ left: Math.max(0, left - row.clientWidth / 2 + card.offsetWidth / 2), behavior: 'smooth' });
+        }
+      }
+    };
+    let raf = 0;
+    const loop = () => {
+      now();
+      raf = video.paused || video.ended ? 0 : requestAnimationFrame(loop);
+    };
+    video.addEventListener('play', () => { if (!raf) raf = requestAnimationFrame(loop); });
+    ['seeked', 'loadedmetadata', 'timeupdate'].forEach((e) => video.addEventListener(e, now));
+  });
+  document.querySelectorAll('.shot-strip [data-seek]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const v = videos[0];
+      if (!v) return;
+      v.currentTime = (parseFloat(btn.dataset.seek || '0') || 0) + 0.03;
+      v.play().catch(() => {});
+      v.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  });
+}
+
+// The strip's "make it" button shows once a shot change is picked, and says how many (nothing picked: nothing to send).
+function shotChanges() {
+  const box = document.querySelector('[data-shot-submit]');
+  const form = box && box.closest('form');
+  if (!form) return;
+  const label = box.querySelector('[data-shot-count]');
+  const count = () => {
+    const shots = new Set();
+    form.querySelectorAll('input[type=checkbox]:checked, select').forEach((el) => {
+      if (el.tagName === 'SELECT' && !el.value) return;
+      shots.add(el.name.split('_').pop());
+    });
+    box.hidden = shots.size === 0;
+    if (label) label.textContent = `Make it with ${shots.size === 1 ? 'this shot change' : `changes to ${shots.size} shots`}`;
+  };
+  form.addEventListener('change', count);
+  count();
+}
+
+// A short step that runs while the page shows the film (numbering a version's shots): reload when it is done.
+function reloadWhenDone(pid) {
+  if (!document.querySelector('[data-reload-when-done]')) return;
+  let tries = 0;
+  const tick = async () => {
+    tries += 1;
+    try {
+      const st = await api('GET', `/api/p/${pid}/status`);
+      if (!st.job) { window.location.reload(); return; }
+    } catch { /* the next try */ }
+    if (tries < 120) setTimeout(tick, 2500);
+  };
+  setTimeout(tick, 2500);
+}
+
 export function studio() {
   const pid = document.body.dataset.project;
-  if (pid) { uploads(pid); progress(pid); }
+  if (pid) { uploads(pid); progress(pid); reloadWhenDone(pid); }
+  editor();
+  shotNumbers();
+  shotChanges();
   swatches();
   rating();
   newFilm();

@@ -14,6 +14,7 @@ from the command line (to measure time and cost per video).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -40,9 +41,12 @@ from ..render import render_edl
 from ..schemas import ClipAnalysis, Moment, Transition
 from ..template import Template, autofill
 from ..workspace import Project, write_text_atomic
+from .brain import BudgetExceeded, PersonLimit
 from .brain.context import HITS_WORDS, beat_map, clip_facts, load_catalog, moment_by_id
 from .brain.core import StoryContext, brief_text, to_design
 from .brain.schemas import DesignPlan, StoryPitch
+
+log = logging.getLogger("vidosuper.studio.pipeline")
 from .brain.strikes import Hit, plan_on_strikes
 
 class UserError(ValueError):
@@ -281,16 +285,60 @@ class Pipeline:
             total += sum(w) / 10
         return total
 
-    def context(self, shapes: list[str], length: float, intent: str, rules: list[dict], pace: str = "balanced") -> StoryContext:
+    def fill_places(self) -> bool:
+        """Logs made before the analyst named each moment's place and who is in it get both, read from their own
+        words (one short text call for the whole film), so 'the Opera House twice' is caught in older films too.
+        True when it tagged something."""
+        root = self.project.root
+        if self.brain is None or not hasattr(self.brain, "places") or not (root / "catalog.json").exists():
+            return False
+        catalog = load_catalog(root)
+        entries = [e for e in catalog["clips"] if e.get("analysis")]
+        if not any("place" not in m for e in entries for m in e["analysis"]["moments"]):
+            return False
+        lines, ids = [], []
+        for e in entries:
+            a = e["analysis"]
+            lines.append(f"## {e['short']}: {a['summary']}" + (f" (the analyst's place: {a['location_guess']})"
+                                                             if a.get("location_guess") else ""))
+            for n, m in enumerate(sorted(a["moments"], key=lambda m: m["start"]), start=1):
+                ids.append(f"{e['short']}#{n}")
+                lines.append(f"- {e['short']}#{n}: {m['description']}" + (f" [{m['notes']}]" if m.get("notes") else ""))
+        self.progress(0.03, "Noting the places in your clips")
+        tags = {t.id: t for t in self.brain.places("\n".join(lines), ids).tags}
+        for e in entries:
+            path = analysis_path(self.project, e["clip"]["clip_id"])
+            if not path.exists():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["moments"] = sorted(data.get("moments") or [], key=lambda m: m["start"])
+            for n, m in enumerate(data["moments"], start=1):
+                t = tags.get(f"{e['short']}#{n}")
+                m.setdefault("place", t.place if t else "")
+                if m.get("people") in (None, "unknown"):
+                    m["people"] = t.people if t else "unknown"
+            write_text_atomic(path, json.dumps(data, indent=1))
+        build_catalog(self.project)
+        return True
+
+    def context(self, shapes: list[str], length: float, intent: str, rules: list[dict], pace: str = "balanced",
+                start_at: float | None = None) -> StoryContext:
+        """`start_at`: the beat a version was cut from (a change to it keeps that grid)."""
         self.ensure_song(length, pace)
+        try:
+            self.fill_places()
+        except (BudgetExceeded, PersonLimit):
+            raise
+        except Exception:  # noqa: BLE001 - without the tags the film is still made, as before
+            log.warning("could not tag the places of the clips", exc_info=True)
         catalog = load_catalog(self.project.root)
         song = self.song()
-        ctx = StoryContext(catalog=catalog, facts=clip_facts(catalog), song=song, beats=beat_map(song, length),
+        ctx = StoryContext(catalog=catalog, facts=clip_facts(catalog), song=song, beats=beat_map(song, length, start_at),
                            shapes=shapes, intent=intent, rules=rules, pace=pace)
         good = sum(1 for f in ctx.facts.values() for m in f.moments if m["strength"] >= 4)
         ctx.allow_reuse = good < -(-ctx.beats.target // 4)  # fewer good moments than a shot every 4 beats: reuse them
         ctx.reuse_if_asked(intent, *[r["text"] for r in rules])
-        ctx.sync_if_asked(*[r["text"] for r in rules])  # (their own words are added by the caller: not the AI's brief)
+        ctx.read_words(*[r["text"] for r in rules])  # (their own words are added by the caller: not the AI's brief)
         return ctx
 
     # ------------------------------------------------------------ pitch
@@ -330,7 +378,7 @@ class Pipeline:
     # ------------------------------------------------------------ design, sample, render
     def design(self, ctx: StoryContext, pitch: StoryPitch, note: str = "") -> DesignPlan:
         self.progress(0.05, "Planning the cut on the song's beats")
-        ctx.sync_if_asked(note)
+        ctx.read_words(note)
         if ctx.pace == "every":
             if note.strip():  # "not quite": another take of the same idea, shaped by what they said
                 return self.revise_strikes(ctx, pitch, note, 1 + (len(note) % 7))
@@ -369,7 +417,7 @@ class Pipeline:
 
     def revise(self, ctx: StoryContext, pitch: StoryPitch, current: DesignPlan, feedback: str) -> DesignPlan:
         self.progress(0.05, "Working your changes into the plan")
-        ctx.sync_if_asked(feedback)
+        ctx.read_words(feedback)
         if ctx.pace == "every":
             return self.revise_strikes(ctx, pitch, feedback, 1 + len(current.plan) % 7)
         return self.brain.revise(ctx, pitch, current, feedback)

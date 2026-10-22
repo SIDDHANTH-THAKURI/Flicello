@@ -475,6 +475,37 @@ def create_app(studio: Studio) -> FastAPI:
         except ActionError as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    EDITOR_ASKS = {  # what the editor's message box suggests at each step
+        "setup": "What's it for, where will you post it, what must be in it?",
+        "understood": "Anything I got wrong? Tell me here, or correct it below.",
+        "choose": "Like one? Want something else? e.g. 'the second, but end on the bridge'",
+        "review": "What should change in the sample?",
+        "done": "What should change? e.g. 'shot 3 out, shot 7 two beats longer, nobody in shot'",
+        "confirm": "Did I read it right? Tell me what to fix.",
+    }
+
+    def editor_view(p: dict, user: dict) -> dict:
+        """The editor panel's data: the conversation, the film's spec and the checks of what is on screen."""
+        from .. import agent
+        from .. import spec as specs
+
+        msgs = agent.thread(studio.db, p["id"])
+        checks = (json.loads(p["info"]) if p.get("info") else {}).get("checks") or {}
+        if p["stage"] in ("done", "confirm", "revising", "reading", "rendering") and p["version"]:
+            results = checks.get(str(studio.work_version(p))) or []
+        elif p["stage"] in ("review", "sampling"):
+            results = checks.get("sample") or []
+        else:
+            results = []
+        by_item: dict[str, dict] = {}
+        for r in results:
+            for iid in r.get("items") or []:
+                by_item.setdefault(iid, r)
+        return {"editor_thread": msgs, "editor_thinking": agent.thinking(msgs), "spec_items": studio.spec_items(p, user),
+                "item_checks": by_item, "brief_checks": specs.summary(results),
+                "editor_placeholder": EDITOR_ASKS.get(p["stage"], "Tell me anything: I keep it for the next step."),
+                "editable_spec": p["stage"] not in BUSY}
+
     @app.get("/p/{pid}", response_class=HTMLResponse)
     def project_page(request: Request, pid: str):
         user, sess = need_user(request)
@@ -507,10 +538,18 @@ def create_app(studio: Studio) -> FastAPI:
         pitches = studio.pitches(p)
         samples = studio.renders(p, "sample")
         finals = studio.renders(p, "final")
-        latest = sorted([r for r in finals if r["version"] == p["version"]], key=lambda r: r["shape"] != "9:16")
+        work_v = studio.work_version(p) if finals else 0  # the version they work on (the newest, or one they picked)
+        latest = sorted([r for r in finals if r["version"] == work_v], key=lambda r: r["shape"] != "9:16")
         older = [r for r in finals if r["version"] != p["version"]]
-        feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=?",
-                                 (pid, p["version"]))
+        feedback = studio.db.one("SELECT * FROM feedback WHERE project_id=? AND stage='final' AND version=? "
+                                 "ORDER BY id DESC LIMIT 1", (pid, work_v))
+        strip = studio.strip_of(p, work_v) if work_v and p["kind"] == "montage" else None
+        if strip is None and work_v and p["kind"] == "montage" and p["stage"] == "done" and not job:
+            if studio.number_shots(p, work_v):  # made before shots were numbered: a few seconds, no AI
+                job = studio.db.active_job(pid)
+        versions_all = studio.versions_list(p) if finals else []
+        work = next((v for v in versions_all if v["version"] == work_v), None)
+        pending = studio._info(p).get("pending") if p["stage"] == "confirm" else None
         from ..storage import earlier_clips
         earlier = earlier_clips(studio.db, s, p) if p["stage"] == "setup" and p["kind"] == "montage" else []
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
@@ -527,13 +566,16 @@ def create_app(studio: Studio) -> FastAPI:
                     render_eta=studio.typical_seconds("render"),
                     note_lines=note_read(p),
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
+                    work=work, strip=strip, versions_all=versions_all, pending=pending,
+                    shot_times=json.dumps([[c["start"], c["n"]] for c in strip["cards"]]) if strip else "",
                     board=studio.board(p, samples[0]["plan_id"]) if samples and p["kind"] == "montage" else None,
                     gaps=abilities.for_project(studio.db, p),
                     info=json.loads(p["info"]) if p["info"] else None,
                     revisions_left=None if studio.is_owner(user) else max(0, s.limits.revisions_per_video - p["revisions"]),
                     ideas_left=studio.ideas_left(p), sample_tries_left=studio.sample_tries_left(p),
                     polish_left=studio.polish_left(p) if p["stage"] == "understood" else 0,
-                    chunk=s.limits.chunk_bytes)
+                    chunk=s.limits.chunk_bytes, brief_open=request.query_params.get("open") == "brief",
+                    **editor_view(p, user))
 
     def act(request: Request, csrf: str, pid: str, fn) -> RedirectResponse:
         user, sess = need_user(request)
@@ -690,6 +732,79 @@ def create_app(studio: Studio) -> FastAPI:
 
         return await run_in_threadpool(act, request, str(form.get("csrf", "")), pid, go)
 
+    @app.post("/p/{pid}/change")
+    def change(request: Request, pid: str, csrf: str = Form(""), text: str = Form("")):
+        """What they want changed, in their words: read into exact changes, shown before anything is made."""
+        return act(request, csrf, pid, lambda u, p: studio.ask_change(u, p, text))
+
+    @app.post("/p/{pid}/change/confirm")
+    async def change_confirm(request: Request, pid: str):
+        form = await request.form()
+        picks = [int(x) for x in form.getlist("pick") if str(x).isdigit()] if form.get("picked") == "1" else None
+        return await run_in_threadpool(act, request, str(form.get("csrf", "")), pid,
+                                       lambda u, p: studio.confirm_change(u, p, picks))
+
+    @app.post("/p/{pid}/change/cancel")
+    def change_cancel(request: Request, pid: str, csrf: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.cancel_change(p))
+
+    @app.post("/p/{pid}/shots")
+    async def shots_edit(request: Request, pid: str):
+        """Changes picked on the numbered shots (exact: no AI reads them)."""
+        form = await request.form()
+        data = {k: form.get(k) for k in form.keys()}
+        return await run_in_threadpool(act, request, str(form.get("csrf", "")), pid,
+                                       lambda u, p: studio.direct_change(u, p, data))
+
+    @app.post("/p/{pid}/continue")
+    def continue_version(request: Request, pid: str, csrf: str = Form(""), version: int = Form(0)):
+        """Work on an earlier version: the next change starts from it."""
+        return act(request, csrf, pid, lambda u, p: studio.continue_from(p, version))
+
+    # ------------------------------------------------------------------ your editor (agent.py)
+    @app.post("/p/{pid}/talk")
+    def talk(request: Request, pid: str, csrf: str = Form(""), text: str = Form(""), refs: str = Form("")):
+        """Their message to their editor: kept at once; the reply lands in the panel a few seconds later."""
+        user, sess = need_user(request)
+        check_csrf(sess, csrf)
+        p = owned(user, pid)
+        as_json = "application/json" in request.headers.get("accept", "")
+        try:
+            mid = studio.talk(user, p, text, [x for x in refs.split("|") if x.strip()])
+        except ActionError as exc:
+            if as_json:
+                return JSONResponse({"detail": str(exc)}, status_code=400)
+            return back(f"/p/{pid}", str(exc))
+        if as_json:
+            return {"id": mid}
+        return RedirectResponse(f"/p/{pid}#editor", status_code=303)
+
+    @app.get("/p/{pid}/editor", response_class=HTMLResponse)
+    def editor_panel(request: Request, pid: str):
+        """The editor panel alone, for the page to swap in when a reply lands."""
+        user, sess = need_user(request, api=True)
+        p = owned(user, pid)
+        return templates.TemplateResponse(request, "_editor.html", {"user": user, "csrf": sess["csrf"], "p": p,
+                                                                    **editor_view(p, user)})
+
+    @app.post("/p/{pid}/card")
+    def card(request: Request, pid: str, csrf: str = Form(""), mid: int = Form(0), k: int = Form(0),
+             choice: str = Form("")):
+        """A card in the conversation tapped: an answer, a step to run now, a preference to keep."""
+        return act(request, csrf, pid, lambda u, p: studio.answer_card(u, p, mid, k, choice))
+
+    @app.post("/p/{pid}/spec")
+    def spec_edit(request: Request, pid: str, csrf: str = Form(""), item: str = Form(""), op: str = Form("")):
+        """An item of the film's brief switched on or off, or one they added removed."""
+        user, sess = need_user(request)
+        check_csrf(sess, csrf)
+        p = owned(user, pid)
+        try:
+            studio.spec_change(user, p, item, op)
+        except ActionError as exc:
+            return back(f"/p/{pid}", str(exc))
+        return RedirectResponse(f"/p/{pid}?open=brief#brief", status_code=303)
+
     @app.post("/p/{pid}/report")
     def report(request: Request, pid: str, csrf: str = Form(""), note: str = Form("")):
         user, sess = need_user(request)
@@ -838,6 +953,7 @@ def create_app(studio: Studio) -> FastAPI:
         return {"stage": p["stage"], "label": STAGES.get(p["stage"], p["stage"]), "busy": p["stage"] in BUSY,
                 "progress": round(job["progress"], 3) if job else None, "message": job["message"] if job else "",
                 "queued": bool(job and job["status"] == "queued"), "version": p["version"], "updated": p["updated"],
+                "job": job["kind"] if job else None,
                 "queued_note": studio.queued_note(job),
                 "eta": studio.eta(job), "steps": steps_of(job)}
 

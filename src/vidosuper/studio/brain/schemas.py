@@ -138,6 +138,7 @@ class PlanShot(BaseModel):
     zoom_center: list[float] | None = Field(None, description="Leave empty.")  # a list: tuples make a schema Claude Code refuses
     flip: bool | None = Field(None, description="Leave empty.")
     crack_db: float | None = Field(None, description="Leave empty.")
+    src_in: float | None = Field(None, description="Leave empty: set by the tool for a shot kept from an earlier version.")
 
 
 class DesignPlan(BaseModel):
@@ -146,6 +147,113 @@ class DesignPlan(BaseModel):
     pool: list[PoolMoment]
     plan: list[PlanShot]
     notes: str = Field("", description="How the plan carries the story: hook, turn, drop, ending.")
+    start_at: float | None = Field(None, description="Leave empty: set by the tool (the beat an earlier version started on).")
+
+
+class RangePlan(BaseModel):
+    """New shots for one stretch of a film whose other shots stay exactly as they are."""
+    pool: list[PoolMoment] = Field(..., description="The moments the new shots use (new keys only).")
+    plan: list[PlanShot] = Field(..., description="The new shots for the stretch, in order.")
+    notes: str = Field("", description="What the stretch does now, in one line.")
+
+
+class PlaceTag(BaseModel):
+    id: str = Field(..., description="The moment id, as listed (e.g. 'c03#2').")
+    place: str = Field("", description="The place or landmark it shows, named the same for every moment of it; empty if none.")
+    people: Literal["unknown", "none", "far", "near", "face"] = Field("unknown", description="Who the log says is in it.")
+
+
+class PlaceTags(BaseModel):
+    tags: list[PlaceTag]
+
+
+ChangeKind = Literal["remove", "replace", "swap", "move", "longer", "shorter", "speed", "redo"]
+
+
+class ChangeOp(BaseModel):
+    op: ChangeKind = Field(..., description=(
+        "remove: take the shot out (a neighbour holds on). replace: show something else in its place. swap: two shots "
+        "trade pictures. move: its picture goes to another place. longer / shorter: by some beats (the cut next to "
+        "it moves). speed: how it plays. redo: make a stretch of shots again from what they want (the only change "
+        "that goes back to the editor)."))
+    shot: int = Field(..., description="The shot it is about: its number in the version they watched (1 = first).")
+    other: int | None = Field(None, description=(
+        "swap: the other shot. move: the number of the shot whose place it takes. redo: the last shot of the stretch "
+        "(empty: only `shot`)."))
+    beats: float | None = Field(None, description="longer / shorter: by how many beats, in steps of 0.5.")
+    side: Literal["next", "previous"] | None = Field(None, description=(
+        "longer: take the beats from the next shot (default) or the previous one. shorter: give them to the next "
+        "(default) or the previous one. remove: which neighbour holds on in its place (default: the previous)."))
+    moment: str | None = Field(None, description=(
+        "replace: the moment to show instead, an id like 'c02#5' from the moments listed (unused ones first)."))
+    from_version: int | None = Field(None, description=(
+        "replace: take a shot exactly as it was in this earlier version (with from_shot), e.g. 'the Opera House shot "
+        "from before, the centred one'."))
+    from_shot: int | None = Field(None, description="replace: that shot's number in `from_version`.")
+    kind: Literal["hold", "cut", "hit", "ramp", "stutter"] | None = Field(None, description=(
+        "speed: hold = slow motion, cut = normal speed, ramp = rushes in fast then slows, hit = an impact with a "
+        "flash, stutter = quick repeated pieces."))
+    want: str = Field("", description="redo / replace without a moment: what they want there, in their words.")
+    never_again: bool = Field(False, description=(
+        "remove / replace: they don't want that scene in this film at all (it never comes back)."))
+
+
+class ChangeRequest(BaseModel):
+    ops: list[ChangeOp] = Field(..., description="The changes, in the order they asked for them.")
+    said: list[str] = Field(..., description=(
+        "One line per change, in the same order, in plain words with shot numbers, as the person will read it "
+        "before it is made ('Shot 8 holds 1 beat longer; shot 9 starts a beat later')."))
+    unclear: str = Field("", description=(
+        "A short question for anything you could not map to a change (empty: all clear). Make the clear parts anyway."))
+
+
+# ---------------------------------------------------------------- your editor (the main agent) answers the person
+
+class SpecAdd(BaseModel):
+    text: str = Field(..., description=(
+        "The item in a few plain words, as something the film must do or must not do ('Nobody in shot', 'End on the "
+        "bridge at sunset', 'Cuts on the 808s'). Only what they said."))
+    part: Literal["goal", "deliver", "style", "music", "must", "never"] = Field(..., description=(
+        "goal: what the film is about (replaces the story line); deliver: shape, length, where it is posted; style: "
+        "how it is cut or coloured; music: the song or how it is used; must: something it must have; never: "
+        "something it must not have."))
+    quote: str = Field("", description="Their words that ask for it, exactly as they wrote them.")
+    check: Literal["sync", "no_people", "no_repeats", "none"] = Field("none", description=(
+        "The automatic check that matches it, if one does: sync (cuts on the music's hits), no_people (nobody in "
+        "shot), no_repeats (no place shown twice); none otherwise."))
+
+
+class EditorAsk(BaseModel):
+    question: str = Field(..., description="One short question whose answer changes the film.")
+    options: list[str] = Field(..., description="2-4 short answers they can tap (a few words each).")
+
+
+class EditorOffer(BaseModel):
+    action: str = Field(..., description="One id from 'What you can offer now', exactly as listed.")
+    why: str = Field(..., description="One line for the card: what it will do, in their terms.")
+    pitch: int | None = Field(None, description="pick: the story's number as listed (1 = first).")
+    version: int | None = Field(None, description="continue_from: the version's number.")
+    text: str = Field("", description=(
+        "change: what to change, in their words with shot numbers. sample_again: what the new sample must do "
+        "differently. another: what the new story idea should be (their idea, or what was missing)."))
+
+
+class EditorRemember(BaseModel):
+    text: str = Field(..., description="A preference for all their next films, as advice to the editor.")
+    why: str = Field("", description="Their words it comes from.")
+
+
+class EditorReply(BaseModel):
+    say: str = Field(..., description=(
+        "What you say back, in plain words: 1-4 short sentences. Say what you understood and what happens next."))
+    add: list[SpecAdd] = Field(default_factory=list, description="Items to add to the film's spec (only what they said).")
+    off: list[str] = Field(default_factory=list, description="Ids of spec items to switch off (only when they asked).")
+    on: list[str] = Field(default_factory=list, description="Ids of switched-off spec items to switch on again.")
+    ask: EditorAsk | None = Field(None, description="At most one question, only when the answer changes the film.")
+    offer: EditorOffer | None = Field(None, description="The next step, as a card they tap; nothing runs without it.")
+    remember: list[EditorRemember] = Field(default_factory=list, description=(
+        "At most one preference to offer keeping for their next films, only when they said it lasts ('always', "
+        "'never', 'I like...')."))
 
 
 class StyleRule(BaseModel):

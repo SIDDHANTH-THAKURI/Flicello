@@ -137,6 +137,12 @@ def render_markdown(catalog: dict) -> str:
             peak = f" peak {m['peak']:.1f}" if m.get("peak") is not None else ""
             peak += f" IMPACT at {', '.join(f'{t:.2f}' for t in inside)}" if inside else ""
             notes = f" [{m['notes']}]" if m.get("notes") else ""
+            if m.get("place"):
+                notes += f" · place: {m['place']}"
+            if m.get("people") and m["people"] not in ("unknown", "none"):
+                notes += f" · people: {m['people']}"
+            if m.get("best_at") is not None:
+                notes += f" · best at {m['best_at']:.1f}"
             motion = e.get("motion") or []
             moving = f" · {motion[n]}" if n < len(motion) and motion[n] else ""
             lines.append(f"- {e['short']}#{n + 1} {m['start']:.1f}-{m['end']:.1f}{peak} · {m['kind']} · hook {m['hook']} · "

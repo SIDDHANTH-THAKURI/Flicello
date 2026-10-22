@@ -16,7 +16,7 @@ import json
 import math
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ...design import Design, Moment as PoolEntry, Shot
@@ -24,12 +24,14 @@ from ...music.analysis import MusicAnalysis
 from ...schemas import ClipAnalysis, ClipInfo, ClipSignals
 from ..settings import Models
 from .backends import BrainError, Request, SpendFn, Usage, structured
-from .context import REUSE_WORDS, SYNC_WORDS, BeatMap, ClipFacts, catalog_text, craft_rules, moment_by_id, prompt, rules_text
+from .context import HOLD_WORDS, NO_PEOPLE_WORDS, NO_REPEAT_WORDS, REUSE_WORDS, SYNC_WORDS, logged_at, people_in, place_of, BeatMap, ClipFacts, catalog_text, craft_rules, moment_by_id, prompt, rules_text
 from ...explainer.script import VoiceScript
 
 DESIGNED_TEXT = '# Style: DESIGNED (designer animations)\nThe person picked designer animations. talk: they are cut out of their room and stand in front of a stage; your callouts are drawn BEHIND them, above and around their head.\n- The backbone is `scene` callouts: one designer animation for what is being said right now, about every 3-6 seconds, each starting on the word that brings it. `visual` says in a few concrete words what the animation should show ("two people podcasting at a table", "an email arriving with a notification", "a ghost floating"), `topics` gives 1-3 simple search words for an animation library ("podcast", "email", "ghost"). Think like a motion designer illustrating the story, not a subtitle writer. `text` on a scene is an optional 1-3 word label.\n- `title` for the name of the thing being talked about, once, early (typed on letter by letter).\n- `stack` when a number of things is said ("10 audio clips", "3 reasons"): `count`, a `visual` for one of them ("an audio waveform") and `text` ("10 audio clips"); it flies out of the scene that is up.\n- `stat` for a rating or a figure (value as said). `pill` rarely.\n- `ambient`: one looping animation behind their head for the whole video that suits the subject ("a circular sound visualizer" for audio/music/podcasts, "soft floating particles", "film reel") with `ambient_topics`.\n- Set `punch` on the single strongest moment.\n- voice mode: give every scene a `visual` and `topics` too, so it gets a real animation instead of an emoji.\n'
 from .schemas import Direction, Directions, VisualIdeas, VisualPicks
 from .schemas import DesignPlan, Pitches, PlanShot, PoolMoment, ProfileUpdate, StoryBeat, StoryPitch, StyleRule
+from .schemas import ChangeRequest, PlaceTags, RangePlan
+from .schemas import EditorOffer, EditorReply, SpecAdd
 from .schemas import BeatIdea, PolishedBrief, TalkPart, TalkUnderstanding, Term, Understanding
 
 SLOWMO_FPS = 47.0  # real slow motion only from 50/60 fps footage
@@ -49,6 +51,10 @@ class StoryContext:
     allow_reuse: bool = False  # thin footage, or the person said repeats are fine: a moment may come back, made to look different
     pace: str = "balanced"  # calm | balanced | fast: how quickly the video cuts
     sync: bool = False  # they asked for beat sync (in the note, a sample note, a change or their style rules): a rule
+    bans: list[dict] = field(default_factory=list)  # scenes they never want in this film: {"clip", "start", "end", "what"}
+    no_people: bool = False  # they said no faces / no people: nobody clearly in view, in any shot
+    no_repeats: bool = False  # they said no duplicates: one place is shown in one stretch of the film only
+    hold_ok: bool = False  # they asked for holds of their own length: the pacing limits give way
 
     def reuse_if_asked(self, *texts: str) -> None:
         if any(REUSE_WORDS.search(t or "") for t in texts):
@@ -57,6 +63,17 @@ class StoryContext:
     def sync_if_asked(self, *texts: str) -> None:
         if any(SYNC_WORDS.search(t or "") for t in texts):
             self.sync = True
+
+    def read_words(self, *texts: str) -> None:
+        """What their own words make a rule (never the AI's brief): beat sync, nobody in shot, nothing shown twice,
+        holds as long as they say."""
+        self.sync_if_asked(*texts)
+        if any(NO_PEOPLE_WORDS.search(t or "") for t in texts):
+            self.no_people = True
+        if any(NO_REPEAT_WORDS.search(t or "") for t in texts):
+            self.no_repeats = True
+        if any(HOLD_WORDS.search(t or "") for t in texts):
+            self.hold_ok = True
 
     def header(self) -> str:
         shape = " and ".join({"9:16": "9:16 vertical (Reels/Shorts)", "16:9": "16:9 landscape (YouTube)"}[s]
@@ -81,6 +98,18 @@ class StoryContext:
                f"hit; at most {SYNC_SOFT} in the whole film, in a quiet part). No shot longer than {SYNC_LONGEST} beats. "
                "Slow motion is fine, but the cut into and out of it is on a hit."]
               if self.sync else []),
+            "# Places\nA recognisable place (a landmark, the moments' `place`) is shown in one stretch of the film: "
+            "never the Opera House at the start and again at the end. Two shots of one place side by side are one "
+            "scene; the same place twice, apart, is a repeat" + (" - and they said no repeats." if self.no_repeats else "."),
+            *(["# Nobody in shot\nThey don't want people in the film: use no moment with people near or a face "
+               "(the moments' `people`); small far-off figures are fine."] if self.no_people else []),
+            *(["# Their own lengths\nThey asked for holds of their own length: their words win over the pacing "
+               "limits above (a long first shot, a long hold on the drop)."] if self.hold_ok else []),
+            "# Their words win\nWhen what they asked for contradicts a craft rule or a check above, do what they "
+            "asked and say so in `notes`.",
+            *(["# Scenes they never want in this film (never use them, not even part of them)\n" + "\n".join(
+                f"- {b['clip']} {b['start']:g}-{b['end']:g} s" + (f": {b['what']}" if b.get("what") else "")
+                for b in self.bans)] if self.bans else []),
             *self.impact_text(),
         ])
 
@@ -298,6 +327,10 @@ def check_analysis(analysis: ClipAnalysis, clip: ClipInfo) -> list[str]:
             problems.append(f"{where}: peak {m.peak} is outside {m.start}-{m.end}")
         elif m.end - m.start < 0.4:
             problems.append(f"{where}: only {m.end - m.start:.2f}s long; moments need at least 0.4s")
+        elif m.best_at is not None and not m.start <= m.best_at <= m.end:
+            problems.append(f"{where}: best_at {m.best_at} is outside {m.start}-{m.end}")
+        elif m.people == "unknown":
+            problems.append(f"{where}: say who is in it: people none, far, near or face")
     for i, r in enumerate(analysis.unusable):
         if not 0 <= r.start < r.end <= end:
             problems.append(f"unusable[{i}]: {r.start}-{r.end} is outside the clip (0-{clip.duration:.2f})")
@@ -372,20 +405,25 @@ SYNC_LONGEST = 8  # beats: the longest shot of a beat-synced film
 SYNC_MISS = 0.15  # the share of cuts that may land off the hits (a story beat between two hits)
 
 
-def _sync_problems(plan: DesignPlan, beats) -> list[str]:
-    """What breaks beat sync in a plan: cuts between the hits, dissolves, shots that hold too long."""
+def _sync_problems(plan: DesignPlan, beats, lo: float | None = None, hi: float | None = None,
+                   hold_ok: bool = False) -> list[str]:
+    """What breaks beat sync in a plan: cuts between the hits, dissolves, shots that hold too long. `lo`-`hi`: only
+    the shots starting in that stretch of beats (a stretch made again; the rest is theirs)."""
     marks = beats.hit_marks()
-    pos, off, soft, long_ = 0.0, [], [], []
+    pos, off, soft, long_, judged = 0.0, [], [], [], 0
     for i, s in enumerate(plan.plan):
-        if i and not any(abs(pos - m) < 0.01 for m in marks):
-            off.append(f"shot {i + 1} at beat {pos:g}")
-        if i and s.transition != "cut":
-            soft.append(i + 1)
-        if s.kind != "stutter" and s.beats > SYNC_LONGEST:
-            long_.append(i + 1)
+        inside = (lo is None or pos >= lo - 1e-6) and (hi is None or pos < hi - 1e-6)
+        if inside:
+            judged += 1
+            if i and not any(abs(pos - m) < 0.01 for m in marks):
+                off.append(f"shot {i + 1} at beat {pos:g}")
+            if i and s.transition != "cut":
+                soft.append(i + 1)
+            if s.kind != "stutter" and s.beats > SYNC_LONGEST and not hold_ok:
+                long_.append(i + 1)
         pos += s.beats * (s.count if s.kind == "stutter" else 1)
     out = []
-    if len(off) > max(1, int(SYNC_MISS * (len(plan.plan) - 1))):
+    if len(off) > max(1, int(SYNC_MISS * (judged - 1))):
         out.append(f"beat sync was asked for, but {len(off)} cuts land between the music's hits ({'; '.join(off[:6])}): "
                    f"start shots on the hits or bar starts: beats {', '.join(f'{m:g}' for m in marks)}")
     if len(soft) > SYNC_SOFT:
@@ -394,15 +432,67 @@ def _sync_problems(plan: DesignPlan, beats) -> list[str]:
     if long_:
         out.append(f"beat sync was asked for: shots {', '.join(map(str, long_))} hold longer than {SYNC_LONGEST} beats; "
                    "split them on a hit")
+    out += _dense_problems(plan, beats, lo, hi)
     return out
 
 
-def sync_snap(plan: DesignPlan, ctx: StoryContext) -> DesignPlan:
+DENSE_GAP = 2.0  # beats: heavy hits this close (or closer) after the drop make a stretch "every beat" music
+HERO_HOLDS = 1  # long holds allowed in a dense stretch besides the shot on the drop
+
+
+def _dense_problems(plan: DesignPlan, beats, lo: float | None = None, hi: float | None = None) -> list[str]:
+    """Beat sync after the drop, as people mean it: where the music hits on (nearly) every beat, a new picture comes
+    on (nearly) every hit. The shot on the drop may hold (to the next big hit), and one more hero hold; the rest
+    are cut on the hits. (Aura Farming, 21 Oct: 'after the first drop nothing is in beat sync, all spread apart'.)"""
+    booms = list(getattr(beats, "booms", []) or [])
+    start = float(beats.drop) if beats.drop is not None else round(beats.target * 0.6 / 4) * 4
+    after = sorted(b for b in booms if start - 1e-6 <= b < beats.target)
+    if len(after) < 4:
+        return []
+    gaps = sorted(b - a for a, b in zip(after, after[1:]))
+    gap = gaps[len(gaps) // 2]
+    if gap > DENSE_GAP:
+        return []
+    longest = max(2.0, 2 * gap)
+    pos, holds = 0.0, []
+    for i, s in enumerate(plan.plan):
+        length = s.beats * (s.count if s.kind == "stutter" else 1)
+        inside = (lo is None or pos >= lo - 1e-6) and (hi is None or pos < hi - 1e-6)
+        if inside and pos > start + 1e-6 and s.kind != "stutter" and length > longest:
+            holds.append(i + 1)
+        pos += length
+    if len(holds) <= HERO_HOLDS:
+        return []
+    return [f"beat sync was asked for: after the drop the music hits every {gap:g} beat{'s' if gap != 1 else ''}, but "
+            f"shots {', '.join(map(str, holds))} hold longer than {longest:g} beats. Cut on its hits there (shots of "
+            f"{gap:g}-{longest:g} beats, or stutters); keep at most {HERO_HOLDS} hero hold besides the shot on the drop"]
+
+
+def _place_repeats(plan: DesignPlan, ctx) -> list[str]:
+    """A place shown in two stretches of the film (not side by side): the Opera House at the start and again later."""
+    pool = {m.key: m for m in plan.pool}
+    seen: dict[str, int] = {}
+    out = []
+    for i, s in enumerate(plan.plan):
+        m = pool.get(s.key)
+        f = ctx.facts.get(m.clip) if m else None
+        lm = logged_at(f, m.start, m.end) if f else None
+        place = place_of(lm) if lm else ""
+        if not place:
+            continue
+        if place in seen and seen[place] < i - 1:
+            out.append(f"shot {i + 1} shows {lm.get('place')} again (shot {seen[place] + 1} already does): show each "
+                       "place in one stretch only - use a moment of another place, or put the two shots side by side")
+        seen[place] = i
+    return out[:4]
+
+
+def sync_snap(plan: DesignPlan, ctx: StoryContext, lo: float | None = None, hi: float | None = None) -> DesignPlan:
     """A plan made beat-synced by hand when the AI's last answer still missed the hits: every join a hard cut and every cut moved to the nearest heavy hit or bar start. Stutters keep their own rhythm. A shot
     squeezed to nothing is folded into the one before. If the moved plan would break something real (footage too
     short), the AI's plan stands."""
     beats = ctx.beats
-    if not ctx.sync or not plan.plan or not _sync_problems(plan, beats):
+    if not ctx.sync or not plan.plan or not _sync_problems(plan, beats, lo, hi, getattr(ctx, "hold_ok", False)):
         return plan
     marks = beats.hit_marks()
     total = plan_beats(plan)
@@ -412,15 +502,17 @@ def sync_snap(plan: DesignPlan, ctx: StoryContext) -> DesignPlan:
     kept: list[tuple[float, object]] = [(0.0, shots[0])]
     for i in range(1, len(shots)):
         b, x = starts[i], shots[i]
-        fixed = x.kind == "stutter" or kept[-1][1].kind == "stutter"
+        outside = (lo is not None and b <= lo + 1e-6) or (hi is not None and b >= hi - 1e-6)  # their cuts stay
+        fixed = outside or x.kind == "stutter" or kept[-1][1].kind == "stutter"
         if fixed:
             at = b
         else:
-            room = [m for m in marks if kept[-1][0] + 0.5 <= m <= total - 0.5]
+            room = [m for m in marks if kept[-1][0] + 0.5 <= m <= total - 0.5
+                    and (lo is None or m > lo + 1e-6) and (hi is None or m < hi - 1e-6)]
             at = min(room, key=lambda m: abs(m - b)) if room else None
         if at is None or at <= kept[-1][0] + 1e-6:
             continue  # nothing left for it: the shot before holds on
-        if x.transition != "cut":
+        if x.transition != "cut" and not outside:
             x = x.model_copy(update={"transition": "cut", "transition_beats": 0.0})
         kept.append((at, x))
     out = []
@@ -430,6 +522,9 @@ def sync_snap(plan: DesignPlan, ctx: StoryContext) -> DesignPlan:
             out.append(x)
             continue
         length = round(end - at, 3)
+        if abs(length - x.beats) < 1e-6:
+            out.append(x)  # as it was (a shot outside the stretch keeps everything)
+            continue
         upd = {"beats": length}
         if x.peak_beat is not None and x.peak_beat >= length:
             upd["peak_beat"] = None
@@ -479,6 +574,15 @@ def check_plan(plan: DesignPlan, ctx: StoryContext, taste: bool = True) -> list[
         if bad:
             problems.append(f"pool '{m.key}': {m.clip} {m.start}-{m.end} overlaps a range to avoid "
                             f"({', '.join(f'{a:.1f}-{b:.1f}' for a, b in bad)})")
+        lm = logged_at(f, m.start, m.end)
+        if getattr(ctx, "no_people", False) and lm is not None and people_in(lm) in ("near", "face"):
+            problems.append(f"pool '{m.key}': {m.clip} {m.start}-{m.end} has people in view ({people_in(lm)}), and they "
+                            "want nobody in the film: use another moment")
+        banned = [b for b in getattr(ctx, "bans", []) if b["clip"] == m.clip
+                  and min(b["end"], m.end) - max(b["start"], m.start) > 0.25]
+        if banned:
+            problems.append(f"pool '{m.key}': {m.clip} {m.start}-{m.end} is a scene they never want "
+                            f"({banned[0].get('what') or 'removed before'}): use another moment")
         logged = max((min(x["end"], m.end) - max(x["start"], m.start) for x in f.moments), default=0.0)
         if logged < 0.5 * (m.end - m.start):
             problems.append(f"pool '{m.key}': {m.clip} {m.start}-{m.end} is not inside a logged moment of that clip")
@@ -511,12 +615,17 @@ def check_plan(plan: DesignPlan, ctx: StoryContext, taste: bool = True) -> list[
                                 f"but {f.short} is only {f.duration:.1f}s long: shorten it or use a longer clip")
         uses.setdefault(s.key, []).append(i)
         pos += s.beats * (s.count if s.kind == "stutter" else 1)
+    repeats = _place_repeats(plan, ctx)
+    if repeats and getattr(ctx, "no_repeats", False) and not ctx.allow_reuse:
+        problems += repeats  # they said no repeats: as much a must as the beats
     last = len(plan.plan) - 1
     if not taste:
         return problems
+    if repeats and not getattr(ctx, "no_repeats", False) and not ctx.allow_reuse:
+        problems += repeats
     if ctx.sync and plan.plan:
-        problems += _sync_problems(plan, beats)
-    if plan.plan:  # pacing a short video needs: a quick hook and no stalls
+        problems += _sync_problems(plan, beats, hold_ok=getattr(ctx, "hold_ok", False))
+    if plan.plan and not getattr(ctx, "hold_ok", False):  # pacing a short video needs: a quick hook and no stalls
         first = plan.plan[0].beats * (plan.plan[0].count if plan.plan[0].kind == "stutter" else 1) * beats.period
         if first > 4.5:
             problems.append(f"the first shot lasts {first:.1f}s: the hook must land within ~2 s and the first shot "
@@ -639,11 +748,18 @@ def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: boo
             zoom, center = reuse_framing(reuses, action=m.peak is not None)
         shots.append(Shot(kind=kind, beats=s.beats, key=s.key, count=s.count if kind == "stutter" else 1, speed=speed,
                           transition=tr, frame=frame, peak_beat=peak_beat, zoom=zoom, zoom_center=center,
-                          flip=bool(s.flip), crack_db=s.crack_db))
+                          flip=bool(s.flip), crack_db=s.crack_db, src_in=s.src_in))
+    def hero_of(m: PoolMoment) -> float | None:
+        """Where the analyst said its subject is best in frame, if inside the window."""
+        f = ctx.facts.get(m.clip)
+        lm = logged_at(f, m.start, m.end) if f else None
+        at = lm.get("best_at") if lm else None
+        return float(at) if at is not None and m.start <= float(at) <= m.end else None
+
     return Design(name=plan.name, song=song_path, look=look, stabilize=True, intro=None, sound_design=True,
-                  fade_in=0.0 if ctx.pace in ("fast", "every") else 0.5,
-                  vertical=vertical, pool={k: PoolEntry(clip=m.clip, start=m.start, end=m.end, peak=m.peak)
-                                           for k, m in pool.items()}, plan=shots)
+                  start_at=plan.start_at, fade_in=0.0 if ctx.pace in ("fast", "every") else 0.5,
+                  vertical=vertical, pool={k: PoolEntry(clip=m.clip, start=m.start, end=m.end, peak=m.peak,
+                                                        hero=hero_of(m)) for k, m in pool.items()}, plan=shots)
 
 
 # ---------------------------------------------------------------- the Claude brain
@@ -894,6 +1010,71 @@ class Brain:
                  "\n\nChange what they asked for and keep what works; don't rebuild a plan they mostly liked.")
         return self._design(ctx, pitch, extra, "revise")
 
+    # -- 1b older logs: each moment's place and who is in it, read from the log's own words (Pipeline.fill_places)
+    def places(self, text: str, ids: list[str]) -> PlaceTags:
+        want = set(ids)
+
+        def check(t: PlaceTags) -> list[str]:
+            got = [x.id for x in t.tags]
+            missing, extra = sorted(want - set(got)), sorted(set(got) - want)
+            dup = sorted({i for i in got if got.count(i) > 1})
+            return ([f"tag every moment: missing {', '.join(missing[:12])}"] if missing else []) + \
+                   ([f"these ids are not in the list: {', '.join(extra[:12])}"] if extra else []) + \
+                   ([f"tag each moment once: {', '.join(dup[:12])}"] if dup else [])
+
+        req = Request("places", prompt("places"), text + "\n\nReturn the tags as JSON.", PlaceTags, self.models.analyst,
+                      effort="low", max_tokens=6000)
+        return self._ask(req, check)
+
+    # -- 4b a change to a finished film: read it into exact changes on its numbered shots (see versions.py)
+    def read_changes(self, text: str, words: str, n: int, facts: dict, earlier: dict[int, int]) -> ChangeRequest:
+        """`text`: the version and its context (versions.request_text); `words`: what they wrote."""
+        from ..versions import check_request
+
+        req = Request("changes", prompt("changes"), text, ChangeRequest, self.models.analyst, effort="medium",
+                      max_tokens=6000)
+        return self._ask(req, lambda r: check_request(r, n, facts, earlier))
+
+    # -- 4c one stretch of a finished film made again; every other shot stays exactly as it is
+    def redo_range(self, ctx: StoryContext, pitch: StoryPitch, plan: DesignPlan, lo: int, hi: int, want: str) -> DesignPlan:
+        from ..versions import merge_range, range_beats, range_text
+
+        start, need = range_beats(plan, lo, hi)
+        parts = [ctx.header(), "# The footage\n" + catalog_text(ctx.catalog),
+                 "# The chosen story\n" + json.dumps(pitch.model_dump(), indent=1),
+                 "# The film now (shot number, keep or make again, beats, kind, clip window: what it shows)\n"
+                 + range_text(plan, ctx, lo, hi),
+                 f"# Make again ONLY shots {lo + 1}-{hi + 1}\nThey start on beat {start:g} and must last exactly "
+                 f"{need:g} beats in total. What the person wants there: {want}\nEvery shot marked keep stays exactly "
+                 "as it is; don't show a moment any kept shot shows. Return only the new shots for this stretch "
+                 "(as many as it needs) and the moments they use."]
+        req = Request("redo", prompt("editor"), "\n\n".join(parts), RangePlan, self.models.editor, effort="medium",
+                      max_tokens=8000)
+        others = [m for k, m in enumerate(plan.pool) if any(s.key == m.key for j, s in enumerate(plan.plan)
+                                                              if not lo <= j <= hi)]
+
+        def check(part: RangePlan, taste: bool = True) -> list[str]:
+            got = sum(x.beats * (x.count if x.kind == "stutter" else 1) for x in part.plan)
+            if not part.plan:
+                return ["return at least one shot for the stretch"]
+            if abs(got - need) > 1e-6:
+                return [f"the new shots add up to {got:g} beats; the stretch is exactly {need:g} (add or remove {need - got:+g})"]
+            merged = merge_range(plan, lo, hi, part)
+            out = [p for p in check_plan(merged, ctx, taste=False)]
+            if taste:
+                if not ctx.allow_reuse:
+                    for m in part.pool:
+                        if any(_overlap(m, o) > 0.5 for o in others):
+                            out.append(f"pool '{m.key}' ({m.clip} {m.start:g}-{m.end:g}) is already shown by a shot "
+                                       "they keep: use a moment the film doesn't show yet")
+                if ctx.sync:
+                    out += _sync_problems(merged, ctx.beats, start, start + need, ctx.hold_ok)
+            return out
+
+        part = self._ask(req, check, fallback=lambda r: check(r, taste=False))
+        merged = merge_range(plan, lo, hi, part)
+        return sync_snap(merged, ctx, start, start + need)
+
     # -- 6a the looks of a voice or talking video, pitched before it is drawn
     def directions(self, utterances: list[dict], duration: float, mode: str, intent: str, rules: list[dict],
                    shape: str, n: int = 3, rejected: list[Direction] | None = None, reason: str = "",
@@ -996,6 +1177,15 @@ class Brain:
 
         return self._ask(req, check)
 
+    # -- 6 your editor answers the person (the main agent's own turn: see agent.py)
+    def editor_reply(self, text: str, words: str, facts: dict, check) -> EditorReply:
+        """`text`: everything the editor reads this turn (agent.view); `check`: what its answer must fit (an offer
+        that can't be made now, unknown ids). An answer that still has such problems after its tries is used without
+        them (agent.trim): the person always gets a reply."""
+        req = Request("editor", prompt("editor_chat"), text, EditorReply, self.models.assistant, effort="high",
+                      max_tokens=4000)
+        return self._ask(req, check, fallback=lambda r: [] if r.say.strip() else ["say something back"])
+
 
 # ---------------------------------------------------------------- the no-AI brain
 
@@ -1012,6 +1202,57 @@ class LocalBrain:
 
     def _free(self, task: str) -> None:
         self.spend(Usage(task, "local", "local", billed=False))
+
+    def places(self, text: str, ids: list[str]) -> PlaceTags:
+        """Without the AI: no places (only the AI can tell two angles of one landmark); people from the log's words."""
+        from .schemas import PlaceTag
+
+        self._free("places")
+        said = {}
+        for line in text.splitlines():
+            mid, _, words = line.lstrip("- ").partition(": ")
+            if mid in ids:
+                said[mid] = people_in({"description": words})
+        return PlaceTags(tags=[PlaceTag(id=i, place="", people=said.get(i, "unknown")) for i in ids])
+
+    def read_changes(self, text: str, words: str, n: int, facts: dict, earlier: dict[int, int]) -> ChangeRequest:
+        from ..versions import read_simple
+
+        self._free("changes")
+        return read_simple(words, n)
+
+    def redo_range(self, ctx: StoryContext, pitch: StoryPitch, plan: DesignPlan, lo: int, hi: int, want: str) -> DesignPlan:
+        """Without the AI: the stretch as 2-beat cuts of the strongest moments the film doesn't show yet."""
+        from ..versions import merge_range, range_beats
+
+        self._free("redo")
+        _, need = range_beats(plan, lo, hi)
+        used = [m for j, s in enumerate(plan.plan) for m in plan.pool if m.key == s.key and not lo <= j <= hi]
+        ranked = [r[0] for r in sorted(self._ranked(ctx), key=lambda r: -r[2])]
+        picks = []
+        for mid in ranked:
+            m = moment_by_id(ctx.facts, mid)
+            short = mid.split("#")[0]
+            if m is None:
+                continue
+            pm = PoolMoment(key=mid.replace("#", "_"), clip=short, start=float(m["start"]), end=float(m["end"]),
+                            peak=m.get("peak"))
+            if any(_overlap(pm, u) > 0.5 for u in used) or any(b["clip"] == short and min(b["end"], pm.end)
+                                                              - max(b["start"], pm.start) > 0.25 for b in ctx.bans):
+                continue
+            picks.append(pm)
+        if not picks:
+            picks = [m for m in plan.pool if any(s.key == m.key for s in plan.plan[lo:hi + 1])] or plan.pool[:1]
+        shots, left, k = [], need, 0
+        while left > 1e-6:
+            n = min(2.0, left) if left - 2.0 >= 1.0 or left <= 2.0 else left
+            pm = picks[k % len(picks)]
+            shots.append(PlanShot(kind="cut", beats=n, key=pm.key))
+            left -= n
+            k += 1
+        used_keys = {s.key for s in shots}
+        part = RangePlan(pool=[m for m in picks if m.key in used_keys], plan=shots, notes=want)
+        return merge_range(plan, lo, hi, part)
 
     def polish_understanding(self, fields: dict, kind: str) -> dict:
         """Without the AI: tidy spacing and capitals, drop empty and repeated lines."""
@@ -1265,6 +1506,39 @@ class LocalBrain:
     def pick_visuals(self, needs: list[dict]) -> list[int]:
         self._free("visuals")
         return [0 if n["n"] else -1 for n in needs]
+
+    LOCAL_CHECKS = (("sync", "Cuts land on the music's hits", "must", SYNC_WORDS),
+                    ("no_people", "Nobody in shot", "never", NO_PEOPLE_WORDS),
+                    ("no_repeats", "No place shown twice", "never", NO_REPEAT_WORDS))
+
+    def editor_reply(self, text: str, words: str, facts: dict, check) -> EditorReply:
+        """Without the AI: their words that switch a check on become items, and the plainest asks become the offer
+        of the step they name (a story's number, 'make the film', 'swap 2 and 3')."""
+        self._free("editor")
+        on = {it["check"] for it in facts["items"] if it.get("on") and it.get("check")}
+        add = [SpecAdd(text=label, part=part, quote=words[:200], check=name)
+               for name, label, part, pattern in self.LOCAL_CHECKS if name not in on and pattern.search(words)]
+        acts, w = set(facts["actions"]), words.lower()
+        offer = None
+        n = re.search(r"\b(?:story|idea|look|number|option|pick)\s*#?\s*(\d)\b", w)
+        if "pick" in acts and n and 1 <= int(n.group(1)) <= facts["pitches"]:
+            offer = EditorOffer(action="pick", why=f"A sample of idea {n.group(1)}", pitch=int(n.group(1)))
+        elif "change" in acts and re.search(r"\b(swap|remove|cut out|longer|shorter|replace|move|faster|slower)\b", w):
+            offer = EditorOffer(action="change", why="Your changes, read into exact edits first", text=words)
+        elif "sample_ok" in acts and re.search(r"\b(looks? (?:good|right|great)|make (?:it|the film)|go ahead)\b", w):
+            offer = EditorOffer(action="sample_ok", why="The whole film from this sample")
+        elif "confirm_change" in acts and re.search(r"\b(yes|do it|make them|go ahead)\b", w):
+            offer = EditorOffer(action="confirm_change", why="The changes as read")
+        elif "confirm_understood" in acts and re.search(r"\b(yes|right|correct|spot on|looks good)\b", w):
+            offer = EditorOffer(action="confirm_understood", why="What I understood is right: next step")
+        elif "start" in acts and re.search(r"\b(start|go|begin|ready)\b", w):
+            offer = EditorOffer(action="start", why="I watch your clips and say back what I see")
+        said = [a.text.lower() for a in add]
+        say = ("Got it: " + "; ".join(said) + ".") if said else "Noted."
+        if offer is not None:
+            why = offer.why if offer.why.startswith("I ") else offer.why[0].lower() + offer.why[1:]
+            say += f" Tap the card when you're ready: {why}."
+        return EditorReply(say=say, add=add, offer=offer)
 
     def learn(self, rules: list[dict], events: list[str]) -> ProfileUpdate:
         self._free("learn")

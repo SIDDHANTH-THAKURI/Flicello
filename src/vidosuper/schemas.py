@@ -146,6 +146,15 @@ class Moment(BaseModel):
     sound: Literal["keep", "music-only", "either"] = Field(
         "either", description="keep = the original audio is part of the moment (speech, laugh, splash).")
     notes: str = ""
+    place: str = Field("", description=(
+        "The recognisable place or landmark it shows, by the same name in every clip ('Sydney Opera House', "
+        "'Sydney Harbour Bridge', 'the wharf'); empty when it shows no particular place (an action, a person, sky)."))
+    people: Literal["unknown", "none", "far", "near", "face"] = Field("unknown", description=(
+        "Who is in it: none; far (small figures, no faces); near (a person clearly in view, even from behind); "
+        "face (a face you could recognise). Logs from before this field say unknown."))
+    best_at: float | None = Field(None, description=(
+        "The instant its main subject is best and whole in frame (a landmark complete and centred, where a pan "
+        "settles); null when every part of the moment is as good."))
 
 
 class ClipAnalysis(BaseModel):

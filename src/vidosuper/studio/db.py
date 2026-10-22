@@ -123,6 +123,10 @@ CREATE TABLE IF NOT EXISTS consents(
   granted INTEGER NOT NULL, at REAL NOT NULL, ip TEXT);
 CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, user_id TEXT, action TEXT NOT NULL, detail TEXT, ip TEXT);
+CREATE TABLE IF NOT EXISTS messages(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text', body TEXT NOT NULL DEFAULT '{}', created REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS messages_project ON messages(project_id, id);
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, priority, id);
 CREATE INDEX IF NOT EXISTS projects_user ON projects(user_id, deleted);
 CREATE INDEX IF NOT EXISTS spend_at ON spend(at);
@@ -175,7 +179,9 @@ class DB:
                           # the track made for this film that they picked (beats.id)
                           ("beat", "INTEGER"),
                           # the credits this film has used (charged when it starts; see Studio.credits)
-                          ("credits", "INTEGER NOT NULL DEFAULT 0")):
+                          ("credits", "INTEGER NOT NULL DEFAULT 0"),
+                          # what they added to or switched off in the film's spec while talking (spec.py)
+                          ("spec", "TEXT")):
             if col not in have:
                 con.execute(f"ALTER TABLE projects ADD COLUMN {col} {kind}")
         if "moved" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:
@@ -188,6 +194,13 @@ class DB:
             con.execute("ALTER TABLE plans ADD COLUMN board TEXT")
         if "style" not in {r[1] for r in con.execute("PRAGMA table_info(renders)")}:  # how a voice/talk video was drawn
             con.execute("ALTER TABLE renders ADD COLUMN style TEXT")
+        # versions (versions.py): what a version was made from, its numbered shots, and what changed in it
+        rcols = {r[1] for r in con.execute("PRAGMA table_info(renders)")}
+        for col, kind in (("base", "INTEGER"), ("shots", "TEXT"), ("changes", "TEXT")):
+            if col not in rcols:
+                con.execute(f"ALTER TABLE renders ADD COLUMN {col} {kind}")
+        if "base" not in {r[1] for r in con.execute("PRAGMA table_info(projects)")}:  # the version they work on
+            con.execute("ALTER TABLE projects ADD COLUMN base INTEGER")
         # public sign-up: people are found by email or Google account; `name` stays the unique handle
         users = {r[1] for r in con.execute("PRAGMA table_info(users)")}
         for col, kind in (("email", "TEXT"), ("google_sub", "TEXT"), ("display", "TEXT"), ("last_seen", "REAL"),
@@ -339,6 +352,11 @@ class DB:
 
     def touch(self, pid: str) -> None:
         self.run("UPDATE projects SET updated=? WHERE id=?", (time.time(), pid))
+
+    def post_message(self, project_id: str, user_id: str, role: str, kind: str, body: dict) -> int | None:
+        """A message in a film's conversation with its editor (agent.py)."""
+        return self.run("INSERT INTO messages(project_id, user_id, role, kind, body, created) VALUES (?,?,?,?,?,?)",
+                        (project_id, user_id, role, kind, json.dumps(body), time.time()))
 
     def event(self, project_id: str | None, message: str, level: str = "info", job_id: int | None = None) -> None:
         self.run("INSERT INTO events(at, project_id, job_id, level, message) VALUES (?,?,?,?,?)",

@@ -1,0 +1,104 @@
+{# Your editor: the film's conversation (check-ins after every step, their messages, the editor's answers and its
+   cards), and the film's spec, "the brief", with the checks of the latest sample or version. Rendered inside the
+   project page and on its own (GET /p/{id}/editor) when a reply lands. #}
+{% macro card_form(mid, k, choice, label, cls) %}<form method="post" action="/p/{{ p.id }}/card"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="mid" value="{{ mid }}"><input type="hidden" name="k" value="{{ k }}"><input type="hidden" name="choice" value="{{ choice }}"><button class="{{ cls }}" type="submit">{% if cls == 'btn-sun' %}<span>{{ label }}</span>{% else %}{{ label }}{% endif %}</button></form>{% endmacro %}
+{% macro message(m) %}
+{% set b = m.body %}
+<li class="m {{ 'm-you' if m.role == 'you' else 'm-editor' }}{% if m.kind == 'checkin' %} m-checkin{% endif %}{% if m.kind == 'tap' %} m-tap{% endif %}{% if b.trouble or b.error %} m-trouble{% endif %}" id="m{{ m.id }}">
+  <p>{{ b.text }}</p>
+  {% if b.spec %}<ul class="m-spec">{% for c in b.spec %}<li>
+    <span>{{ {'add': 'Added to the brief', 'off': 'Switched off', 'on': 'Switched on', 'note': 'Set'}.get(c.op, c.op) }}: {{ c.text }}</span>
+    {% if c.op in ('add', 'off', 'on') and editable_spec %}<form method="post" action="/p/{{ p.id }}/spec"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="item" value="{{ c.id }}"><input type="hidden" name="op" value="{{ {'add': 'remove', 'off': 'on', 'on': 'off'}[c.op] }}"><button class="link" type="submit">Undo</button></form>{% endif %}
+  </li>{% endfor %}</ul>{% endif %}
+  {% if b.checks %}<ul class="m-checks">{% for r in b.checks %}<li class="{{ 'ok' if r.ok else 'no' }}"><b aria-hidden="true">{{ '✓' if r.ok else '✗' }}</b><span>{{ r.text }} <small>{{ r.detail }}</small></span></li>{% endfor %}</ul>{% endif %}
+  {% for c in b.cards or [] %}{% set k = loop.index0 %}
+    {% if c.type == 'ask' %}
+    <div class="m-card">
+      <p class="m-q">{{ c.question }}</p>
+      {% if c.done %}<p class="help">You said: {{ c.done }}</p>
+      {% else %}<div class="m-taps">{% for o in c.options %}{{ card_form(m.id, k, o, o, 'btn quiet m-chip') }}{% endfor %}</div>{% endif %}
+    </div>
+    {% elif c.type == 'offer' %}
+    {% set stale = c.stage != p.stage %}
+    <div class="m-card m-offer{% if c.done or stale %} spent{% endif %}">
+      <p><b>{{ c.label }}</b>{% if c.why %}<span> · {{ c.why }}</span>{% endif %}</p>
+      <p class="help">{{ c.takes }}{% if c.ai %} · uses the AI{% endif %}</p>
+      {% if c.done == 'yes' %}<p class="help">✓ Done</p>
+      {% elif c.done == 'no' %}<p class="help">Not now</p>
+      {% elif c.done or stale %}<p class="help">That step has passed</p>
+      {% else %}<div class="m-taps">{{ card_form(m.id, k, 'yes', c.label, 'btn-sun') }}{{ card_form(m.id, k, 'no', 'Not now', 'btn quiet') }}</div>{% endif %}
+    </div>
+    {% elif c.type == 'remember' %}
+    <div class="m-card">
+      <p>Keep this for your next films? <q>{{ c.text }}</q></p>
+      {% if c.done == 'yes' %}<p class="help">✓ In your style now</p>
+      {% elif c.done %}<p class="help">Only for this film</p>
+      {% else %}<div class="m-taps">{{ card_form(m.id, k, 'yes', 'Keep it', 'btn') }}{{ card_form(m.id, k, 'no', 'Only this film', 'btn quiet') }}</div>{% endif %}
+    </div>
+    {% endif %}
+  {% endfor %}
+</li>
+{% endmacro %}
+{% set ed = editor_thread|default([]) %}
+{% set items = spec_items|default([]) %}
+<section class="editor rise d2" id="editor" data-editor="{{ p.id }}" data-thinking="{{ 1 if editor_thinking else 0 }}" aria-labelledby="editor-title">
+  <header class="editor-head">
+    <span class="editor-mark" aria-hidden="true"></span>
+    <div>
+      <h2 id="editor-title">Your editor</h2>
+      <p class="help">Tell me anything about this film, any time. Nothing is made until you tap.</p>
+    </div>
+  </header>
+  {% set shown = 4 %}
+  {% if ed|length > shown %}
+  <details class="editor-older">
+    <summary>Earlier in this film ({{ ed|length - shown }})</summary>
+    <ol class="thread">{% for m in ed[:-shown] %}{{ message(m) }}{% endfor %}</ol>
+  </details>
+  {% endif %}
+  <ol class="thread" aria-live="polite">
+    {% for m in ed[-shown:] %}{{ message(m) }}{% endfor %}
+    {% if editor_thinking %}<li class="m m-editor m-thinking"><span class="dots" role="status" aria-label="Your editor is thinking"><i></i><i></i><i></i></span></li>{% endif %}
+  </ol>
+  <form method="post" action="/p/{{ p.id }}/talk" class="composer" data-talk>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="sr-only" for="talk-text">Your message to your editor</label>
+    <textarea id="talk-text" name="text" rows="2" maxlength="2000" required placeholder="{{ editor_placeholder }}"{% if editor_thinking %} disabled{% endif %}></textarea>
+    <button class="btn-sun" type="submit"{% if editor_thinking %} disabled{% endif %}><span>Send</span></button>
+  </form>
+  {% if items %}
+  {% set on_items = items|selectattr('on')|list %}
+  <details class="brief" id="brief"{% if brief_open %} open{% endif %}>
+    <summary><b>The brief</b><span class="muted"> · {{ on_items|length }} things every step follows{% if brief_checks %} · {{ brief_checks }}{% endif %}</span></summary>
+    {% for part, label in [('goal', 'The film'), ('deliver', 'Deliver'), ('style', 'How it is cut'), ('music', 'Music'), ('must', 'Must have'), ('never', 'Never')] %}
+    {% set rows = items|selectattr('part', 'equalto', part)|list %}
+    {% if rows %}
+    <h3>{{ label }}</h3>
+    <ul class="brief-list">
+      {% for it in rows %}{% set r = item_checks.get(it.id) if item_checks else none %}
+      <li class="{{ '' if it.on else 'off' }}">
+        <div class="it-body">
+          <div class="it-main">
+            <span class="it-text">{{ it.text }}</span>
+            <span class="src src-{{ it.source }}">{{ {'you': 'You', 'style': 'Your style', 'editor': 'My reading'}.get(it.source, it.source) }}</span>
+            {% if it.check and it.on %}<span class="chk {{ 'ok' if r and r.ok else ('no' if r else 'wait') }}">{{ '✓ met' if r and r.ok else ('✗ not yet' if r else 'checked') }}</span>{% endif %}
+          </div>
+          {% if it.check and it.on and r %}<small class="it-check {{ 'ok' if r.ok else 'no' }}">{{ r.detail }}</small>{% endif %}
+          {% if it.quote and it.quote != it.text %}<small class="it-quote">“{{ it.quote }}”</small>{% endif %}
+          {% if it.why %}<small class="it-quote">Why: {{ it.why }}</small>{% endif %}
+        </div>
+        {% if editable_spec and it.switchable %}
+        <div class="it-acts">
+          <form method="post" action="/p/{{ p.id }}/spec"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="item" value="{{ it.id }}"><input type="hidden" name="op" value="{{ 'off' if it.on else 'on' }}"><button class="link" type="submit">{{ 'Switch off' if it.on else 'Switch on' }}</button></form>
+          {% if it.id[:1] == 'a' and it.id[1:].isdigit() %}<form method="post" action="/p/{{ p.id }}/spec"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="item" value="{{ it.id }}"><input type="hidden" name="op" value="remove"><button class="link" type="submit">Remove</button></form>{% endif %}
+        </div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endfor %}
+    <p class="help">Every step follows this list. The ones with a check are tested on every sample and version: ✓ met, ✗ not yet. Switched-off items are kept, unused.</p>
+  </details>
+  {% endif %}
+</section>

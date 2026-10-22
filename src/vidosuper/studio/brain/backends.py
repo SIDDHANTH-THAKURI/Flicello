@@ -140,6 +140,7 @@ def _json_from_text(text: str) -> dict:
 
 # ---------------------------------------------------------------- the Claude API
 
+CACHE_SPLIT = "\n\n<<cache>>\n\n"  # in a request's text: what comes before it is cached on its own
 PULSE_EVERY = 50.0  # seconds between pulses while an answer streams
 LOWER_EFFORT = {"max": "high", "xhigh": "high", "high": "medium", "medium": "low"}
 MAX_OUT = 64000  # the most room one structured answer gets; streamed, so a long one never trips the client's timeout
@@ -160,7 +161,9 @@ class ApiBackend:
         self.pulse = None  # called about once a minute while a long answer streams in: the step is alive
 
     def _content(self, req: Request, correction: str | None) -> list[dict]:
-        blocks: list[dict] = [{"type": "text", "text": req.text}]
+        head, _, tail = req.text.partition(CACHE_SPLIT)
+        blocks: list[dict] = [{"type": "text", "text": head, "cache_control": {"type": "ephemeral"}},
+                              {"type": "text", "text": tail}] if tail else [{"type": "text", "text": req.text}]
         for path in req.images:
             data = base64.standard_b64encode(Path(path).read_bytes()).decode("ascii")
             blocks.append({"type": "text", "text": f"Image: {Path(path).name}"})
@@ -261,7 +264,7 @@ class ClaudeCodeBackend:
         self.cap_usd = cap_usd
 
     def ask(self, req: Request, correction: str | None = None) -> tuple[dict, Usage]:
-        prompt = req.text
+        prompt = req.text.replace(CACHE_SPLIT, "\n\n")
         if req.images:
             prompt += ("\n\nLook at every one of these images with the Read tool, in this order, before you "
                        "answer:\n" + "\n".join(f"- {Path(p).resolve()}" for p in req.images))

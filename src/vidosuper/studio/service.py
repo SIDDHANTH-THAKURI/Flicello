@@ -26,10 +26,11 @@ from pathlib import Path
 from .alerts import alert
 from .brain import BrainError, BudgetExceeded, PersonLimit, Usage, brain_kind_for, make_brain
 from .brain.context import look_from_note, pace_from_note
-from .brain.schemas import DesignPlan, Direction, StoryPitch
+from .brain.schemas import ChangeOp, DesignPlan, Direction, StoryPitch
 from .db import DB, JobStopped
 from .improve import maybe_start as maybe_start_improve
-from . import requirements
+from . import agent, requirements
+from . import spec as specs
 from .pipeline import Pipeline, UserError, remove_project_files, studio_config
 from .profiles import Profile, owner_seed_rules, rules_for, scope_of
 from .settings import StudioSettings
@@ -46,15 +47,18 @@ STAGES = {
     "rendering": "Making your video",
     "done": "Your video is ready",
     "revising": "Making your changes",
+    "reading": "Reading your changes",
+    "confirm": "Check the changes",
     "composing": "Making your music",
     "paused": "Paused",
     "failed": "Something went wrong",
 }
-BUSY = {"preparing", "pitching", "sampling", "rendering", "revising", "composing"}
+BUSY = {"preparing", "pitching", "sampling", "rendering", "revising", "composing", "reading"}
 log = logging.getLogger("vidosuper.studio.service")
 JOB_STAGE = {"prepare": "preparing", "pitch": "pitching", "sample": "sampling", "render": "rendering",
-             "revise": "revising", "beat": "composing"}
-PRIORITY = {"beat": 2, "pitch": 2, "sample": 3, "learn": 4, "prepare": 5, "render": 6, "revise": 6}  # short jobs first
+             "revise": "revising", "beat": "composing", "changes": "reading"}
+PRIORITY = {"changes": 1, "strip": 2, "beat": 2, "pitch": 2, "sample": 3, "learn": 4, "prepare": 5, "render": 6,
+            "revise": 6}  # short jobs first
 FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad shots", "shaky", "too short",
                  "too long", "didn't follow my idea", "colour", "sound"]
 LENGTHS = (15, 30, 45, 60, 90, 120, 180, 300, 600)  # who may ask for which: Studio.lengths_for (access levels)
@@ -85,13 +89,18 @@ def ask_text(project: dict) -> str:
         parts.append(f"How they want it cut, in their words: {project['cut_note'].strip()}")
     parts.append(f"How much to improvise ({int(project.get('improvise') or 35)}/100): "
                  f"{improvise_text(project.get('improvise') or 35)}")
+    items = specs.film_spec(project, [])  # their changes by talking to their editor (spec.py)
+    off = {it["id"] for it in items if not it["on"]}
     if project.get("brief"):
         b = json.loads(project["brief"])
-        agreed = [f"The film: {b['story']}"] if b.get("story") else []
-        agreed += [f"Feel: {', '.join(b['feel'])}"] if b.get("feel") else []
-        agreed += [f"Must have: {'; '.join(b['must'])}"] if b.get("must") else []
-        agreed += [f"Leave out: {'; '.join(b['avoid'])}"] if b.get("avoid") else []
-        agreed += [f"Do not use these clips at all: {', '.join(b['leave_out'])}"] if b.get("leave_out") else []
+        must = [x for k, x in enumerate(b.get("must") or []) if f"must-{k}" not in off]
+        avoid = [x for k, x in enumerate(b.get("avoid") or []) if f"never-{k}" not in off]
+        out = [c for c in b.get("leave_out") or [] if f"out-{c}" not in off]
+        agreed = [f"The film: {b['story']}"] if b.get("story") and "goal" not in off else []
+        agreed += [f"Feel: {', '.join(b['feel'])}"] if b.get("feel") and "feel" not in off else []
+        agreed += [f"Must have: {'; '.join(must)}"] if must else []
+        agreed += [f"Leave out: {'; '.join(avoid)}"] if avoid else []
+        agreed += [f"Do not use these clips at all: {', '.join(out)}"] if out else []
         agreed += [f"About the music: {b['music']}"] if b.get("music") else []
         if b.get("parts"):
             agreed.append("The parts, in order (each becomes its own scenes): " + "; ".join(
@@ -105,6 +114,10 @@ def ask_text(project: dict) -> str:
         if agreed:
             parts.append("# What we agreed with them (they checked and corrected this: it wins over anything above)\n"
                          + "\n".join(f"- {line}" for line in agreed))
+    since = specs.ask_lines(items)
+    if since:
+        parts.append("# Agreed with them since, talking to their editor (this wins over everything above)\n"
+                     + "\n".join(f"- {line}" for line in since))
     return "\n".join(p for p in parts if p)
 
 
@@ -146,6 +159,10 @@ class Studio:
         self.s = s.ensure()
         self.db = DB(s.db_path)
         self.cfg = studio_config(s.workspace, s.render_preset, s.models_dir)
+        from concurrent.futures import ThreadPoolExecutor
+
+        self._editors = ThreadPoolExecutor(max_workers=4, thread_name_prefix="editor")  # started on first use
+        self.soon = lambda fn: self._editors.submit(fn)  # your editor's turns (tests run them at once)
 
     # ------------------------------------------------------------------ people
     def user(self, uid: str) -> dict | None:
@@ -516,6 +533,10 @@ class Studio:
         from . import abilities
 
         abilities.note(self.db, project, " ".join([intent, cut_note or "", describe or ""]))
+        try:
+            agent.hello(self, project, user)
+        except Exception:  # noqa: BLE001 - the film is made; its editor's first words can wait for the first step
+            log.warning("could not post the editor's hello for %s", pid, exc_info=True)
         return project
 
     def shapes(self, project: dict) -> list[str]:
@@ -528,6 +549,7 @@ class Studio:
             raise ActionError("Wait a moment: this video is being worked on. Try again when the step finishes.")
         remove_project_files(workdir(self.s, project["user_id"], project["id"]), self.cfg)
         self.db.run("UPDATE projects SET deleted=1, updated=? WHERE id=?", (time.time(), project["id"]))
+        self.db.run("DELETE FROM messages WHERE project_id=?", (project["id"],))
         owner = self.user(project["user_id"])
         if owner and int(project.get("credits") or 0) > 0 and not project["version"]:  # never finished
             self._refund(owner, project, int(project["credits"]), "deleted before it was finished")
@@ -551,7 +573,8 @@ class Studio:
         self.delete_everything(user)
         pids = [r["id"] for r in self.db.all("SELECT id FROM projects WHERE user_id=?", (user["id"],))]
         for pid in pids:
-            for table in ("pitches", "plans", "renders", "feedback", "events", "uploads", "clips", "jobs", "beats"):
+            for table in ("pitches", "plans", "renders", "feedback", "events", "uploads", "clips", "jobs", "beats",
+                          "messages"):
                 self.db.run(f"DELETE FROM {table} WHERE project_id=?", (pid,))
         self.db.run("DELETE FROM projects WHERE user_id=?", (user["id"],))
         self.db.run("UPDATE spend SET user_id=NULL, project_id=NULL WHERE user_id=?", (user["id"],))
@@ -578,6 +601,9 @@ class Studio:
                 "videos": [r["file"] for r in self.db.all("SELECT file FROM renders WHERE project_id=?", (p["id"],))],
                 "feedback": self.db.all("SELECT stage, version, match, liked, tags, text, created FROM feedback "
                                         "WHERE project_id=? ORDER BY id", (p["id"],)),
+                "conversation": [{"from": m["role"], "at": m["created"], "text": m["body"].get("text", "")}
+                                 for m in agent.thread(self.db, p["id"], n=2000)],
+                "spec_changes": json.loads(p["spec"]) if p.get("spec") else None,
             })
         prof = user_dir(self.s, user["id"]) / "profile.json"
         return {
@@ -1249,7 +1275,8 @@ class Studio:
     # ------------------------------------------------------------------ going back, stopping a step
     BACK_FROM = {"setup": ("understood", "choose", "review", "failed", "paused"), "understood": ("choose", "review"),
                  "choose": ("review",)}
-    STOP_TO = {"prepare": "setup", "pitch": "choose", "sample": "choose", "render": "review", "revise": "done"}
+    STOP_TO = {"prepare": "setup", "pitch": "choose", "sample": "choose", "render": "review", "revise": "done",
+               "changes": "done", "strip": "done"}
 
     def back_targets(self, project: dict) -> list[str]:
         """The earlier stages this video can go back to now (none while a step runs)."""
@@ -1384,11 +1411,221 @@ class Studio:
         maybe_start_improve(self)  # after every 5th rating the improvement routine looks at what people said
         fix = " ".join(fix.split())[:1000]
         if fix:
-            if project["revisions"] >= self.s.limits.revisions_per_video and not self.is_owner(user):
-                raise ActionError("Thanks! That was the last round of changes for this video.")
+            self.ask_change(user, self.db.project(project["id"]), fix + (f" (They also ticked: {', '.join(tags)}.)"
+                                                                         if tags else ""))
+
+    # ------------------------------------------------------------------ versions: changes to exactly the shots named
+    def _info(self, project: dict) -> dict:
+        row = self.db.one("SELECT info FROM projects WHERE id=?", (project["id"],))
+        return json.loads(row["info"]) if row and row["info"] else {}
+
+    def _set_info(self, project: dict, **values) -> None:
+        info = self._info(project)
+        for k, v in values.items():
+            if v is None:
+                info.pop(k, None)
+            else:
+                info[k] = v
+        self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
+
+    def work_version(self, project: dict) -> int:
+        """The version they are working on: the one they chose to continue from, else the newest."""
+        base = project.get("base")
+        if base and self.db.one("SELECT id FROM renders WHERE project_id=? AND kind='final' AND version=?",
+                                (project["id"], base)):
+            return int(base)
+        return int(project["version"] or 0)
+
+    def strip_of(self, project: dict, version: int) -> dict | None:
+        """A version's numbered shots ({"cards", "alternatives"}), once made (see versions.strip)."""
+        row = self.db.one("SELECT shots FROM renders WHERE project_id=? AND kind='final' AND version=? AND shots IS NOT "
+                          "NULL ORDER BY id LIMIT 1", (project["id"], version))
+        return json.loads(row["shots"]) if row else None
+
+    def versions_list(self, project: dict) -> list[dict]:
+        """Every finished version, newest first: its files, how they rated it, what it was made from, what changed."""
+        rated = {r["version"]: r for r in self.db.all("SELECT version, match, liked FROM feedback WHERE project_id=? "
+                                                       "AND stage='final' ORDER BY id", (project["id"],))}
+        out: dict[int, dict] = {}
+        for r in self.db.all("SELECT * FROM renders WHERE project_id=? AND kind='final' ORDER BY version DESC, shape",
+                             (project["id"],)):
+            v = out.setdefault(r["version"], {"version": r["version"], "files": [], "base": r["base"],
+                                              "changes": json.loads(r["changes"]) if r["changes"] else [],
+                                              "liked": rated.get(r["version"], {}).get("liked"), "strip": bool(r["shots"])})
+            v["files"].append({"shape": r["shape"], "file": r["file"], "seconds": r["seconds"]})
+        return list(out.values())
+
+    def _check_revisions(self, user: dict, project: dict) -> None:
+        if project["revisions"] >= self.s.limits.revisions_per_video and not self.is_owner(user):
+            raise ActionError("That was the last round of changes for this video.")
+
+    def ask_change(self, user: dict, project: dict, text: str) -> None:
+        """What they want changed, in their words: read into exact changes on the numbered shots, shown to them
+        before anything is made (see _job_changes)."""
+        self._guard(project, "done", "confirm")
+        text = " ".join(str(text).split())[:1500]
+        if not text:
+            raise ActionError("Say what should change.")
+        self._check_revisions(user, project)
+        version = self.work_version(project)
+        self.db.run("INSERT INTO feedback(project_id, user_id, stage, version, tags, text, created) "
+                    "VALUES (?,?,?,?,?,?,?)", (project["id"], user["id"], "change", version, "[]", text, time.time()))
+        self.mute_if_asked(project, text)
+        if project["kind"] != "montage":  # a voice or talking video has scenes, not numbered shots: changed as before
             self.db.run("UPDATE projects SET revisions=revisions+1 WHERE id=?", (project["id"],))
-            self.mute_if_asked(project, fix)
-            self._enqueue(project, "revise", {"feedback": fix, "tags": tags})
+            self._enqueue(project, "revise", {"feedback": text, "tags": []})
+            return
+        self._set_info(project, pending=None)
+        self._enqueue(project, "changes", {"text": text, "base": version})
+
+    def confirm_change(self, user: dict, project: dict, picks: list[int] | None = None) -> None:
+        """Make the changes they checked (`picks`: the ones they kept ticked; None: all)."""
+        self._guard(project, "confirm")
+        pending = self._info(project).get("pending") or {}
+        ops, said = list(pending.get("ops") or []), list(pending.get("said") or [])
+        if picks is not None:
+            keep = sorted({k for k in picks if 0 <= k < len(ops)})
+            ops, said = [ops[k] for k in keep], [said[k] for k in keep if k < len(said)]
+        if not ops:
+            raise ActionError("Tick at least one change, or say what should change.")
+        self._check_revisions(user, project)
+        self.db.run("UPDATE projects SET revisions=revisions+1 WHERE id=?", (project["id"],))
+        self._set_info(project, pending=None)
+        self._enqueue(project, "revise", {"ops": ops, "base": pending.get("base") or self.work_version(project),
+                                          "said": said, "text": pending.get("text", "")})
+
+    def cancel_change(self, project: dict) -> None:
+        self._guard(project, "confirm")
+        self._set_info(project, pending=None)
+        self.db.set_stage(project["id"], "done")
+
+    def direct_change(self, user: dict, project: dict, form: dict) -> None:
+        """Changes picked on the shot strip (remove, longer, swap, replace...): exact, so no reading by the AI."""
+        from . import versions
+
+        self._guard(project, "done")
+        version = self.work_version(project)
+        strip = self.strip_of(project, version)
+        if not strip or not strip.get("cards"):
+            raise ActionError("This version's shots aren't numbered yet: give it a few seconds.")
+        cards = strip["cards"]
+        ops, said = versions.direct_ops(form, len(cards), {c["n"]: c["what"] for c in cards})
+        if not ops:
+            raise ActionError("Pick a change on a shot first.")
+        self._check_revisions(user, project)
+        self.db.run("UPDATE projects SET revisions=revisions+1 WHERE id=?", (project["id"],))
+        self._enqueue(project, "revise", {"ops": [o.model_dump() for o in ops], "base": version, "said": said,
+                                          "text": ""})
+
+    def continue_from(self, project: dict, version: int) -> None:
+        """Work on an earlier version: the next change starts from it (nothing is deleted)."""
+        self._guard(project, "done")
+        if not self.db.one("SELECT id FROM renders WHERE project_id=? AND kind='final' AND version=?",
+                           (project["id"], version)):
+            raise ActionError(f"There is no version {version}.")
+        self.db.run("UPDATE projects SET base=? WHERE id=?",
+                    (None if version == project["version"] else version, project["id"]))
+        if not self.strip_of(project, version):
+            self.number_shots(project, version)
+
+    def number_shots(self, project: dict, version: int | None = None) -> bool:
+        """Make a version's numbered shots if it has none yet (a few seconds, no AI). False: already there or asked."""
+        version = version or self.work_version(project)
+        if not version or self.strip_of(project, version) or self.db.active_job(project["id"]):
+            return False
+        asked = self._info(project).get("strips_asked") or []
+        if version in asked:
+            return False
+        self._set_info(project, strips_asked=(asked + [version])[-40:])
+        self.db.enqueue("strip", project["id"], project["user_id"], {"version": version}, PRIORITY["strip"])
+        return True
+
+    def _version_plan(self, project: dict, version: int) -> tuple[dict, DesignPlan, dict | None]:
+        """A version's plan row, the plan pinned to the frames it really showed, and its edit list."""
+        from . import versions
+
+        r = self.db.one("SELECT plan_id FROM renders WHERE project_id=? AND kind='final' AND version=? ORDER BY id LIMIT 1",
+                        (project["id"], version))
+        row = self.db.one("SELECT * FROM plans WHERE id=? AND project_id=?", (r["plan_id"], project["id"])) if r else None
+        if row is None:
+            raise ActionError(f"Version {version} can't be found.")
+        plan = DesignPlan.model_validate_json(row["data"])
+        work = workdir(self.s, project["user_id"], project["id"])
+        edl, tall = versions.load_edl(work.out, version, self.shapes(project))
+        return row, versions.pinned(plan, edl, tall), edl
+
+    def _save_strip(self, pipe: Pipeline, ctx, project: dict, version: int) -> dict | None:
+        """Number a version's shots, with a frame each and the moments it doesn't show (to swap in)."""
+        from . import versions
+
+        _, plan, edl = self._version_plan(project, version)
+        if edl is None:
+            return None
+        shape = "9:16" if edl["meta"]["height"] > edl["meta"]["width"] else "16:9"
+        sources = versions.sources_for(pipe, ctx.facts)
+        pipe.work.stills.mkdir(parents=True, exist_ok=True)
+        cards = versions.strip(plan, edl, ctx.facts, ctx.beats.period, ctx.beats.drop, pipe.work.stills, sources, shape,
+                               f"v{version}")
+        data = {"cards": cards, "alternatives": versions.alternatives(plan, ctx.facts, ctx.bans, pipe.work.stills,
+                                                                      sources, shape)}
+        self.db.run("UPDATE renders SET shots=? WHERE project_id=? AND kind='final' AND version=?",
+                    (json.dumps(data), project["id"], version))
+        return data
+
+    def _job_strip(self, job, project, user):
+        version = int(job["params"].get("version") or self.work_version(project))
+        _, plan, _ = self._version_plan(project, version)
+        pipe = self._pipeline(job, project, user)
+        ctx = self._context(pipe, project, user, start_at=plan.start_at)
+        self.db.job_progress(job["id"], 0.2, f"Numbering the shots of version {version}")
+        self._save_strip(pipe, ctx, project, version)
+
+    def _job_changes(self, job, project, user):
+        """Read what they asked into exact changes on the numbered shots, and show them before anything is made."""
+        from . import versions
+
+        params = job["params"]
+        version = int(params.get("base") or self.work_version(project))
+        _, plan, _ = self._version_plan(project, version)
+        pipe = self._pipeline(job, project, user)
+        ctx = self._context(pipe, project, user, start_at=plan.start_at)
+        self.db.job_progress(job["id"], 0.1, f"Looking at the shots of version {version}")
+        strip = self.strip_of(project, version) or self._save_strip(pipe, ctx, project, version) or {}
+        cards = strip.get("cards") or []
+        if not cards:
+            raise ActionError("This version's shots couldn't be read. Try again in a moment.")
+        liked = {r["version"]: r["liked"] for r in self.db.all("SELECT version, liked FROM feedback WHERE project_id=? "
+                                                               "AND stage='final' ORDER BY id", (project["id"],))}
+        earlier, counts = [], {}
+        for v in sorted({r["version"] for r in self.db.all("SELECT version FROM renders WHERE project_id=? AND "
+                                                          "kind='final'", (project["id"],))} - {version}, reverse=True)[:12]:
+            other = self.strip_of(project, v)
+            if other and other.get("cards"):
+                shots = [(c["n"], c["moment"], c["what"]) for c in other["cards"]]
+            else:
+                try:
+                    shots = versions.labels_from_plan(self._version_plan(project, v)[1], ctx.facts)
+                except ActionError:
+                    continue
+            earlier.append((v, liked.get(v), shots))
+            counts[v] = len(shots)
+        before = [r["text"] for r in self.db.all("SELECT text FROM feedback WHERE project_id=? AND stage='change' AND "
+                                                 "text<>'' ORDER BY id", (project["id"],))][:-1]
+        text = versions.request_text(version, cards, ctx.beats, versions.unused_moments(plan, ctx.facts, ctx.bans),
+                                     earlier, ctx.bans, params["text"], before)
+        self.db.job_progress(job["id"], 0.3, "Reading what you asked for")
+        try:
+            req = pipe.brain.read_changes(text, params["text"], len(cards), ctx.facts, counts)
+        except (BudgetExceeded, JobStopped):  # (and PersonLimit) the money rules and the person decide
+            raise
+        except Exception as exc:  # noqa: BLE001 - the AI can't read it now: the exact phrasings are still read
+            self.db.event(project["id"], f"changes: the AI couldn't read them ({type(exc).__name__}: "
+                          f"{' '.join(str(exc).split())[:160]}); read without the AI", "warn", job["id"])
+            req = versions.read_simple(params["text"], len(cards))
+        self._set_info(project, pending={"base": version, "text": params["text"],
+                                         "ops": [o.model_dump() for o in req.ops], "said": req.said,
+                                         "unclear": req.unclear})
+        self.db.set_stage(project["id"], "confirm")
 
     def retry(self, project: dict) -> None:
         if project["stage"] not in ("failed", "paused"):
@@ -1480,16 +1717,80 @@ class Studio:
             pipe.brain.backend.pulse = pulse
         return pipe
 
-    def _context(self, pipe: Pipeline, project: dict, user: dict):
-        ctx = pipe.context(self.shapes(project), project["length"], ask_text(project),
-                           rules_for(self.profile(user).rules, project["kind"]),
-                           project["pace"])
+    def _context(self, pipe: Pipeline, project: dict, user: dict, start_at: float | None = None):
+        items = self.spec_items(project, user)
+        rules = [r for r in rules_for(self.profile(user).rules, project["kind"]) if not specs.rule_off(items, r["id"])]
+        ctx = pipe.context(self.shapes(project), project["length"], ask_text(project), rules,
+                           project["pace"], start_at=start_at)
+        ctx.bans = list(self._info(project).get("bans") or [])
         # what they said on earlier samples and versions of this film still holds ('beat sync' once is beat sync)
         said = [project.get("intent") or "", project.get("cut_note") or ""]
         said += [r["text"] for r in self.db.all("SELECT text FROM feedback WHERE project_id=? AND text<>''", (project["id"],))]
-        if hasattr(ctx, "sync_if_asked"):
-            ctx.sync_if_asked(*said)
+        if hasattr(ctx, "read_words"):
+            ctx.read_words(*said)
+        specs.apply(ctx, items)  # the spec is the authority: what they switched on or off there holds
         return ctx
+
+    # ------------------------------------------------------------------ your editor (agent.py) and the film's spec
+    def spec_items(self, project: dict, user: dict | None = None, extra: list[str] | None = None) -> list[dict]:
+        """The film's spec as the person sees it: built from everything they said, their style, and their changes."""
+        user = user or self.user(project["user_id"])
+        rules = rules_for(self.profile(user).rules, project["kind"]) if user else []
+        said = [r["text"] for r in self.db.all("SELECT text FROM feedback WHERE project_id=? AND text<>''", (project["id"],))]
+        said += agent.own_words(agent.thread(self.db, project["id"], n=200))
+        return specs.film_spec(project, rules, said + [x for x in (extra or []) if x])
+
+    def editor_brain(self, project: dict, user: dict):
+        owner = self.is_owner(user)
+        work = workdir(self.s, user["id"], project["id"]).ensure()
+        return make_brain(brain_kind_for(self.s, owner), self.s, self._spender(project, user["id"], None), work.brain)
+
+    def talk(self, user: dict, project: dict, text: str, refs: list[str] | None = None) -> int:
+        """Their message to their editor: kept at once, answered beside the request (agent.turn)."""
+        text = " ".join(str(text or "").split())[:agent.MAX_WORDS]
+        if not text:
+            raise ActionError("Write something to your editor first.")
+        hour = self.db.value("SELECT COUNT(*) FROM messages WHERE project_id=? AND role='you' AND created>?",
+                             (project["id"], time.time() - 3600), 0)
+        if hour >= agent.TURNS_PER_HOUR and not self.is_owner(user):
+            raise ActionError("That's a lot of messages for one hour: give it a little while.")
+        if agent.thinking(agent.thread(self.db, project["id"], n=1)):
+            raise ActionError("Your editor is still answering your last message.")
+        mid = self.db.post_message(project["id"], user["id"], "you", "text",
+                                   {"text": text, "refs": [" ".join(str(r).split())[:40] for r in refs or []][:8],
+                                    "pending": True})
+        self.soon(lambda: agent.turn(self, project["id"], mid))
+        return mid
+
+    def answer_card(self, user: dict, project: dict, mid: int, k: int, choice: str) -> None:
+        try:
+            agent.answer(self, user, project, mid, k, choice)
+        except agent.TalkError as exc:
+            raise ActionError(str(exc)) from exc
+
+    def spec_change(self, user: dict, project: dict, iid: str, op: str) -> None:
+        """They switched an item of the film's spec on or off, or removed one they added by talking."""
+        known = {it["id"]: it for it in self.spec_items(project, user)}
+        if iid not in known:
+            raise ActionError("That isn't in this film's brief any more.")
+        if not known[iid]["switchable"]:
+            raise ActionError("That one changes by telling your editor, not by switching it off.")
+        if op == "remove":
+            if not specs.is_added(iid):
+                raise ActionError("This one comes from what you confirmed or your style: switch it off instead.")
+            ov = specs.remove(project, iid)
+        elif op in ("on", "off"):
+            ov = specs.switch(project, iid, op == "on")
+        else:
+            raise ActionError("Switch it on or off.")
+        self.db.run("UPDATE projects SET spec=?, updated=? WHERE id=?", (json.dumps(ov), time.time(), project["id"]))
+
+    def _save_checks(self, project: dict, key: str, results: list[dict]) -> None:
+        """The checklist of one sample ('sample') or version ('3'): every check the spec asks for, met or not."""
+        checks = self._info(project).get("checks") or {}
+        checks[key] = results
+        keep = ["sample"] + sorted((k for k in checks if k != "sample"), key=lambda k: int(k) if k.isdigit() else 0)[-20:]
+        self._set_info(project, checks={k: checks[k] for k in keep if k in checks})
 
     def run_job(self, job: dict) -> None:
         project = self.db.project(job["project_id"]) if job["project_id"] else None
@@ -1508,6 +1809,10 @@ class Studio:
             if self._stopped(job):
                 return  # stopped by the person as it finished: what it made is not used
             self._posters(project)
+            try:
+                agent.checkin(self, job, project)
+            except Exception:  # noqa: BLE001 - a check-in never fails the step it reports on
+                log.warning("check-in after %s failed for %s", job["kind"], project["id"], exc_info=True)
             self.db.job_done(job["id"])
         except JobStopped:
             log.info("job %s stopped by the person", job["id"])
@@ -1523,15 +1828,17 @@ class Studio:
                 hours = wait / 3600
                 when = f"in about {hours:.0f} hour{'s' if round(hours) != 1 else ''}" if hours >= 1.5 else \
                     f"in about {max(1, int(wait // 60))} minutes"
-                self.db.set_stage(project["id"], "paused", note=(
-                    f"Paused: your account has used today's share of AI and rendering. It carries on by itself {when}; "
-                    "you can leave this page."))
+                note = (f"Paused: your account has used today's share of AI and rendering. It carries on by itself "
+                        f"{when}; you can leave this page.")
+                self.db.set_stage(project["id"], "paused", note=note)
+                agent.trouble(self, project, note)
         except BudgetExceeded as exc:
             if self._stopped(job):
                 return
             self.db.run("UPDATE jobs SET status='waiting', error=? WHERE id=?", (str(exc), job["id"]))
             if job["kind"] in JOB_STAGE:
                 self.db.set_stage(project["id"], "paused", note=f"Paused: {exc}. The owner has been told.")
+                agent.trouble(self, project, f"Paused: {exc}. Nothing is lost; the owner has been told.")
             alert(self.db, self.s, "budget", f"A job is waiting: {exc}.")
         except Exception as exc:  # noqa: BLE001 - every failure is recorded, retried once, then shown
             if self._stopped(job):  # stopped by the person, then it broke: nothing to retry or show them
@@ -1545,9 +1852,10 @@ class Studio:
                 # our AI account said no (key refused, no credit left): not their film's fault, and trying again
                 # can't help until the owner fixes it. The film waits (nothing lost) instead of failing.
                 self.db.run("UPDATE jobs SET status='waiting', error=? WHERE id=?", (str(exc)[:500], job["id"]))
-                self.db.set_stage(project["id"], "paused", note=(
-                    "Paused: our AI service is not answering right now. Nothing is lost: the owner has been told and "
-                    "will start it again from this step, or press Try again in a while."))
+                note = ("Paused: our AI service is not answering right now. Nothing is lost: the owner has been told "
+                        "and will start it again from this step, or press Try again in a while.")
+                self.db.set_stage(project["id"], "paused", note=note)
+                agent.trouble(self, project, note)
                 alert(self.db, self.s, "key", f"The AI account refused a request ({type(exc).__name__}: "
                       f"{str(exc)[:160]}): videos are paused until the key or credit is fixed in .env, the server's "
                       ".env.studio and the Modal secret; then retry them from /admin.")
@@ -1564,9 +1872,16 @@ class Studio:
                 message = str(exc) if user_fixable else ("The music couldn't be made this time. Try again, describe "
                                                          "it differently, or upload a song.")
                 self.db.set_stage(project["id"], params.get("back") or "setup", error=message[:300])
+                agent.trouble(self, project, message)
+            elif job["kind"] == "changes":  # reading a change broke: back to their film, which is untouched
+                message = str(exc) if user_fixable else ("Your changes couldn't be read this time. Nothing was changed: "
+                                                         "try again, or use the buttons on the shots.")
+                self.db.set_stage(project["id"], "done", error=message[:300])
+                agent.trouble(self, project, message)
             elif job["kind"] in JOB_STAGE:
                 message = str(exc) if user_fixable else "Something went wrong on our side. The owner has been told; you can try again."
                 self.db.set_stage(project["id"], "failed", error=message[:300])
+                agent.trouble(self, project, f"That step didn't work: {message}")
             if type(exc).__name__ == "AuthenticationError" or "invalid x-api-key" in str(exc):
                 alert(self.db, self.s, "key", "The AI key was refused (401, invalid x-api-key): people's videos can't "
                       "use the AI until it is replaced in .env, the server's .env.studio and the Modal secret.")
@@ -2174,7 +2489,12 @@ class Studio:
             self.db.run("UPDATE plans SET board=? WHERE id=?", (json.dumps(sb), plan_id))
         except Exception as exc:  # noqa: BLE001 - the storyboard helps; the sample still comes
             self.db.event(project["id"], f"storyboard skipped: {type(exc).__name__}: {exc}"[:300], "warn", job["id"])
-        self._note_requirements(project, self._montage_requirements(project, user, ctx, plan, None), "sample")
+        rows = self._montage_requirements(project, user, ctx, plan, None)
+        self._note_requirements(project, rows, "sample")
+        try:
+            self._save_checks(project, "sample", specs.checklist(self.spec_items(project, user), plan, ctx, rows=rows))
+        except Exception:  # noqa: BLE001 - the checklist reports; the sample is made without it
+            log.warning("could not check the sample of %s", project["id"], exc_info=True)
         info = pipe.sample(ctx, plan, shape, f"sample-{plan_id}", look=look_from_note(project["intent"], self.profile(user).look))
         self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, created) "
                     "VALUES (?,?,?,?,?,?,?,?,?)", (project["id"], plan_id, project["version"], "sample", shape, info.path,
@@ -2195,7 +2515,8 @@ class Studio:
         if bad:
             self.db.event(project["id"], f"requirement not met ({where}): " + "; ".join(bad), "warn")
 
-    def _render_plan(self, job, project, user, pipe: Pipeline, ctx, plan: DesignPlan, plan_id: int) -> None:
+    def _render_plan(self, job, project, user, pipe: Pipeline, ctx, plan: DesignPlan, plan_id: int,
+                     base: int | None = None, changes: list[str] | None = None) -> None:
         version = project["version"] + 1
         infos = pipe.render(ctx, plan, self.shapes(project), version, look=look_from_note(project["intent"], self.profile(user).look))
         for info in infos:
@@ -2203,13 +2524,27 @@ class Studio:
             info.findings.extend(rows)
             self._note_requirements(project, rows, f"{info.shape} final")
             self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
-                        "findings, created) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        "findings, created, base, changes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (project["id"], plan_id, version, "final", info.shape, info.path, info.seconds, info.render_seconds,
-                         json.dumps(info.findings), time.time()))
+                         json.dumps(info.findings), time.time(), base, json.dumps(changes) if changes else None))
             if info.failed:
                 alert(self.db, self.s, "check", f"A finished video failed a check: "
                       + "; ".join(f"{f['check']}: {f['detail'][:80]}" for f in info.failed), "warning")
-        self.db.run("UPDATE projects SET version=? WHERE id=?", (version, project["id"]))
+        self.db.run("UPDATE projects SET version=?, base=NULL WHERE id=?", (version, project["id"]))
+        strip = None
+        try:  # its shots, numbered as they see them, for the next change
+            self.db.job_progress(job["id"], 0.97, "Numbering its shots")
+            strip = self._save_strip(pipe, ctx, self.db.project(project["id"]), version)
+        except Exception:  # noqa: BLE001 - the film is made; the strip can be made again later
+            log.warning("could not number the shots of %s v%s", project["id"], version, exc_info=True)
+        try:  # every check the spec asks for, on the version as made
+            first = infos[0] if infos else None
+            rows = [f for f in (first.findings if first else []) if f.get("check") == "requirement"]
+            self._save_checks(project, str(version), specs.checklist(
+                self.spec_items(project, user), plan, ctx, (strip or {}).get("cards"), rows,
+                first.seconds if first else None, float(project["length"])))
+        except Exception:  # noqa: BLE001 - the checklist reports; the film is made without it
+            log.warning("could not check version %s of %s", version, project["id"], exc_info=True)
         self.db.set_stage(project["id"], "done")
 
     def _job_render(self, job, project, user):
@@ -2225,6 +2560,8 @@ class Studio:
     def _job_revise(self, job, project, user):
         if project["kind"] != "montage":
             return self._job_explainer(job, project, user, "revise")
+        if "ops" in job["params"]:
+            return self._revise_ops(job, project, user)
         pipe = self._pipeline(job, project, user, 0.0, 0.25)
         ctx = self._context(pipe, project, user)
         row = self.latest_plan(project)
@@ -2240,6 +2577,48 @@ class Studio:
         pipe.progress = lambda f, m: self.db.job_progress(job["id"], 0.25 + 0.75 * f, m)
         self._render_plan(job, project, user, pipe, ctx, plan, plan_id)
 
+    def _revise_ops(self, job, project, user):
+        """Make the changes they checked on the version they picked: by code on the plan pinned to that version's
+        frames (every shot not named stays as it was), and the AI only for a stretch they want made again."""
+        from . import versions
+        from .brain.core import check_plan
+
+        params = job["params"]
+        version = int(params.get("base") or self.work_version(project))
+        row, plan, _ = self._version_plan(project, version)
+        pipe = self._pipeline(job, project, user, 0.0, 0.3)
+        ctx = self._context(pipe, project, user, start_at=plan.start_at)
+        _, pitch = self._chosen(project, row["pitch_id"])
+        ops = [ChangeOp.model_validate(o) for o in params["ops"]]
+        earlier = {}
+        for o in ops:
+            if o.op == "replace" and o.from_version and o.from_version not in earlier:
+                try:
+                    earlier[o.from_version] = self._version_plan(project, o.from_version)[1]
+                except ActionError:
+                    pass
+        strip = self.strip_of(project, version)
+        labels = ({c["n"]: c["what"] for c in strip["cards"]} if strip and strip.get("cards")
+                  else {n: what for n, _, what in versions.labels_from_plan(plan, ctx.facts)})
+        self.db.job_progress(job["id"], 0.05, f"Changing version {version}: only the shots you named")
+        done = versions.apply(plan, ctx, ops, earlier, labels)
+        if done.bans:
+            bans = list(self._info(project).get("bans") or []) + done.bans
+            self._set_info(project, bans=bans[-60:])
+            ctx.bans = bans
+        new = done.plan
+        for lo, hi, want in reversed(done.redo):  # last first: the earlier stretches keep their places
+            self.db.job_progress(job["id"], 0.15, "Making the stretch you asked for again")
+            new = pipe.brain.redo_range(ctx, pitch, new, lo, hi, want)
+        problems = check_plan(new, ctx, taste=False)
+        if problems:
+            self.db.event(project["id"], "changes left: " + "; ".join(problems)[:500], "info", job["id"])
+        plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
+                              (project["id"], "change", row["pitch_id"], new.model_dump_json(), time.time()))
+        lines = done.lines + [f"Not done: {x}" for x in done.skipped]
+        pipe.progress = lambda f, m: self.db.job_progress(job["id"], 0.3 + 0.7 * f, m)
+        self._render_plan(job, project, user, pipe, ctx, new, plan_id, base=version, changes=lines)
+
     def _job_learn(self, job, project, user):
         events = []
         for p in self.pitches(project):
@@ -2254,6 +2633,8 @@ class Studio:
             if f["stage"] == "sample":
                 events.append(("Approved the sample" if f["liked"] else "Rejected the sample") +
                               (f": \"{f['text']}\"" if f["text"] else ""))
+            elif f["stage"] == "change":
+                events.append(f"Asked for changes to version {f['version']}: \"{f['text']}\"")
             else:
                 tags = json.loads(f["tags"] or "[]")
                 events.append(f"Rated version {f['version']}: matched their ask {f['match']}/5, liked it {f['liked']}/10"

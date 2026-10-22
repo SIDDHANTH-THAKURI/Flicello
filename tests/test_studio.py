@@ -293,17 +293,48 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
     _drain(studio)
     page = client.get(f"/p/{pid}").text
-    assert "How did it turn out?" in page
+    assert "How did version 1 turn out?" in page
     finals = studio.renders(studio.db.project(pid), "final")
     assert {r["shape"] for r in finals} == {"9:16", "16:9"}
     assert all(f["level"] != "fail" for r in finals for f in json.loads(r["findings"]))
-    # rate it and ask for a change: a second version, and the profile learns
-    client.post(f"/p/{pid}/rate", data={"csrf": csrf, "match": 4, "liked": 6, "tags": ["too fast"], "text": "",
-                                        "fix": "calmer please"})
+    # its shots are numbered as it is made: a frame each, and the number of the shot playing is on the player
+    strip = studio.strip_of(studio.db.project(pid), 1)
+    assert strip and len(strip["cards"]) >= 3 and all(c["thumb"] for c in strip["cards"])
+    assert "The shots of version 1" in page and 'data-shots="' in page and 'class="shot-badge"' in page
+    assert client.get(f"/m/{pid}/stills/{strip['cards'][0]['thumb']}").status_code == 200
+    # rate it: the profile learns (a rating alone makes no new version)
+    client.post(f"/p/{pid}/rate", data={"csrf": csrf, "match": 4, "liked": 6, "tags": ["too fast"], "text": ""})
+    _drain(studio)
+    assert studio.db.project(pid)["version"] == 1
+    assert any("calm" in r["text"].lower() for r in studio.profile(friend).rules)
+    # a change in their words is read into exact changes and shown before anything is made
+    client.post(f"/p/{pid}/change", data={"csrf": csrf, "text": "swap 1 and 2"})
+    assert studio.db.project(pid)["stage"] == "reading"
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert studio.db.project(pid)["stage"] == "confirm" and "what I&#39;ll change in version 1" in page.replace("'", "&#39;")
+    client.post(f"/p/{pid}/change/confirm", data={"csrf": csrf, "picked": "1", "pick": ["0"]})
     _drain(studio)
     p = studio.db.project(pid)
     assert p["version"] == 2 and p["stage"] == "done"
-    assert any("calm" in r["text"].lower() for r in studio.profile(friend).rules)
+    # only the two shots named moved: every other shot shows exactly the frames it showed
+    out = studio.s.users_dir / friend["id"] / "projects" / pid / "out"
+    v1, v2 = (json.loads((out / f"v{v}-16x9.edl.json").read_text())["segments"] for v in (1, 2))
+    assert [x["src_in"] for x in v2[2:]] == [x["src_in"] for x in v1[2:]] and v2[0]["src_in"] == v1[1]["src_in"]
+    row = studio.db.one("SELECT base, changes FROM renders WHERE project_id=? AND version=2 LIMIT 1", (pid,))
+    assert row["base"] == 1 and "trade places" in row["changes"]
+    # back to version 1, and a change picked on its shot strip (exact: no AI reads it)
+    assert client.post(f"/p/{pid}/continue", data={"csrf": csrf, "version": 1}, follow_redirects=False).status_code == 303
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "You&#39;re working on version 1" in page.replace("'", "&#39;") and "working on it" in page
+    n = len(strip["cards"])
+    client.post(f"/p/{pid}/shots", data={"csrf": csrf, "remove_2": "1", "never_2": "1"})
+    _drain(studio)
+    p = studio.db.project(pid)
+    assert p["version"] == 3 and p["base"] is None and len(studio.strip_of(p, 3)["cards"]) == n - 1
+    assert studio.db.one("SELECT base FROM renders WHERE project_id=? AND version=3 LIMIT 1", (pid,))["base"] == 1
+    assert json.loads(p["info"])["bans"]  # that scene never comes back in this film
     # security headers, and delete removes the files
     r = client.get(f"/p/{pid}")
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
@@ -1060,7 +1091,8 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     assert "Looks right" in page and "What I changed" in page  # whatever happened, they are told
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
     _drain(studio)
-    assert "How did it turn out?" in client.get(f"/p/{pid}").text
+    page = client.get(f"/p/{pid}").text
+    assert "How did version 1 turn out?" in page and "Change something" in page and "The shots of" not in page
     finals = studio.renders(studio.db.project(pid), "final")
     assert finals and finals[0]["seconds"] > 5
     work = studio.s.users_dir / friend["id"] / "projects" / pid

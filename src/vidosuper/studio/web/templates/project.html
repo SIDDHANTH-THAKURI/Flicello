@@ -8,13 +8,13 @@
 {% set busy = p.stage in BUSY %}
 {% if p.kind == 'montage' %}
   {% set steps = [('setup', 'Clips'), ('preparing', 'Watching'), ('understood', 'Under­stood'), ('choose', 'Story'), ('review', 'Sample'), ('done', 'Film')] %}
-  {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'pitching': 3, 'choose': 3, 'sampling': 4, 'review': 4, 'rendering': 5, 'revising': 5, 'done': 5} %}
+  {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'pitching': 3, 'choose': 3, 'sampling': 4, 'review': 4, 'rendering': 5, 'revising': 5, 'reading': 5, 'confirm': 5, 'done': 5} %}
 {% elif looks %}
   {% set steps = [('setup', 'Your ' ~ ('recording' if p.kind == 'voice' else 'video')), ('preparing', 'Listening'), ('understood', 'Under­stood'), ('choose', 'Look'), ('review', 'Sample'), ('done', 'Film')] %}
-  {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'pitching': 3, 'choose': 3, 'sampling': 4, 'review': 4, 'rendering': 5, 'revising': 5, 'done': 5} %}
+  {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'pitching': 3, 'choose': 3, 'sampling': 4, 'review': 4, 'rendering': 5, 'revising': 5, 'reading': 5, 'confirm': 5, 'done': 5} %}
 {% else %}
   {% set steps = [('setup', 'Your ' ~ ('recording' if p.kind == 'voice' else 'video')), ('preparing', 'Listening'), ('understood', 'Under­stood'), ('review', 'Sample'), ('done', 'Film')] %}
-  {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'sampling': 3, 'review': 3, 'rendering': 4, 'revising': 4, 'done': 4} %}
+  {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'sampling': 3, 'review': 3, 'rendering': 4, 'revising': 4, 'reading': 4, 'confirm': 4, 'done': 4} %}
 {% endif %}
 {% set here = at.get(p.stage, -1) %}
 
@@ -34,6 +34,8 @@
     </div>
   </div>
 </header>
+
+{% include "_editor.html" %}
 {% if p.stage == 'setup' and p.kind != 'talk' %}
 <details class="panel settings-edit rise d2" id="settings-edit">
   <summary>Change the shape{% if p.kind == 'montage' %} or the length{% endif %}</summary>
@@ -619,14 +621,16 @@
 </section>
 {% endif %}
 
-{# ------------------------------------------------------------------ done #}
-{% elif p.stage == 'done' %}
+{# ------------------------------------------------------------------ done: the version they work on, its numbered shots, changes #}
+{% elif p.stage in ('done', 'confirm') %}
+{% set wv = work.version if work else p.version %}
+{% set can_change = revisions_left is none or revisions_left > 0 %}
 <div class="screens rise d2">
   {% for r in latest %}
-  <figure class="device {{ 'tall' if r.shape == '9:16' else 'wide' }}">
+  <figure class="device {{ 'tall' if r.shape == '9:16' else 'wide' }}"{% if shot_times %} data-shots="{{ shot_times }}"{% endif %}>
     {% set still = r.file|replace('.mp4', '.jpg') %}
-    <div class="frame"><video src="/m/{{ p.id }}/out/{{ r.file }}" controls playsinline preload="metadata"{% if still in posters %} poster="/m/{{ p.id }}/out/{{ still }}"{% endif %}></video></div>
-    <figcaption>{{ r.shape }} · {{ r.seconds|mmss }} · <a class="btn" href="/m/{{ p.id }}/out/{{ r.file }}?dl=1">Download</a></figcaption>
+    <div class="frame"><video src="/m/{{ p.id }}/out/{{ r.file }}" controls playsinline preload="metadata"{% if still in posters %} poster="/m/{{ p.id }}/out/{{ still }}"{% endif %}></video>{% if shot_times %}<span class="shot-badge" hidden></span>{% endif %}</div>
+    <figcaption>Version {{ wv }} · {{ r.shape }} · {{ r.seconds|mmss }} · <a class="btn" href="/m/{{ p.id }}/out/{{ r.file }}?dl=1">Download</a></figcaption>
     {% if is_owner %}
     <details class="more"><summary>Checks</summary><ul class="beats">
       {% for f in r.findings|fromjson %}<li><b>{{ f.level|upper }}</b> {{ f.check }}: {{ f.detail }}</li>{% endfor %}
@@ -635,11 +639,119 @@
   </figure>
   {% endfor %}
 </div>
+{% if work and work.version != p.version %}<p class="help center rise d2">You're working on version {{ work.version }}. The newer versions are still in the list below: nothing is deleted.</p>{% endif %}
+{% if p.error and p.stage == 'done' %}<p class="film-note rise d2">{{ p.error }}</p>{% endif %}
+
+{% if p.stage == 'confirm' and pending %}
+<section class="panel gap-top rise d3 confirm-card" id="confirm">
+  <h2>Here's what I'll change in version {{ pending.base }}</h2>
+  <p class="lead-s">You said: &ldquo;{{ pending.text }}&rdquo;</p>
+  {% if pending.ops %}
+  <form method="post" action="/p/{{ p.id }}/change/confirm">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="picked" value="1">
+    <ul class="change-list">{% for line in pending.said %}<li><label class="tick"><input type="checkbox" name="pick" value="{{ loop.index0 }}" checked><span>{{ line }}</span></label></li>{% endfor %}</ul>
+    {% if pending.unclear %}<p class="ask-note">{{ pending.unclear }}</p>{% endif %}
+    <p class="help">Only these shots change: every other shot stays exactly as it is, frame for frame. Untick anything I got wrong.{% if revisions_left is not none %} Making it uses one of your changes ({{ revisions_left }} left).{% endif %}</p>
+    <button class="btn-sun wide" type="submit"><span>Make it</span></button>
+  </form>
+  {% else %}
+  <p class="ask-note">{{ pending.unclear or "I couldn't turn that into a change to the shots." }}</p>
+  {% endif %}
+  <details class="more gap-top"{% if not pending.ops %} open{% endif %}><summary>Not quite? Say it again</summary>
+    <form method="post" action="/p/{{ p.id }}/change">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="field"><span>What should change?</span><textarea name="text" rows="2" maxlength="1500" required>{{ pending.text }}</textarea></label>
+      <button class="btn" type="submit">Read it again</button>
+    </form>
+  </details>
+  <form method="post" action="/p/{{ p.id }}/change/cancel" class="gap-top">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn" type="submit">Cancel: keep version {{ pending.base }} as it is</button>
+  </form>
+</section>
+{% elif p.stage == 'confirm' %}
+<section class="panel gap-top rise d3" id="confirm">
+  <p class="ask-note">Your changes couldn't be shown. Nothing was changed.</p>
+  <form method="post" action="/p/{{ p.id }}/change/cancel"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn" type="submit">Back to the film</button></form>
+</section>
+{% endif %}
+{% if work and work.changes %}
+<section class="panel gap-top rise d3 changed-card">
+  <h2>What changed in version {{ work.version }}{% if work.base %} <small class="muted">(made from version {{ work.base }})</small>{% endif %}</h2>
+  <ul class="beats">{% for line in work.changes %}<li>{{ line }}</li>{% endfor %}</ul>
+  <p class="help">Every other shot is exactly as it was.</p>
+</section>
+{% endif %}
+
+{% if strip and strip.cards %}
+<section class="panel gap-top storyboard shot-strip rise d2" id="shots">
+  <h2>The shots of version {{ wv }}</h2>
+  <p class="lead-s">Numbered as they play; a stutter is one shot played in quick pieces. Tap a frame to watch from there. Changes made here are exact: nothing else moves.</p>
+  {% set editable = p.stage == 'done' and can_change %}
+  {% if editable %}<form method="post" action="/p/{{ p.id }}/shots" data-confirm="Make a new version with the changes you picked on the shots? Only those shots change." data-confirm-yes="Make it">
+    <input type="hidden" name="csrf" value="{{ csrf }}">{% endif %}
+    <ol class="sb-grid {{ 'tall' if latest and latest[0].shape == '9:16' else 'wide' }}">
+      {% for c in strip.cards %}
+      <li class="sb-card{% if c.drop %} on-drop{% endif %}" data-shot="{{ c.n }}">
+        <button class="sb-seek" type="button" data-seek="{{ c.start }}" aria-label="Watch from shot {{ c.n }}">{% if c.thumb %}<img src="/m/{{ p.id }}/stills/{{ c.thumb }}" alt="Shot {{ c.n }}" loading="lazy">{% else %}<span class="sb-nothumb">Shot {{ c.n }}</span>{% endif %}</button>
+        <div class="sb-meta"><b>{{ c.n }}</b><span>{{ c.start|mmss }}–{{ c.end|mmss }}</span><span>{{ '%g'|format(c.beats) }} beat{{ 's' if c.beats != 1 }}</span>{% if c.drop %}<i>the drop</i>{% endif %}{% if c.kind == 'stutter' %}<i>stutter ×{{ c.count }}</i>{% elif c.slow %}<i>slow-mo</i>{% endif %}</div>
+        {% if c.place or c.people in ('near', 'face') %}<div class="sb-tags">{% if c.place %}<span class="sb-place">{{ c.place }}</span>{% endif %}{% if c.people in ('near', 'face') %}<span class="sb-person">person in shot</span>{% endif %}</div>{% endif %}
+        <p class="sb-what">{{ c.what|noids }}</p>
+        {% if editable %}
+        <details class="sb-edit"><summary>Change</summary>
+          <label class="tick"><input type="checkbox" name="remove_{{ c.n }}" value="1"><span>Remove it</span></label>
+          <label class="tick"><input type="checkbox" name="never_{{ c.n }}" value="1"><span>Never show this scene again</span></label>
+          <div class="sb-row">
+            <label class="field"><span>Longer</span><select class="input" name="longer_{{ c.n }}"><option value="">–</option>{% for b in ['0.5', '1', '2', '4'] %}<option value="{{ b }}">+{{ b }} beat{{ 's' if b != '1' }}</option>{% endfor %}</select></label>
+            <label class="field"><span>Shorter</span><select class="input" name="shorter_{{ c.n }}"><option value="">–</option>{% for b in ['0.5', '1', '2', '4'] %}<option value="{{ b }}">−{{ b }} beat{{ 's' if b != '1' }}</option>{% endfor %}</select></label>
+          </div>
+          <label class="field"><span>Swap places with</span><select class="input" name="swap_{{ c.n }}"><option value="">–</option>{% for o in strip.cards if o.n != c.n %}<option value="{{ o.n }}">shot {{ o.n }}: {{ o.what|noids|truncate(34) }}</option>{% endfor %}</select></label>
+          <label class="field"><span>Move to where this is</span><select class="input" name="move_{{ c.n }}"><option value="">–</option>{% for o in strip.cards if o.n != c.n %}<option value="{{ o.n }}">shot {{ o.n }}: {{ o.what|noids|truncate(34) }}</option>{% endfor %}</select></label>
+          <label class="field"><span>Show instead</span><select class="input" name="replace_{{ c.n }}"><option value="">Keep it</option><option value="any">Something else (the AI picks)</option>{% for a in strip.alternatives %}<option value="{{ a.id }}">{{ a.what|noids|truncate(46) }}</option>{% endfor %}</select></label>
+          <label class="field"><span>Plays</span><select class="input" name="speed_{{ c.n }}"><option value="">as it is</option><option value="hold">in slow motion</option><option value="cut">at normal speed</option><option value="hit">as an impact (flash)</option><option value="ramp">as a speed ramp</option><option value="stutter">as a stutter</option></select></label>
+        </details>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  {% if editable %}
+    <div class="shot-submit" data-shot-submit>
+      <button class="btn-sun wide gap-top" type="submit"><span data-shot-count>Make it with these shot changes</span></button>
+      <p class="help">Exact: only the shots you changed change. It takes a few minutes{% if revisions_left is not none %} and uses one of your changes ({{ revisions_left }} left){% endif %}.</p>
+    </div>
+  </form>
+  {% endif %}
+  {% if strip.alternatives %}
+  <details class="more gap-top"><summary>Moments this version doesn't show ({{ strip.alternatives|length }})</summary>
+    <ul class="sb-alts {{ 'tall' if latest and latest[0].shape == '9:16' else 'wide' }}">{% for a in strip.alternatives %}<li>{% if a.thumb %}<img src="/m/{{ p.id }}/stills/{{ a.thumb }}" alt="" loading="lazy">{% endif %}<span>{{ a.what|noids }}</span></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+</section>
+{% elif work and job and job.kind == 'strip' %}
+<p class="help center gap-top" data-reload-when-done>Numbering the shots of version {{ wv }}: a few seconds.</p>
+{% endif %}
+
+
+{% if p.stage == 'done' %}
+<section class="panel gap-top rise d3" id="change">
+  <h2>Change something</h2>
+  <p class="lead-s">Say it in your words, with the shot numbers above if you like: &ldquo;swap 9 and 10&rdquo;, &ldquo;hold the drop until the next big beat&rdquo;, &ldquo;the Opera House comes twice&rdquo;. You'll see exactly what will change before anything is made, and every other shot stays as it is.</p>
+  {% if can_change %}
+  <form method="post" action="/p/{{ p.id }}/change">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="field"><span>What should change?</span><textarea name="text" rows="2" maxlength="1500" required placeholder="Swap 9 and 10 / make 8 one beat longer / replace 12, it's a repeat"></textarea></label>
+    <button class="btn-sun wide" type="submit"><span>Read my changes</span></button>
+    <p class="help">Reading takes a few seconds and changes nothing yet.{% if revisions_left is not none %} Making the new version uses one of your changes ({{ revisions_left }} left).{% endif %}</p>
+  </form>
+  {% else %}<p class="help">That was the last round of changes for this film.</p>
+  {% endif %}
+</section>
 {% if not rated %}
 <section class="panel gap-top rise d3">
-  <h2>How did it turn out?</h2>
+  <h2>How did version {{ wv }} turn out?</h2>
   <p class="lead-s">Your answer teaches Flicello your taste: your next film starts from it.</p>
-  <form method="post" action="/p/{{ p.id }}/rate" data-confirm-if="fix" data-confirm="Make a new version with your changes? It makes the film again (several minutes) and uses one of this film's free changes{% if revisions_left is not none %} ({{ revisions_left }} left){% endif %}. Later, extra versions will use credits." data-confirm-yes="Make a new version">
+  <form method="post" action="/p/{{ p.id }}/rate">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <fieldset class="group"><legend>Did it do what you asked?</legend>
       <div class="scale">{% for n in range(1, 6) %}<label class="choice"><input type="radio" name="match" value="{{ n }}" required><span>{{ n }}</span></label>{% endfor %}</div>
@@ -652,30 +764,27 @@
       <div class="choices">{% for t in TAGS %}<label class="choice"><input type="checkbox" name="tags" value="{{ t }}"><span>{{ t }}</span></label>{% endfor %}</div>
     </fieldset>
     <label class="field"><span>In your words <small class="muted">(optional)</small></span><textarea name="text" rows="2" maxlength="1000"></textarea></label>
-    <label class="field"><span>What should change? <small class="muted">(optional: we'll make a new version, which takes time and uses one of your changes{% if revisions_left is not none %}; {{ revisions_left }} left{% endif %})</small></span>
-      <textarea name="fix" rows="2" maxlength="1000" placeholder="Leave it empty if it's done"></textarea></label>
     <button class="btn-sun wide" type="submit"><span>Send</span></button>
   </form>
 </section>
 {% else %}
-<section class="panel gap-top rise d3">
-  <h2>Thanks for rating it {{ rated.liked }}/10</h2>
-  <p class="lead-s">Your style profile has learned from it.</p>
-  {% if revisions_left is none or revisions_left > 0 %}
-  <form method="post" action="/p/{{ p.id }}/rate" data-confirm="Make a new version with your changes? It makes the film again (several minutes) and uses one of this film's free changes{% if revisions_left is not none %} ({{ revisions_left }} left){% endif %}. Later, extra versions will use credits." data-confirm-yes="Make a new version">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <input type="hidden" name="match" value="{{ rated.match }}"><input type="hidden" name="liked" value="{{ rated.liked }}">
-    <label class="field"><span>Want changes?</span><textarea name="fix" rows="2" maxlength="1000" required placeholder="What should change"></textarea></label>
-    <button class="btn" type="submit">Make a new version</button>
-    <p class="help">A new version makes the film again: it takes several minutes and uses one of your changes{% if revisions_left is not none %} ({{ revisions_left }} left){% endif %}.</p>
-  </form>
-  {% else %}<p class="help">That was the last round of changes for this film.</p>
-  {% endif %}
-</section>
+<p class="help center gap-top rise d3">You rated version {{ wv }} {{ rated.liked }}/10. Thanks: your style profile has learned from it.</p>
 {% endif %}
-{% if older %}
-<section class="panel gap-top"><h2>Earlier versions</h2><div class="rows">
-  {% for r in older %}<div><span class="k">Version {{ r.version }} · {{ r.shape }}</span><a class="btn" href="/m/{{ p.id }}/out/{{ r.file }}">Watch</a></div>{% endfor %}
+{% endif %}
+
+{% if versions_all|length > 1 %}
+<section class="panel gap-top" id="versions"><h2>All versions</h2><div class="rows versions-list">
+  {% for v in versions_all %}
+  <div class="{{ 'is-work' if work and v.version == work.version else '' }}">
+    <span class="k">Version {{ v.version }}{% if v.liked %} · you liked it {{ v.liked }}/10{% endif %}{% if v.base %} · made from {{ v.base }}{% endif %}</span>
+    <span class="v-acts">
+      {% for f in v.files %}<a class="btn" href="/m/{{ p.id }}/out/{{ f.file }}">Watch{% if v.files|length > 1 %} {{ f.shape }}{% endif %}</a>{% endfor %}
+      {% if work and v.version == work.version %}<span class="v-tag">working on it</span>
+      {% elif p.stage == 'done' %}<form method="post" action="/p/{{ p.id }}/continue" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ v.version }}"><button class="btn" type="submit">Work on this one</button></form>{% endif %}
+    </span>
+    {% if v.changes %}<details class="more"><summary>What changed</summary><ul class="beats">{% for line in v.changes %}<li>{{ line }}</li>{% endfor %}</ul></details>{% endif %}
+  </div>
+  {% endfor %}
 </div></section>
 {% endif %}
 
