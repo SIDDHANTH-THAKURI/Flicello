@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-MODEL = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VidoSuper" / "models" / "u2net_human_seg.onnx"
+MODEL = Path(os.environ.get("VIDO_MODELS_DIR") or Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VidoSuper" / "models")     / "u2net_human_seg.onnx"
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
 
