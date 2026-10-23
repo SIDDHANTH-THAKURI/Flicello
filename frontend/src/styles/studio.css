@@ -605,3 +605,14 @@ a.allowance:hover, a.allowance:focus-visible { border-color: var(--paper-2); }
 .tl-menu { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .5rem; border-radius: 10px; background: var(--glass-hi);
   border: 1px solid var(--line); }
 @media (max-width: 640px) { .tl-track { height: 52px; } }
+
+/* the header's way to Cello: a small living orb */
+.cello-wake { display: inline-flex; align-items: center; gap: .4rem; text-decoration: none; }
+.cello-wake i { width: 18px; height: 18px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff, #ffb27a 35%, #b8337a 75%, #3a0f3a);
+  box-shadow: 0 0 10px rgba(255, 150, 100, .7); animation: cello-breathe 3.2s ease-in-out infinite; }
+@keyframes cello-breathe { 50% { transform: scale(1.12); box-shadow: 0 0 16px rgba(255, 150, 100, .95); } }
+@media (prefers-reduced-motion: reduce) { .cello-wake i { animation: none; } }
+
+/* inside Cello's shell the chat box goes: Cello is the conversation (its brief and people stay) */
+body.in-cello .editor .thread, body.in-cello .editor .composer, body.in-cello .editor .hands-free,
+body.in-cello .editor .editor-head, body.in-cello .editor .editor-older { display: none; }

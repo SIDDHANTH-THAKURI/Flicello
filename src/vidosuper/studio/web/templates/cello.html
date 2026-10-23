@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf" content="{{ csrf }}">
+  <meta name="robots" content="noindex">
+  <title>Cello · {{ app_name }}</title>
+  {{ vite("cello") }}
+</head>
+<body class="cello-shell">
+  <iframe id="cello-app" src="{{ to }}" title="{{ app_name }}" allow="autoplay; fullscreen"></iframe>
+  <div id="cello" data-state="sleep" aria-live="polite">
+    <canvas id="cello-beam" aria-hidden="true"></canvas>
+    <div class="cello-body" role="button" tabindex="0" aria-label="Cello: tap to wake, tap again to sleep">
+      <canvas id="cello-orb"></canvas>
+    </div>
+    <div class="cello-caption" aria-hidden="true"><span class="you"></span><span class="me"></span></div>
+    <div class="cello-pill" hidden></div>
+    <form class="cello-type" hidden><input name="t" autocomplete="off" placeholder="Type to Cello, then Enter" aria-label="Type to Cello"></form>
+    <div class="cello-menu" hidden>
+      <button type="button" data-cello="type">Type instead</button>
+      <button type="button" data-cello="mute">Mute my mic</button>
+      <button type="button" data-cello="off">Turn Cello off</button>
+    </div>
+  </div>
+</body>
+</html>

@@ -104,8 +104,8 @@ def vite_tags(name: str) -> Markup:
 
 MOMENT_ID = re.compile(r"\(?\b[cC]\d{2,3}#\d+\b\)?:?\s*")  # catalog ids like c04#1 mean nothing to people
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; "
-       "style-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
-       "form-action 'self'; object-src 'none'")
+       "style-src 'self'; font-src 'self'; connect-src 'self' wss://generativelanguage.googleapis.com; "
+       "frame-ancestors 'self'; base-uri 'none'; form-action 'self'; object-src 'none'")  # framed only by Cello's shell
 
 
 class Redirect(Exception):
@@ -157,7 +157,7 @@ def create_app(studio: Studio) -> FastAPI:
             response.set_cookie(COOKIE, renewed, max_age=s.session_days * 86400, httponly=True, samesite="lax",
                                 secure=s.https, path="/")
         response.headers["Content-Security-Policy"] = CSP
-        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"  # Cello's shell holds the app in a frame of our own
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"  # no referrer to other sites; our own forms keep their Origin
         response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"  # talking to Cello
@@ -877,6 +877,58 @@ def create_app(studio: Studio) -> FastAPI:
     @app.post("/p/{pid}/notes/{note_id}/done")
     def review_done(request: Request, pid: str, note_id: int, csrf: str = Form("")):
         return act(request, csrf, pid, lambda u, p: studio.settle_note(p, note_id))
+
+    # ------------------------------------------------------------------ Cello: the presence that edits with you
+    @app.get("/cello", response_class=HTMLResponse)
+    def cello_shell(request: Request, to: str = "/"):
+        """The app held in a frame, with Cello over it: its voice and its orb live here, so they stay through every page."""
+        user, sess = need_user(request)
+        if not to.startswith("/") or to.startswith("//") or to.startswith("/cello"):
+            to = "/"
+        return page(request, "cello.html", user, sess, to=to)
+
+    def cello_film(user: dict, pid: str | None):
+        return studio.owned(user, pid) if pid else None
+
+    @app.post("/api/cello/token")
+    def cello_token(request: Request):
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        from ..cello import token
+
+        try:
+            return JSONResponse(token())
+        except Exception as exc:  # noqa: BLE001 - said to the page plainly
+            return JSONResponse({"detail": f"Cello can't speak right now: {' '.join(str(exc).split())[:160]}"}, status_code=503)
+
+    @app.post("/api/cello/act")
+    async def cello_act(request: Request):
+        """One of Cello's tools, run with the same checks as the page's buttons; its result is plain words for Cello."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        from ..cello import act
+
+        try:
+            project = cello_film(user, body.get("pid"))
+            out = await run_in_threadpool(act, studio, user, project, str(body.get("name", "")), body.get("args") or {})
+        except HTTPException:
+            return JSONResponse({"result": "That film isn't theirs or doesn't exist."})
+        except (ActionError, ValueError, KeyError) as exc:
+            return JSONResponse({"result": f"Not done: {exc}"})
+        except Exception as exc:  # noqa: BLE001 - Cello hears it and can diagnose
+            __import__("logging").getLogger("vidosuper.studio").warning("cello tool %s failed", body.get("name"), exc_info=True)
+            return JSONResponse({"result": f"Not done, something broke: {type(exc).__name__}: {str(exc)[:200]}. "
+                                           "Try diagnose, or tell them plainly."})
+        return JSONResponse(out)
+
+    @app.get("/api/cello/events")
+    def cello_events(request: Request, pid: str = "", since: float = 0.0):
+        user, _ = need_user(request, api=True)
+        from ..cello import events, now
+
+        project = cello_film(user, pid) if pid else None
+        return JSONResponse({"now": now(), "events": events(studio, project, since) if project else []})
 
     @app.get("/api/p/{pid}/timeline")
     def timeline_api(request: Request, pid: str, which: str = "draft"):

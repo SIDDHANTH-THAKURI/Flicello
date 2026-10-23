@@ -552,3 +552,13 @@ export function studio() {
     video.play().catch(() => {});
   }));
 }());
+
+// Cello: the header's orb opens the shell around the page they're on (inside the shell it isn't needed)
+(function celloWake() {
+  const link = document.querySelector('[data-cello-wake]');
+  if (!link) return;
+  let framed = false;
+  try { framed = window.top !== window && window.top.location.pathname === '/cello'; } catch { framed = false; }
+  if (framed) { link.hidden = true; document.body.classList.add('in-cello'); return; }
+  link.href = `/cello?to=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+}());
