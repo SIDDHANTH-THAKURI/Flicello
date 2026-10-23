@@ -888,7 +888,10 @@ def create_app(studio: Studio) -> FastAPI:
         return page(request, "cello.html", user, sess, to=to)
 
     def cello_film(user: dict, pid: str | None):
-        return studio.owned(user, pid) if pid else None
+        try:
+            return studio.owned(user, pid) if pid else None
+        except ActionError:
+            raise HTTPException(404, "That film isn't theirs or doesn't exist.") from None
 
     @app.post("/api/cello/token")
     def cello_token(request: Request):

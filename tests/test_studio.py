@@ -337,7 +337,7 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     assert json.loads(p["info"])["bans"]  # that scene never comes back in this film
     # security headers, and delete removes the files
     r = client.get(f"/p/{pid}")
-    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert "frame-ancestors 'self'" in r.headers["content-security-policy"]  # only Cello's own shell frames the app
     work = studio.s.users_dir / friend["id"] / "projects" / pid
     assert work.exists()
     client.post(f"/p/{pid}/delete", data={"csrf": csrf, "sure": "yes"})
@@ -465,7 +465,7 @@ def test_private_pages_are_kept_out_of_search_and_every_page_carries_security_he
     assert r.status_code == 200 and "Disallow: /admin\n" in r.text and "Disallow: /p/\n" in r.text
     r = client.get("/login?legacy=1")  # the owner's password fallback: never in search
     assert "noindex" in r.headers["x-robots-tag"] and "noindex" in r.text and "Flicello" in r.text
-    assert r.headers["x-frame-options"] == "DENY" and "default-src 'self'" in r.headers["content-security-policy"]
+    assert r.headers["x-frame-options"] == "SAMEORIGIN" and "default-src 'self'" in r.headers["content-security-policy"]
     assert client.get("/static/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
     assert client.get("/static/icon-192.png").status_code == 200
 

@@ -561,4 +561,7 @@ export function studio() {
   try { framed = window.top !== window && window.top.location.pathname === '/cello'; } catch { framed = false; }
   if (framed) { link.hidden = true; document.body.classList.add('in-cello'); return; }
   link.href = `/cello?to=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+  if (localStorage.getItem('cello-on') === '1' && !window.location.pathname.startsWith('/r/')) {
+    window.location.replace(link.href); // Cello was on: it stays with them
+  }
 }());

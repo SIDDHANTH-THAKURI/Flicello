@@ -28,8 +28,8 @@ const TOOL_PART = { edit: 'draft', style: 'styles', fix_score: 'ready', export: 
 
 const S = {
   on: false, ws: null, open: false, ever: false, woke: 0, awaiting: false, acting: 0, muted: false, mic: 0,
-  out: 0, handle: sessionStorage.getItem('cello-handle') || '', queue: [], lastSound: 0, since: Date.now() / 1000,
-  greeted: false, retry: 0, aec: true, target: null, targetUntil: 0,
+  out: 0, handle: sessionStorage.getItem('cello-handle') || '', queue: [], lastSound: 0, since: null, cut: false, inReply: 0, heard: 0,
+  greeted: false, retry: 0, aec: true, target: null, targetUntil: 0, pending: [], asked: 0, warned: false,
 };
 
 // ---------------------------------------------------------------- the frame: which film, which page
@@ -50,8 +50,19 @@ frame.addEventListener('load', () => {
     const fr = frame.getBoundingClientRect();
     gazeAt(e.clientX + fr.left, e.clientY + fr.top, r);
   });
-  if (S.open) context(`(Note, not them talking: the screen now shows "${d.title}" at ${frame.contentWindow.location.pathname}. Say nothing about it unless it helps.)`);
+  document.title = d.title || 'Flicello';
+  d.addEventListener('keydown', (e) => { if (e.key === 'Escape') stop(); });
+  d.addEventListener('pointerdown', () => { menu.hidden = true; unlock(); });
+  d.addEventListener('click', (e) => { // other sites can't be held in the frame: they open in a tab
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (a && a.origin !== window.location.origin) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+  }, true);
+  S.target = null;
 });
+
+function screen() {
+  try { return { page: frame.contentWindow.location.pathname, title: doc().title }; } catch { return {}; }
+}
 
 function gazeAt(x, y, r = body.getBoundingClientRect()) {
   const cx = r.left + r.width / 2;
@@ -65,7 +76,6 @@ let outGain = null;
 let outAn = null;
 let micAn = null;
 let nextAt = 0;
-let epoch = 0;
 const playing = new Set();
 
 function audio() {
@@ -80,6 +90,7 @@ function audio() {
 }
 
 function play(b64) {
+  if (S.cut) return; // they stopped this answer: the rest of it is dropped
   const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const pcm = new Int16Array(bytes.buffer, 0, bytes.length >> 1);
   const buf = ctx.createBuffer(1, pcm.length, 24000);
@@ -97,10 +108,18 @@ function play(b64) {
 }
 
 function hush() { // they spoke over it: everything queued goes, at once
-  epoch += 1;
   for (const s of playing) { try { s.stop(); } catch { /* done */ } }
   playing.clear();
   nextAt = 0;
+}
+
+function stop() { // Esc, or a tap while it talks: this answer ends here
+  if (playing.size || S.awaiting) S.cut = true;
+  hush();
+  S.awaiting = false;
+  S.asked = 0;
+  menu.hidden = true;
+  typer.hidden = true;
 }
 
 // ---------------------------------------------------------------- ears: the mic at 16 kHz, 40 ms at a time
@@ -134,9 +153,14 @@ async function ears() {
 
 // ---------------------------------------------------------------- the line to Gemini
 function send(msg) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(msg)); }
-function say(text) { send({ realtimeInput: { text } }); S.awaiting = true; }
-function context(text) { send({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: false } }); }
+function say(text) {
+  if (!S.open) { S.pending.push(text); return; }
+  send({ realtimeInput: { text } });
+  S.awaiting = true;
+  S.asked = performance.now();
+}
 function hidden(text) { S.queue.push(text); }
+function unlock() { if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {}); }
 
 async function connect() {
   let tok;
@@ -151,6 +175,7 @@ async function connect() {
   }
   const ws = new WebSocket(`${WS}?access_token=${encodeURIComponent(tok.token)}`);
   S.ws = ws;
+  ws.resumed = !!S.handle;
   ws.onopen = () => {
     ws.send(JSON.stringify({ setup: S.handle ? { sessionResumption: { handle: S.handle } } : {} }));
   };
@@ -159,17 +184,24 @@ async function connect() {
     onMessage(msg);
   };
   ws.onclose = () => {
+    if (S.ws !== ws) return; // an old line closing after a new one opened
+    if (ws.resumed && !ws.ready) { S.handle = ''; sessionStorage.removeItem('cello-handle'); } // that handle has expired
     S.open = false;
     S.ws = null;
+    if (S.on && !S.warned) { S.warned = true; show('Reconnecting\u2026'); }
     if (S.on) setTimeout(() => { if (S.on && !S.ws) connect(); }, Math.min(8000, 800 * 2 ** S.retry++));
   };
 }
 
 function onMessage(m) {
   if (m.setupComplete) {
+    if (S.ws) S.ws.ready = true;
     S.open = true;
     S.ever = true;
     S.retry = 0;
+    S.warned = false;
+    if (S.pending.length) S.greeted = true; // they spoke first: answering them is the greeting
+    while (S.pending.length) say(S.pending.shift());
     if (!S.greeted) {
       S.greeted = true;
       hidden(film() ? '(Note, not them talking: they just woke you while a film is open. Call look, then greet them in a few words and say one useful thing about where the film is.)'
@@ -180,27 +212,47 @@ function onMessage(m) {
     S.handle = m.sessionResumptionUpdate.newHandle;
     sessionStorage.setItem('cello-handle', S.handle);
   }
-  if (m.goAway) { try { S.ws.close(); } catch { /* reconnects */ } }
+  if (m.goAway) { // the line is about to end: a new one opens now and carries on where this one was
+    const old = S.ws;
+    S.ws = null;
+    S.open = false;
+    connect();
+    setTimeout(() => { try { old.close(); } catch { /* gone */ } }, 1500);
+  }
   if (m.toolCall) tools(m.toolCall.functionCalls || []);
   const sc = m.serverContent;
   if (!sc) return;
-  if (sc.interrupted) hush();
-  for (const p of sc.modelTurn?.parts || []) if (p.inlineData?.data) { S.awaiting = false; play(p.inlineData.data); }
-  if (sc.inputTranscription?.text) { line('you', sc.inputTranscription.text); S.awaiting = true; }
+  if (sc.interrupted) { hush(); S.cut = false; }
+  for (const p of sc.modelTurn?.parts || []) {
+    if (p.inlineData?.data) { S.awaiting = false; S.inReply = performance.now(); play(p.inlineData.data); }
+  }
+  if (sc.inputTranscription?.text) {
+    S.cut = false;
+    if (!said.you) said.me = ''; // a new thing from them: its last answer steps aside
+    line('you', sc.inputTranscription.text);
+    S.awaiting = true;
+    S.asked = performance.now();
+  }
   if (sc.outputTranscription?.text) line('me', sc.outputTranscription.text);
-  if (sc.turnComplete) S.awaiting = false;
+  if (sc.turnComplete) { S.awaiting = false; S.asked = 0; S.cut = false; S.inReply = 0; }
 }
 
 // what was just said, briefly, beside the orb (never a chat log)
 const said = { you: '', me: '', t: 0 };
 function line(who, text) {
   if (performance.now() - said.t > 2500) { said.you = ''; said.me = ''; }
-  said[who] = `${said[who]}${text}`.slice(-180);
-  if (who === 'me') said.you = said.you.slice(-60);
+  said[who] = tail(`${said[who]}${text}`, who === 'me' ? 170 : 110);
+  if (who === 'me') said.you = tail(said.you, 60);
   said.t = performance.now();
   $('.you', caption).textContent = said.you;
   $('.me', caption).textContent = said.me;
   caption.classList.add('on');
+}
+function tail(text, n) { // the end of what was said, starting on a whole word
+  if (text.length <= n) return text;
+  const cut = text.slice(-n);
+  const sp = cut.indexOf(' ');
+  return `\u2026${sp > 0 && sp < 24 ? cut.slice(sp + 1) : cut}`;
 }
 function show(text) {
   pill.textContent = text;
@@ -230,6 +282,7 @@ async function tools(calls) {
   }
   send({ toolResponse: { functionResponses: answers } });
   S.awaiting = true;
+  S.asked = performance.now();
 }
 
 async function run(name, args) {
@@ -242,7 +295,12 @@ async function run(name, args) {
     method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf },
     body: JSON.stringify({ name, args, pid: film() }),
   });
-  const out = await r.json();
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    return { result: r.status === 401 ? 'Not done: they are signed out. Ask them to sign in again.'
+      : `Not done: ${out.detail || out.result || `the server said ${r.status}`}` };
+  }
+  if (name === 'look' && out.result && typeof out.result === 'object') out.result = { ...out.result, ...screen() };
   const ui = out.ui || {};
   if (ui.go) frame.src = ui.go;
   else if (ui.reload || ui.wait) frame.contentWindow.location.reload();
@@ -251,9 +309,14 @@ async function run(name, args) {
 }
 
 async function openThing(what) {
-  const places = { home: '/', films: '/', new: '/new', style: '/style', 'my style': '/style', account: '/account' };
+  const places = {
+    home: ['/', 'their films'], films: ['/', 'their films'], new: ['/new', 'the page to start a new film'],
+    style: ['/style', 'their style page: their brand kit (logo, colours, fonts) and how they like films cut'],
+    'my style': ['/style', 'their style page: their brand kit (logo, colours, fonts) and how they like films cut'],
+    account: ['/account', 'their account settings'],
+  };
   const key = what.toLowerCase().trim();
-  if (places[key]) { frame.src = places[key]; return { result: `Opened ${key}.` }; }
+  if (places[key]) { frame.src = places[key][0]; return { result: `Opened ${places[key][1]}.` }; }
   const r = await fetch('/api/cello/act', { method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf }, body: JSON.stringify({ name: 'list_films', args: {} }) });
   const films = (await r.json()).result || [];
@@ -292,20 +355,32 @@ function point(part, ms = 3000) {
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   S.target = el;
   S.targetUntil = performance.now() + ms + 600;
-  const old = el.style.boxShadow;
+  if (!glows.has(el)) glows.set(el, { shadow: el.style.boxShadow, transition: el.style.transition });
+  clearTimeout(glows.get(el).t);
   el.style.transition = 'box-shadow .4s ease';
   el.style.boxShadow = '0 0 0 3px rgba(255, 190, 110, .95), 0 0 40px 6px rgba(255, 160, 80, .45)';
-  setTimeout(() => { el.style.boxShadow = old; }, ms);
+  glows.get(el).t = setTimeout(() => {
+    const g = glows.get(el);
+    el.style.boxShadow = g.shadow;
+    setTimeout(() => { el.style.transition = g.transition; }, 450);
+    glows.delete(el);
+  }, ms);
   return true;
 }
+const glows = new Map();
 
 function drawBeam(now) {
   const g = beam.getContext('2d');
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  if (beam.width !== innerWidth * dpr) { beam.width = innerWidth * dpr; beam.height = innerHeight * dpr; }
+  const w = Math.round(innerWidth * dpr);
+  const h = Math.round(innerHeight * dpr);
+  if (beam.width !== w || beam.height !== h) { beam.width = w; beam.height = h; S.drawn = true; }
+  const on = S.target && now <= S.targetUntil && S.target.isConnected;
+  if (!on && !S.drawn) return; // nothing drawn, nothing to clear
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, innerWidth, innerHeight);
-  if (!S.target || now > S.targetUntil || !S.target.isConnected) return;
+  S.drawn = !!on;
+  if (!on) return;
   const t = S.target.getBoundingClientRect();
   const f = frame.getBoundingClientRect();
   const b = body.getBoundingClientRect();
@@ -347,10 +422,10 @@ async function watch() {
   const pid = film();
   if (S.on && S.open && pid) {
     try {
-      const r = await fetch(`/api/cello/events?pid=${pid}&since=${S.since}`, { credentials: 'same-origin' });
+      const r = await fetch(`/api/cello/events?pid=${pid}&since=${S.since ?? 1e12}`, { credentials: 'same-origin' });
       const j = await r.json();
       S.since = j.now;
-      if (j.events.length) {
+      if (r.ok && j.events.length) {
         orb.notice();
         if (S.watch) frame.contentWindow.location.reload();
         S.watch = false;
@@ -363,24 +438,53 @@ async function watch() {
 
 // a note is only spoken into a quiet room: not over them, not over itself
 function flush(now) {
-  if (!S.queue.length || !S.open || playing.size || S.awaiting || S.acting) return;
-  if (S.mic > 0.03 || now - S.lastSound < 1500) return;
+  if (!S.queue.length || !S.open || playing.size || S.awaiting || S.acting || ctx?.state !== 'running') return;
+  if (!S.queuedAt) S.queuedAt = now;
+  if ((S.mic > 0.03 || now - S.lastSound < 1500) && now - S.queuedAt < 20000) return;
+  S.queuedAt = 0;
   say(S.queue.shift());
 }
 
 // ---------------------------------------------------------------- waking, sleeping, moving
+function chime(up = true) {
+  if (!ctx) return;
+  const t = ctx.currentTime + 0.02;
+  [[0, up ? 523.25 : 783.99], [0.09, up ? 783.99 : 523.25]].forEach(([d, f]) => {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.value = f;
+    g.gain.setValueAtTime(0, t + d);
+    g.gain.linearRampToValueAtTime(0.06, t + d + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.5);
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start(t + d);
+    o.stop(t + d + 0.55);
+  });
+}
+
 async function wake() {
   if (S.on) return;
   S.on = true;
   S.woke = performance.now();
   localStorage.setItem('cello-on', '1');
   audio();
-  await ctx.resume();
-  try { await ears(); } catch { show('Cello can hear you once the microphone is allowed; you can type meanwhile.'); typer.hidden = false; }
+  await Promise.race([ctx.resume(), new Promise((r) => { setTimeout(r, 300); })]);
+  if (ctx.state === 'running') chime(true);
+  else show('Cello is back. Tap anywhere so it can speak.');
+  try {
+    await ears();
+  } catch {
+    show('Allow the microphone to talk to Cello. Meanwhile you can type to it.');
+    typer.hidden = false;
+    typer.t.focus();
+  }
   connect();
 }
 
 function sleep() {
+  chime(false);
   S.on = false;
   hush();
   try { S.ws?.close(); } catch { /* gone */ }
@@ -404,19 +508,24 @@ body.addEventListener('pointermove', (e) => {
   if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 6) drag.moved = true;
   if (drag.moved) place(e.clientX / innerWidth, e.clientY / innerHeight);
 });
+function tap() {
+  if (!S.on) wake();
+  else if (playing.size) stop();
+  else menu.hidden = !menu.hidden;
+}
 body.addEventListener('pointerup', () => {
-  if (drag && !drag.moved) {
-    if (!S.on) wake();
-    else menu.hidden = !menu.hidden;
-  }
+  if (drag && !drag.moved) tap();
   drag = null;
 });
-body.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!S.on) wake(); else menu.hidden = !menu.hidden; } });
+body.addEventListener('pointercancel', () => { drag = null; });
+body.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tap(); } });
 function place(fx, fy) {
   fx = Math.max(0.04, Math.min(0.96, fx));
   fy = Math.max(0.06, Math.min(0.94, fy));
   root.style.setProperty('--x', `${fx * 100}vw`);
   root.style.setProperty('--y', `${fy * 100}vh`);
+  root.classList.toggle('flip', fx < 0.5); // words go on the roomier side
+  root.classList.toggle('high', fy < 0.22);
   localStorage.setItem('cello-pos', JSON.stringify([fx, fy]));
 }
 try { const p = JSON.parse(localStorage.getItem('cello-pos')); if (p) place(p[0], p[1]); } catch { /* default */ }
@@ -425,7 +534,12 @@ menu.addEventListener('click', (e) => {
   const what = e.target.dataset.cello;
   menu.hidden = true;
   if (what === 'type') { typer.hidden = false; typer.t.focus(); }
-  if (what === 'mute') { S.muted = !S.muted; e.target.textContent = S.muted ? 'Unmute my mic' : 'Mute my mic'; }
+  if (what === 'mute') {
+    S.muted = !S.muted;
+    e.target.textContent = S.muted ? 'Unmute my mic' : 'Mute my mic';
+    root.classList.toggle('muted', S.muted);
+    show(S.muted ? 'Mic off: Cello isn\u2019t listening' : 'Listening again');
+  }
   if (what === 'off') turnOff();
 });
 typer.addEventListener('submit', (e) => {
@@ -433,11 +547,13 @@ typer.addEventListener('submit', (e) => {
   const t = typer.t.value.trim();
   if (!t) return;
   typer.t.value = '';
+  typer.hidden = true; // said; Cello answers out loud
   line('you', t);
-  if (!S.on) wake().then(() => setTimeout(() => say(t), 1500));
-  else say(t);
+  if (!S.on) wake();
+  say(t);
 });
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hush(); menu.hidden = true; } });
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') stop(); });
+typer.t.addEventListener('blur', () => { if (!typer.t.value.trim()) setTimeout(() => { typer.hidden = true; }, 150); });
 
 // ---------------------------------------------------------------- every frame: the phase from the facts
 const bins = new Uint8Array(128);
@@ -458,23 +574,30 @@ let last = performance.now();
 function tick(now) {
   const dt = (now - last) / 1000;
   last = now;
-  const speaking = playing.size > 0;
-  if (outAn) { const b = bands(outAn); S.out = b.reduce((a, x) => a + x, 0) / 8; }
+  const speaking = playing.size > 0 || (S.inReply && !S.cut && now - S.lastSound < 450);
+  const outBands = bands(outAn);
+  S.out = outBands.reduce((a, x) => a + x, 0) / 8;
   let phase = 'idle';
   if (!S.on) phase = 'sleep';
-  else if (!S.open && (S.ever || now - S.woke > 3500)) phase = 'offline';
+  else if (!S.open && (S.ever || now - S.woke > 9000)) phase = 'offline'; // a first connect gets a fair chance
   else if (S.acting) phase = 'acting';
   else if (speaking) phase = 'speaking';
   else if (S.awaiting) phase = 'thinking';
-  else if (S.mic > 0.025 && !S.muted) phase = 'hearing';
+  else if (!S.muted && (S.mic > 0.025 || now - S.heard < 450)) phase = 'hearing';
+  if (S.mic > 0.025) S.heard = now;
   orb.phase = phase;
   root.dataset.state = phase;
-  if (speaking) { orb.bands = bands(outAn); orb.level = Math.min(1, S.out * 2.4); } else if (phase === 'hearing') {
+  if (speaking) { orb.bands = outBands; orb.level = Math.min(1, S.out * 2.4); } else if (phase === 'hearing') {
     orb.bands = bands(micAn).map((x) => x * 0.7);
     orb.level = Math.min(1, S.mic * 9);
     if (now > S.targetUntil) orb.look(0, -0.35); // it looks at you while you talk
   } else { orb.bands = new Float32Array(8); orb.level = 0; }
-  if (performance.now() - said.t > 3200) caption.classList.remove('on');
+  if (!speaking && now - said.t > 3200) caption.classList.remove('on');
+  if (S.awaiting && !S.acting && !speaking && S.asked && now - S.asked > 25000) {
+    S.awaiting = false;
+    S.asked = 0;
+    show('I lost that one. Say it again?');
+  }
   flush(now);
   drawBeam(now);
   orb.resize();
@@ -483,4 +606,9 @@ function tick(now) {
 }
 requestAnimationFrame(tick);
 watch();
-if (localStorage.getItem('cello-on') === '1') root.classList.add('ready'); // tap to bring it back (browsers need the tap)
+if (localStorage.getItem('cello-on') === '1') { // it was on: it comes back by itself if it may listen without asking
+  root.classList.add('ready');
+  navigator.permissions?.query({ name: 'microphone' }).then((p) => { if (p.state === 'granted') wake(); }).catch(() => {});
+}
+window.addEventListener('pointerdown', unlock, true);
+window.addEventListener('keydown', unlock, true);
