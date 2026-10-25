@@ -23,8 +23,8 @@ class Key:
 
 
 KEYS = (
-    Key("GEMINI_API_KEY", "Gemini", "Cello's live voice, watching your footage, painting assets",
-        "https://aistudio.google.com/apikey", True),
+    Key("GEMINI_API_KEY", "Gemini", "Cello's live voice, watching your footage with its sound, and painting when "
+        "this machine can't paint itself", "https://aistudio.google.com/apikey", True),
     Key("ELEVENLABS_API_KEY", "ElevenLabs", "music made for your film, sound effects, voices",
         "https://elevenlabs.io/app/settings/api-keys", True),
     Key("ANTHROPIC_API_KEY", "Anthropic API (optional)", "only if you'd rather pay per use than use your Claude Code plan",

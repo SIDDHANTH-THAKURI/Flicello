@@ -21,7 +21,13 @@ it tells you what yours has instead.
 | CPU | 8+ threads |
 | Claude | Claude Code, logged in with a Claude plan (Max recommended for heavy design work) |
 
-It still runs below that, slowly, and the Connect page says so. On an NVIDIA GPU, install the CUDA build of the
+It still runs below that, slowly, and the Connect page says so.
+
+**Painting on your own GPU.** The designers paint the real things in a scene (people, creatures, objects, worlds).
+With an NVIDIA GPU or Apple Silicon, Flicello paints them itself with an open model
+([Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509), Apache-2.0, about 58 GB): install
+`pip install -e ".[paint]"` (with the PyTorch build for your GPU) and the setup prompt downloads the model. No image
+service, no per-picture cost. Without it, a Gemini key paints instead. On an NVIDIA GPU, install the CUDA build of the
 model runtime once (`pip install -e ".[nvidia]"` after `pip uninstall onnxruntime onnxruntime-directml`): every
 cut-out frame then runs on the GPU.
 
@@ -45,7 +51,8 @@ On the **Connect** page:
 1. Copy the setup prompt into Claude Code: it checks your machine and installs whatever is missing (models, tools),
    explaining each step. It never touches your keys.
 2. Add your keys. They stay in your computer's keychain, never in the repo, never sent anywhere but the service:
-   - **Gemini**: Cello's live voice, watching your footage, painting assets ([get one](https://aistudio.google.com/apikey))
+   - **Gemini** (optional): Cello's live voice, watching your footage with its sound, and painting when this machine
+     can't paint itself ([get one](https://aistudio.google.com/apikey))
    - **ElevenLabs**: music, sound effects, voices ([get one](https://elevenlabs.io/app/settings/api-keys))
    - optional: **Anthropic API** (instead of your Claude Code plan), **Higgsfield** (AI video generation),
      **Blender** (3D).

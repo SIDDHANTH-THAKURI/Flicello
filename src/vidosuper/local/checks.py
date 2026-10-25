@@ -143,7 +143,34 @@ def models(models_dir: Path) -> list[dict]:
         if models_dir.exists() else False
     out.append(_item("model:whisper", "models", "Whisper (speech to text)", OK if whisper else MISSING,
                      str(models_dir), "it downloads itself on the first video with speech", does="what is said, word by word"))
+    out.append(painter_item())
     return out
+
+
+def painter_item() -> dict:
+    """The painter on this machine (motion/painter.py): optional, as Gemini can paint instead."""
+    from ..motion import painter
+
+    gpu = painter.device()
+    if not painter.available():
+        status, detail = OFF, ("no GPU for it here" if gpu is None and _has_torch() else
+                               "not installed (pip install -e \".[paint]\")")
+    elif painter.downloaded():
+        status, detail = OK, f"{painter.MODEL} on {gpu}"
+    else:
+        status, detail = MISSING, f"{painter.MODEL}: not downloaded yet (about 58 GB)"
+    return _item("model:painter", "models", "Painter (Qwen-Image-Edit, on your GPU)", status, detail,
+                 "pip install -e \".[paint]\" (PyTorch with CUDA on NVIDIA), then download it with: huggingface-cli "
+                 f"download {painter.MODEL}", needed=False,
+                 does="paints the designers' pieces on your GPU, so no image service is needed")
+
+
+def _has_torch() -> bool:
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------- keys and services

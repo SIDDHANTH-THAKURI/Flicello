@@ -524,6 +524,53 @@ def paint(what: str, out: Path, light: Path | None = None, like: Path | None = N
     is painted in; `like`: an asset whose style it matches. Returns its size in px."""
     import cv2
     import numpy as np
+
+    # painted on a flat key colour to cut it out: magenta, or green when the thing itself is pink or purple
+    green = bool(re.search(r"\b(pink|magenta|purple|violet|fuchsia|lilac|lavender|mauve|plum|rose)\w*", what, re.I))
+    which = painter_kind()
+    if which == "local":
+        img = _paint_local(what, green, light, like, out)
+    else:
+        img = _paint_gemini(what, green, light, like)
+    if img is None:
+        raise SceneError("the painter's picture couldn't be read")
+    (out.parent / ".raw").mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out.parent / ".raw" / out.name), img)  # as painted: keyed again later without painting again
+    rgba = key_out(img, green)
+    ys, xs = np.where(rgba[..., 3] > 0.05)
+    if ys.size == 0:
+        raise SceneError("the painted picture was all background")
+    pad = 4
+    y0, y1 = max(0, ys.min() - pad), min(img.shape[0], ys.max() + pad + 1)
+    x0, x1 = max(0, xs.min() - pad), min(img.shape[1], xs.max() + pad + 1)
+    crop = (rgba[y0:y1, x0:x1] * 255).astype(np.uint8)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), crop)
+    return crop.shape[1], crop.shape[0]
+
+
+def painter_kind() -> str:
+    """Who paints: "local" (the open model on this machine's GPU, motion/painter.py) or "gemini" (Gemini's image
+    model with their key). VIDO_PAINTER chooses; by default the local painter where it can run, else Gemini."""
+    from . import painter
+
+    want = os.environ.get("VIDO_PAINTER", "auto").strip().lower()
+    if want in ("local", "gemini"):
+        return want
+    if painter.available():
+        return "local"
+    from ..music.compose import _load_dotenv
+
+    _load_dotenv()
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return "gemini"
+    raise SceneError("nothing here can paint: the local painter needs an NVIDIA GPU or Apple Silicon with the `paint` "
+                     "extra installed (pip install -e \".[paint]\"), or add a Gemini key on the Connect page")
+
+
+def _paint_gemini(what: str, green: bool, light: Path | None, like: Path | None):
+    import cv2
+    import numpy as np
     from google import genai
 
     from ..music.compose import _load_dotenv
@@ -531,12 +578,10 @@ def paint(what: str, out: Path, light: Path | None = None, like: Path | None = N
     _load_dotenv()
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not key:
-        raise SceneError("painting needs GEMINI_API_KEY")
+        raise SceneError("painting with Gemini needs GEMINI_API_KEY")
     client = genai.Client(api_key=key)
     from google.genai import types
 
-    # painted on a flat key colour to cut it out: magenta, or green when the thing itself is pink or purple
-    green = bool(re.search(r"\b(pink|magenta|purple|violet|fuchsia|lilac|lavender|mauve|plum|rose)\w*", what, re.I))
     key_name = "pure green background (#00FF00)" if green else "pure magenta background (#FF00FF)"
     prompt = (f"{what}. A single isolated element for a motion graphics composite: the whole of it in frame, nothing "
               f"cropped, centred, on a perfectly flat {key_name} with no shadow, gradient or texture on the "
@@ -553,30 +598,57 @@ def paint(what: str, out: Path, light: Path | None = None, like: Path | None = N
                   "The image above is another asset of the same piece: match its painting style, detail and light "
                   "exactly, as a part of the same set."]
     resp = client.models.generate_content(model=PAINT_MODEL, contents=[*parts, prompt])
-    data = None
     for cand in resp.candidates or []:
         for part in (cand.content.parts if cand.content else []) or []:
             if getattr(part, "inline_data", None) is not None and part.inline_data.data:
-                data = part.inline_data.data
-                break
-    if data is None:
-        raise SceneError("the painter sent no picture")
-    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        raise SceneError("the painter's picture couldn't be read")
-    (out.parent / ".raw").mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out.parent / ".raw" / out.name), img)  # as painted: keyed again later without painting again
-    rgba = key_out(img, green)
-    ys, xs = np.where(rgba[..., 3] > 0.05)
-    if ys.size == 0:
-        raise SceneError("the painted picture was all background")
-    pad = 4
-    y0, y1 = max(0, ys.min() - pad), min(img.shape[0], ys.max() + pad + 1)
-    x0, x1 = max(0, xs.min() - pad), min(img.shape[1], xs.max() + pad + 1)
-    crop = (rgba[y0:y1, x0:x1] * 255).astype(np.uint8)
+                return cv2.imdecode(np.frombuffer(part.inline_data.data, np.uint8), cv2.IMREAD_COLOR)
+    raise SceneError("the painter sent no picture")
+
+
+def _paint_local(what: str, green: bool, light: Path | None, like: Path | None, out: Path):
+    """The open model on this machine (motion/painter.py): image 1 is the empty key-coloured canvas, then the shot
+    whose light it follows and the asset whose style it matches."""
+    import cv2
+
+    from . import painter
+
+    colour, rgb = ("pure green (#00FF00)", (0, 255, 0)) if green else ("pure magenta (#FF00FF)", (255, 0, 255))
+    refs, notes = [], []
+    if light is not None and light.exists():
+        refs.append(light)
+        notes.append(f"Light it the way the person in image {len(refs) + 1} is lit (the direction, warmth and softness "
+                     f"of the key light on their face); paint nothing from image {len(refs) + 1} itself.")
+    if like is not None and like.exists():
+        flat = out.parent / ".raw" / f".like-{like.stem}.png"  # its transparency on the key colour, as the model sees it
+        _on_key(like, rgb, flat)
+        refs.append(flat)
+        notes.append(f"Match the painting style, detail, palette and light of image {len(refs) + 1} exactly, as a part "
+                     "of the same set.")
+    prompt = (f"Image 1 is an empty canvas of flat {colour}. Paint on it: {what}. One single isolated element, whole "
+              "and centred, nothing cropped, premium and richly lit with crisp edges. Everything around it stays "
+              f"perfectly flat {colour}: no shadow, ground, gradient, texture, text or border. " + " ".join(notes))
+    raw = out.parent / ".raw" / f".painted-{out.stem}.png"
+    try:
+        painter.paint(prompt, rgb, refs, raw, seed=int(hashlib.sha1(what.encode()).hexdigest()[:8], 16))
+    except painter.PainterError as exc:
+        raise SceneError(str(exc)) from exc
+    return cv2.imread(str(raw), cv2.IMREAD_COLOR)
+
+
+def _on_key(png: Path, rgb: tuple[int, int, int], out: Path) -> None:
+    """A transparent asset flattened onto the key colour (the local painter's reference images have no alpha)."""
+    import cv2
+    import numpy as np
+
+    img = cv2.imread(str(png), cv2.IMREAD_UNCHANGED)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out), crop)
-    return crop.shape[1], crop.shape[0]
+    if img is None:
+        return
+    if img.ndim == 3 and img.shape[2] == 4:
+        a = img[..., 3:4].astype(np.float32) / 255.0
+        bg = np.array(rgb[::-1], np.float32)[None, None, :]
+        img = (img[..., :3].astype(np.float32) * a + bg * (1 - a)).astype(np.uint8)
+    cv2.imwrite(str(out), img)
 
 
 def key_out(img, green: bool = False):

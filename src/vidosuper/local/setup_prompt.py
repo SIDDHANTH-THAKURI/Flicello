@@ -21,10 +21,15 @@ def prompt(port: int = 8765) -> str:
         "building, or download the model to the exact path shown, from the source in its \"fix\" text (check it is "
         f"the right file: ONNX, the size you expect). This is {platform.system()} {platform.release()}: use this "
         "system's normal way of installing things, and tell me before anything needs administrator rights.",
-        f"3. Do NOT handle my API keys or log in to anything for me. If a key is missing, tell me to add it on the "
+        f'3. If this computer has an NVIDIA GPU: swap the model runtime for its CUDA build ("{py}" -m pip uninstall -y '
+        f'onnxruntime onnxruntime-directml, then "{py}" -m pip install -e "{REPO_ROOT}[nvidia]"). If it has an NVIDIA '
+        f'GPU or Apple Silicon: install the local painter ("{py}" -m pip install -e "{REPO_ROOT}[paint]", with the '
+        "PyTorch build for this GPU from pytorch.org) and download its model (the \"Painter\" item says how; about "
+        "58 GB, so tell me first), so painting needs no paid image service.",
+        f"4. Do NOT handle my API keys or log in to anything for me. If a key is missing, tell me to add it on the "
         f"Connect page (http://127.0.0.1:{port}/connect). If Claude Code itself is not logged in, tell me to run "
         "`claude` and log in.",
-        "4. Run the report again and show me what is ready now, and anything you could not fix, with why.",
+        "5. Run the report again and show me what is ready now, and anything you could not fix, with why.",
         "",
         "Explain each step in one line as you go.",
     ]

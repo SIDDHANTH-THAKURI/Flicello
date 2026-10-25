@@ -14,6 +14,7 @@ machine by the setup prompt (the Connect page).
 | [Depth Anything V2 Small](https://huggingface.co/depth-anything/Depth-Anything-V2-Small) | depth for 3D parallax photos | Apache-2.0 (only the Small model is; Base and Large are not) |
 | [LaMa](https://github.com/advimman/lama) | removing an object from a shot | Apache-2.0 |
 | [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) | upscaling | BSD-3-Clause |
+| [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) (optional) | painting on your own GPU | Apache-2.0 |
 | [Whisper](https://github.com/openai/whisper) via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | speech to text | MIT |
 
 ## Engines and libraries
@@ -25,6 +26,7 @@ machine by the setup prompt (the Connect page).
 | [FFmpeg](https://ffmpeg.org) | everything video and audio | LGPL/GPL (installed by you) |
 | [Blender](https://www.blender.org) (optional) | 3D in cartoons and scenes | GPL (installed by you; Flicello only runs it) |
 | [ONNX Runtime](https://onnxruntime.ai) | running the models on your GPU or CPU | MIT |
+| [PyTorch](https://pytorch.org), [Diffusers](https://github.com/huggingface/diffusers) (optional) | running the painter | BSD-3-Clause, Apache-2.0 |
 | [mediabunny](https://github.com/Vanilagy/mediabunny) | shrinking uploads in the browser | MPL-2.0 |
 | Fonts: Bricolage Grotesque, Instrument Serif, Geist Mono (and the fonts scenes use) | type | SIL Open Font License 1.1 |
 

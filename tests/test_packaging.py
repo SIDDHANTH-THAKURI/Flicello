@@ -1,4 +1,5 @@
-"""The server image installs only `.[ai,studio]`: everything the code imports must be declared there."""
+"""Everything the code imports is declared in pyproject: in the base, `ai` or `studio` dependencies (what
+`./flicello` installs), or in an optional extra the code only imports when it is there (`paint`, `nvidia`)."""
 
 from __future__ import annotations
 
@@ -20,14 +21,13 @@ def _canon(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def test_every_package_the_code_imports_is_declared_for_the_server_image():
-    """httpx reached the code only through the dev extra (and, once, through anthropic), so sign-in emails and the
-    Google callback crashed on the server while every local test passed. A direct import needs a direct
-    declaration in the base, ai or studio dependencies."""
+def test_every_package_the_code_imports_is_declared():
+    """httpx once reached the code only through the dev extra (and through anthropic), so a fresh install crashed
+    while every local test passed. A direct import needs a direct declaration (dev's packages don't count)."""
     project = tomllib.loads((SRC.parents[1] / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     extras = project["optional-dependencies"]
     declared = {_canon(re.split(r"[\s<>=!~\[;]", r, maxsplit=1)[0])
-                for r in project["dependencies"] + extras["ai"] + extras["studio"]}
+                for r in project["dependencies"] + [x for name, reqs in extras.items() if name != "dev" for x in reqs]}
     owners = packages_distributions()
     missing: dict[str, set[str]] = {}
     for path in SRC.rglob("*.py"):
@@ -44,6 +44,6 @@ def test_every_package_the_code_imports_is_declared_for_the_server_image():
                     continue
                 if top in VIA and VIA[top] in declared:
                     continue
-                if not {_canon(d) for d in owners.get(top, [])} & declared:
+                if not {_canon(d) for d in owners.get(top) or [top]} & declared:  # not installed here: by its name
                     missing.setdefault(top, set()).add(path.relative_to(SRC).as_posix())
-    assert not missing, f"imported but not declared in pyproject (base/ai/studio): {missing}"
+    assert not missing, f"imported but not declared in pyproject: {missing}"

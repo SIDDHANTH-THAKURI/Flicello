@@ -47,6 +47,13 @@ studio = [
   "keyring>=25",  # local Flicello: the person's keys in their keychain (local/keys.py)
   "psutil>=5.9",  # local Flicello: what this machine has (local/machine.py)
 ]
+paint = [  # the local painter (motion/painter.py): Qwen-Image-Edit-2509 on this machine's GPU, no image service needed
+  "torch>=2.5",
+  "diffusers>=0.36",
+  "transformers>=4.51",
+  "accelerate>=1.0",
+  "huggingface-hub>=0.30",
+]
 nvidia = ["onnxruntime-gpu>=1.20"]  # the models on an NVIDIA GPU (CUDA 12): every cut-out frame on the GPU
 dev = ["pytest>=8.0", "httpx>=0.27"]
 
