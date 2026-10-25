@@ -147,6 +147,8 @@ def _sound_windows(edl: EDL) -> list[tuple[str, str, float, float]]:
 
 
 def voice_findings(edl: EDL, utterances: dict[str, list[dict]]) -> list[Finding]:
+    if edl.meta.speech:  # a talking film: the voices are the film
+        return [Finding("ok", "voices", "a talking film: its voices are kept")]
     hits = []
     for what, cid, a, b in _sound_windows(edl):
         for u in utterances.get(cid, []):

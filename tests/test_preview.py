@@ -11,16 +11,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from vidosuper.ffmpeg import ffmpeg_bin, ffprobe_bin, ffprobe_json
 from vidosuper.perceive import prep as prep_module
 from vidosuper.perceive.transcribe import Transcript
 from vidosuper.schemas import EDL, EditMeta, Fx, MusicSpec, RampPoint, Segment, Transition
-from vidosuper.studio import accounts, agent, preview
+from vidosuper.studio import agent, preview
+
+from conftest import local_client
 from vidosuper.studio.service import Studio
 from vidosuper.studio.settings import load_settings
-from vidosuper.studio.web.app import create_app
 from vidosuper.studio.worker import Worker
 
 
@@ -102,10 +102,7 @@ def _drain(studio: Studio, limit: int = 10) -> None:
 def test_a_plain_ask_is_a_draft_in_seconds_watched_at_once_and_made_only_on_make_it(studio, media, monkeypatch):
     monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake",
                                                                                             language="en"))
-    friend = accounts.register(studio.db, accounts.create_invite(studio.db, studio.s, "Ana"), "Ana", "a long password 2")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Ana", "password": "a long password 2"})
-    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client, friend, csrf = local_client(studio)
     client.post("/welcome", data={"csrf": csrf, "pace": "fast", "sound": "real", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Beach", "shapes": "16:9", "length": 15, "intent": "fun"},
                     follow_redirects=False)

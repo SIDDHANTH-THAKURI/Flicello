@@ -154,23 +154,6 @@ def test_the_plan_schema_has_nothing_claude_code_refuses():
         assert "prefixItems" not in text, model.__name__
 
 
-def test_deploy_gates_refuse_protected_files_and_off_switch(tmp_path):
-    from vidosuper.studio.deploy import DeployRefused, deploy, protected_hits
-
-    assert protected_hits(["src/vidosuper/studio/storage.py", "src/vidosuper/design.py", "scripts/improve.ps1"]) == [
-        "src/vidosuper/studio/storage.py", "scripts/improve.ps1"]
-    assert protected_hits(["src/vidosuper/explainer/draw.py", "tests/test_studio.py"]) == []
-
-    class S:
-        improve_deploy = False
-
-    class Studio:
-        s = S()
-
-    with pytest.raises(DeployRefused, match="off"):
-        deploy(Studio(), tmp_path, "improve/x", tmp_path, "python")
-
-
 def test_requirements_are_read_from_the_note_and_checked_against_what_was_made():
     from vidosuper.studio import requirements as rq
 

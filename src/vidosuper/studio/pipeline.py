@@ -143,6 +143,7 @@ class Pipeline:
         self.no_music = False  # set by the studio when the person chose no music
         self.natural_sound = False  # ... and that the clips keep their own sound (else the film is silent)
         self.mute_clips = False  # they asked for no sound from the clips: every shot muted, music or not
+        self.speech = False  # a talking film: cut on its words, every shot with its own voice
         self.watcher = None
         self.mute_effects = False  # no sound effects under the graphics (a silent film, or they asked)
         self.brand: dict = {}  # their brand kit: colour, type, logo (profile answers["brand"])  # Gemini watching each clip with its sound (brain/gemini.py), when the studio has one
@@ -211,8 +212,11 @@ class Pipeline:
                         analysis = self.watcher.analyse_clip(clip, brief_text(Path(task["brief"])), video)
                     except (BudgetExceeded, PersonLimit):
                         raise
-                    except Exception:  # noqa: BLE001 - the analyst logs this one from its contact sheets
+                    except Exception as exc:  # noqa: BLE001 - the analyst logs this one from its contact sheets
                         log.warning("the watcher could not log %s; using the contact sheets", clip.clip_id, exc_info=True)
+                        from ..local import health
+
+                        health.failed("gemini", exc)
             if analysis is None:
                 analysis = self.brain.analyse_clip(clip, brief_text(Path(task["brief"])), [Path(s) for s in task["sheets"]])
             write_text_atomic(analysis_path(project, clip.clip_id), analysis.model_dump_json(indent=1))
@@ -517,23 +521,41 @@ class Pipeline:
             return frame if ok else None
 
         try:
-            for g in plan.graphics:
+            for gi, g in enumerate(plan.graphics):
+                if g.kind == "scene":  # a designed scene: laid into the finished film afterwards (work/scenes_in_film)
+                    continue
                 if g.kind == "captions":
                     said = {cid: t for cid in {seg.clip_id for seg in edl.segments}
                             if (t := load_transcript(self.project, cid)) is not None}
-                    edl.motion.append(MotionGraphic(kind="captions", start=0.0, end=round(total, 3), style=g.style,
-                                                    words=speech_words(timeline, said)))
+                    lo = min(total, max(0.0, g.at)) if g.at is not None else 0.0  # placed by hand: only that stretch
+                    hi = min(total, g.until) if g.until is not None else total
+                    if hi - lo >= 0.3:
+                        edl.motion.append(MotionGraphic(kind="captions", start=round(lo, 3), end=round(hi, 3),
+                                                        style=g.style, words=speech_words(timeline, said), place=g.place,
+                                                        scale=min(3.0, max(0.3, g.scale or 1.0)), ref=gi))
                     continue
                 n = min(max(1, g.shot), len(ids))
                 # where its shot starts (a shot folded into the one before it: that one's start)
                 at = next((starts[sid] for k in range(n - 1, -1, -1) for sid in ids[k] if sid in starts), 0.0)
                 shot_end = next((ends[sid] for sid in reversed(ids[n - 1]) if sid in ends), total)
+                if g.say and g.kind != "thing" and g.at is None:  # on the words they named, wherever they are said
+                    heard = self.when_said(timeline, g.say)
+                    if heard is None:
+                        notes.append(f"I couldn't hear \"{g.say}\" in the film, so the {g.kind} comes in on shot {n}")
+                    else:
+                        at = heard
+                        shot_end = next((i.end / fps for i in timeline.items if i.start / fps <= at < i.end / fps), total)
                 end = min(total, at + max(1.0, g.beats * period))
-                base = dict(text=g.text, sub=g.sub, style=g.style, behind=g.behind, accent=g.accent)
+                if g.at is not None:  # placed by hand on the timeline: its own film seconds
+                    at = min(max(0.0, g.at), max(0.0, total - 0.5))
+                    end = min(total, g.until if g.until is not None and g.until > at + 0.3 else at + max(1.0, g.beats * period))
+                    shot_end = end
+                base = dict(text=g.text, sub=g.sub, style=g.style, behind=g.behind, accent=g.accent, place=g.place,
+                            scale=min(3.0, max(0.3, g.scale or 1.0)), ref=gi)
                 if g.kind == "transition":
                     if at > 0.3:
                         edl.motion.append(MotionGraphic(kind="transition", start=round(at - 0.3, 3),
-                                                        end=round(min(total, at + 0.3), 3), style=g.style))
+                                                        end=round(min(total, at + 0.3), 3), style=g.style, ref=gi))
                     continue
                 if g.kind in ("kinetic", "accent"):
                     step = period if period >= 0.4 else period * 2  # a word a beat, or every other beat when fast
@@ -547,6 +569,12 @@ class Pipeline:
                 if g.kind == "route":
                     edl.motion.append(MotionGraphic(kind="route", start=round(at, 3), end=round(end, 3),
                                                     names=[x for x in g.text.split("|") if x], **base))
+                    continue
+                if g.kind == "thing":
+                    made = self.thing(g, timeline, read, at, end, period, aspect, notes)
+                    if made is not None:
+                        made.ref = gi
+                        edl.motion.append(made)
                     continue
                 if g.kind == "callout":
                     point = (g.x, g.y) if g.x is not None and g.y is not None else self.locate(timeline, read, at, g.want or g.text, aspect)
@@ -580,6 +608,8 @@ class Pipeline:
                             points = [[0.5, round(min(0.6, max(0.12, top + 0.05)), 3)]]
                     edl.motion.append(MotionGraphic(kind=g.kind, start=round(at, 3), end=round(end, 3), points=points,
                                                     **base))
+            # the words said always on top: a thing falling past a caption never hides the word being said
+            edl.motion.sort(key=lambda g: g.kind == "captions")
             # their brand: its colour on every graphic that has none of its own, its type, its logo in a corner
             for g in edl.motion:
                 if brand.get("color") and not g.accent:
@@ -636,6 +666,90 @@ class Pipeline:
         memo.write_text(json.dumps(known), encoding="utf-8")
         return point
 
+    def when_said(self, timeline, say: str) -> float | None:
+        """The film second these words of theirs are said (the whole phrase, else its most telling word)."""
+        from ..motion.place import speech_words
+
+        said = {cid: t for cid in {item.seg.clip_id for item in timeline.items}
+                if (t := load_transcript(self.project, cid)) is not None}
+        words = speech_words(timeline, said)
+        want = [w for w in re.sub(r"[^a-z0-9 ]", " ", say.lower()).split() if w]
+        if not want or not words:
+            return None
+        bare = [re.sub(r"[^a-z0-9]", "", w.w.lower()) for w in words]
+        hit = next((k for k in range(len(bare)) if bare[k:k + len(want)] == want), None)
+        if hit is None:
+            key = max(want, key=len)
+            hit = next((k for k, b in enumerate(bare) if b == key), None)
+        return round(words[hit].s, 3) if hit is not None else None
+
+    def thing(self, g, timeline, read, at: float, end: float, period: float, aspect: float, notes: list[str]):
+        """Something they described, made real: drawn (from the library, else drawn for it), coming in as its words
+        are said, from where they said (found in the frame), moving as they said."""
+        import json
+
+        from ..motion.things import clean_svg, read as read_thing
+        from ..schemas import MotionGraphic
+
+        seen = read_thing(g.want)
+        name = f"the {seen['shape']}" if seen["shape"] else " ".join(g.want.split()[:4])
+
+        def yours(text: str) -> str:  # their words, said back to them
+            return re.sub(r"\bmy\b", "your", re.sub(r"\bme\b", "you", text, flags=re.I), flags=re.I)
+
+        if g.say and g.at is None:  # as these words are said (unless placed by hand on the timeline)
+            heard = self.when_said(timeline, g.say)
+            if heard is not None:
+                at = heard
+            else:
+                notes.append(f'I couldn\'t hear "{g.say}" in the film, so {name} comes in as its shot starts')
+        total = timeline.duration
+        motion = g.style or "pop"
+        length = max(g.beats * period, 3.2 if motion in ("drop", "bounce", "rain") else 2.0)
+        end = min(total, at + length)
+        if g.at is not None and g.until is not None:  # placed by hand on the timeline
+            end = min(total, max(at + 0.8, g.until))
+        if end - at < 0.8:
+            return None
+        anchor_words = (g.anchor or "").lower()
+        if g.x is not None and g.y is not None:
+            point = (g.x, g.y)
+        elif re.search(r"\b(sky|above|top of the (?:screen|frame)|ceiling|nowhere)\b", anchor_words):
+            point = (0.5, 0.02)
+        elif anchor_words:
+            what = "the very top of the person's head" if re.search(r"\b(head|hair)\b", anchor_words) else g.anchor
+            point = self.locate(timeline, read, at, what, aspect)
+            if point is None:
+                notes.append(f"I couldn't find {yours(g.anchor)} in that shot, so {name} starts near the top")
+                point = (0.5, 0.3)
+        else:
+            point = (0.5, 0.3 if motion in ("drop", "bounce") else 0.42)
+        shape, svg = seen["shape"], ""
+        if not shape:  # not in the library: drawn for it once, then remembered
+            memo = self.work.root / "drawn.json"
+            try:
+                known = json.loads(memo.read_text(encoding="utf-8")) if memo.exists() else {}
+            except ValueError:
+                known = {}
+            key = re.sub(r"\s+", " ", g.want.lower()).strip()[:120]
+            if not known.get(key) and self.watcher is not None and hasattr(self.watcher, "draw"):
+                try:
+                    drawn = clean_svg(self.watcher.draw(g.want))
+                except Exception:  # noqa: BLE001 - a sparkle stands in, said plainly; drawn next time
+                    log.warning("could not draw %r", g.want, exc_info=True)
+                    drawn = ""
+                if drawn:  # only a real drawing is kept (a failure is tried again next time)
+                    known[key] = drawn
+                    memo.write_text(json.dumps(known, ensure_ascii=False), encoding="utf-8")
+            svg = known.get(key, "")
+            if not svg:
+                shape = "sparkle"
+                notes.append(f"I couldn't draw {name}, so a sparkle stands in for it")
+        return MotionGraphic(kind="thing", start=round(at, 3), end=round(end, 3), text=g.text, style=motion,
+                             accent=g.accent or seen["color"], points=[[round(point[0], 4), round(point[1], 4)]],
+                             shape=shape, svg=svg, size=seen["size"] or None, count=g.count or seen["count"],
+                             bounces=g.bounces)
+
     def faces_seen(self) -> list[dict]:
         """Where faces are in the clips (the face index, when it has been made): what graphics keep clear of."""
         from . import faces
@@ -647,6 +761,7 @@ class Pipeline:
         _, template = self._template(ctx, plan, shape, look)
         w, h = SHAPES[shape]
         edl, _ = self.edl_for(template, w, h)
+        self.hand_edits(edl, plan)
         self.motion_notes = self.add_motion(edl, plan, ctx)
         path = self.work.out / f"{name}.edl.json"
         path.write_text(edl.model_dump_json(indent=1), encoding="utf-8")
@@ -655,6 +770,53 @@ class Pipeline:
     def _template(self, ctx: StoryContext, plan: DesignPlan, shape: str, look: str) -> tuple[Design, Template]:
         design = to_design(plan, ctx, str(self.work.song_path()), vertical=shape == "9:16", look=look)
         return design, heal_template(build_template(design, self.project))
+
+    def hand_edits(self, edl, plan: DesignPlan) -> None:
+        """What they set by hand on the timeline (studio/handedit.py), on the edit list: each shot's own sound (louder,
+        softer or off; a shot whose sound they turned up is heard), and the music's slide, level, fades, dips and
+        cuts."""
+        from ..schemas import GainPoint, MusicJump
+        from .versions import slot_ids
+
+        by_id = {seg.id: seg for seg in edl.segments}
+        for shot, ids in zip(plan.plan, slot_ids(plan)):
+            first = next((by_id[i] for i in ids if i in by_id), None)
+            if shot.keys and first is not None:  # its framing keyframes (the shot's own seconds)
+                first.keys = [[round(float(k[0]), 3), round(min(3.0, max(1.0, float(k[1]))), 3),
+                               round(min(1.0, max(0.0, float(k[2]))), 3), round(min(1.0, max(0.0, float(k[3]))), 3)]
+                              for k in sorted(shot.keys, key=lambda k: k[0])[:16]]
+            if shot.gain_db is None and not shot.mute:
+                continue
+            for seg in (by_id[i] for i in ids if i in by_id):
+                if shot.mute:
+                    seg.audio = seg.audio.model_copy(update={"mode": "mute"})
+                else:
+                    seg.audio = seg.audio.model_copy(update={"mode": "original", "gain_db": round(shot.gain_db, 1)})
+        if plan.over:  # shots laid over the picture (B-roll): the film's sound goes on under them
+            from ..schemas import Overlay
+            from .brain.context import clip_facts, load_catalog
+
+            ids = {short: f.clip_id for short, f in clip_facts(load_catalog(self.project.root)).items()}
+            edl.over = [Overlay(clip_id=ids[o.clip], at=round(o.at, 3), until=round(o.until, 3), src_in=round(o.src_in, 3),
+                                speed=min(4.0, max(0.25, o.speed)), zoom=min(2.5, max(1.0, o.zoom)),
+                                frame_center=(min(1.0, max(0.0, o.frame_x)), 0.5) if o.frame_x is not None else (0.5, 0.5))
+                        for o in plan.over if o.clip in ids and o.until - o.at >= 0.2]
+        m = plan.music
+        if m is None or edl.music is None:
+            return
+        spec = edl.music
+        spec.start = round(max(0.0, spec.start - m.slide), 3)  # later against the picture: earlier in the song
+        spec.gain_db = round(spec.gain_db + m.gain_db, 2)
+        if m.fade_in is not None:
+            spec.fade_in = round(max(0.0, m.fade_in), 3)
+        if m.fade_out is not None:
+            spec.fade_out = round(max(0.0, m.fade_out), 3)
+        spec.duck_db = m.duck_db
+        if m.points:
+            spec.automation = [GainPoint(t=round(p.t, 3), gain_db=round(p.db, 1)) for p in sorted(m.points, key=lambda p: p.t)]
+        if m.jumps:
+            spec.jumps = [MusicJump(at=round(j.at, 3), to=round(max(0.0, j.to), 3))
+                          for j in sorted(m.jumps, key=lambda j: j.at)]
 
     def edl_for(self, template: Template, width: int, height: int):
         """The EDL for a template that the renderer will accept: a shot the renderer finds too short on screen (frames
@@ -667,6 +829,11 @@ class Pipeline:
                 if self.natural_sound:  # each shot with the sound it was filmed with (faded at the cuts)
                     for seg in edl.segments:
                         seg.audio = seg.audio.model_copy(update={"mode": "original"})
+            if self.speech:  # a talking film: every shot with its own voice, the music under it; cuts stay on words
+                edl.meta.snap_to_beats = False
+                edl.meta.speech = True
+                for seg in edl.segments:
+                    seg.audio = seg.audio.model_copy(update={"mode": "original", "duck_music": True})
             if self.mute_clips:  # whatever the plan chose, no shot plays the sound it was filmed with
                 for seg in edl.segments:
                     seg.audio = seg.audio.model_copy(update={"mode": "mute"})
@@ -705,6 +872,7 @@ class Pipeline:
             w, h = SHAPES[shape]
             edl, _ = self.edl_for(template, w, h)
             edl.meta.true_peak_db = -2.3
+            self.hand_edits(edl, plan)
             self.motion_notes = self.add_motion(edl, plan, ctx)
             name = f"v{version}-{shape.replace(':', 'x')}"
             (self.work.out / f"{name}.edl.json").write_text(edl.model_dump_json(indent=1), encoding="utf-8")

@@ -18,10 +18,9 @@ export default defineConfig({
     cssCodeSplit: true,
     rollupOptions: {
       input: {
-        landing: here('src/landing/main.js'),
         app: here('src/app/main.js'),
-        admin: here('src/admin/main.js'),
         cello: here('src/cello/main.js'),
+        editor: here('src/editor/main.js'),
       },
     },
   },

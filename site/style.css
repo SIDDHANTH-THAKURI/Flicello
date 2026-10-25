@@ -1,0 +1,280 @@
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  font-stretch: 75% 100%;
+  src: url("/fonts/bricolage.woff2") format("woff2-variations");
+}
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 400;
+  src: url("/fonts/instrument-italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/geist-mono.woff2") format("woff2-variations");
+}
+
+:root {
+  --ink: #06060a;
+  --paper: #f4f1ea;
+  --muted: rgba(244, 241, 234, 0.62);
+  --faint: rgba(244, 241, 234, 0.16);
+  --sun: linear-gradient(100deg, #ffa24a 0%, #ff4f8b 55%, #7a5cff 100%);
+  --pad: clamp(1.25rem, 4vw, 3.5rem);
+  --sans: "Bricolage Grotesque", system-ui, sans-serif;
+  --serif: "Instrument Serif", Georgia, serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  min-height: 100svh;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* The camera roll behind it all: twelve unposted clips, graded down to a mood. */
+.roll {
+  position: fixed;
+  inset: -4%;
+  z-index: -3;
+  animation: drift 40s ease-in-out infinite alternate;
+}
+.roll video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(0.7) contrast(1.08) brightness(0.62) blur(1.5px);
+}
+.roll::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to right, rgba(6, 6, 10, 0.94) 0%, rgba(6, 6, 10, 0.8) 38%, rgba(6, 6, 10, 0.3) 100%),
+    linear-gradient(to bottom, rgba(6, 6, 10, 0.6), transparent 25%, transparent 55%, rgba(6, 6, 10, 0.96));
+}
+@keyframes drift {
+  from { transform: scale(1.04) translate3d(-1%, 0, 0); }
+  to { transform: scale(1.1) translate3d(1.5%, -1.5%, 0); }
+}
+
+/* Warm light leaking across the frame, in the mark's colours. */
+.leak {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(40% 55% at 88% 18%, rgba(255, 79, 139, 0.32), transparent 70%),
+    radial-gradient(35% 45% at 100% 70%, rgba(122, 92, 255, 0.26), transparent 70%),
+    radial-gradient(30% 40% at 70% 0%, rgba(255, 162, 74, 0.28), transparent 70%);
+  mix-blend-mode: screen;
+  animation: breathe 9s ease-in-out infinite alternate;
+}
+@keyframes breathe {
+  from { opacity: 0.7; }
+  to { opacity: 1; }
+}
+
+.grain {
+  position: fixed;
+  inset: -50%;
+  z-index: -1;
+  opacity: 0.09;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: grain 0.5s steps(4) infinite;
+}
+@keyframes grain {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-3%, 2%); }
+  50% { transform: translate(2%, -3%); }
+  75% { transform: translate(-2%, -1%); }
+}
+
+/* Top bar */
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--pad);
+  padding-bottom: 0;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 650;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+}
+.mark { width: 2.1rem; height: 2.1rem; }
+.mark .b { transform-box: fill-box; transform-origin: 50% 100%; animation: beat 1.1s ease-in-out infinite; }
+.mark .b2 { animation-delay: 0.18s; }
+.mark .b3 { animation-delay: 0.36s; }
+@keyframes beat {
+  0%, 100% { transform: scaleY(1); }
+  40% { transform: scaleY(0.72); }
+}
+.hud { display: flex; align-items: center; gap: 0.6rem; color: var(--muted); }
+.tc { color: var(--paper); font-variant-numeric: tabular-nums; }
+.rec {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #ff4f5e;
+  box-shadow: 0 0 0.8rem #ff4f5e;
+  animation: blink 1.6s steps(2, jump-none) infinite;
+}
+@keyframes blink { 50% { opacity: 0.25; } }
+
+/* The headline */
+main {
+  align-self: center;
+  padding: 0 var(--pad);
+  max-width: 68rem;
+}
+.eyebrow { color: var(--muted); margin-bottom: 1.6rem; }
+h1 {
+  font-size: clamp(3rem, 9.5vw, 8.6rem);
+  font-weight: 680;
+  font-stretch: 92%;
+  line-height: 0.95;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+h1 em {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+  font-stretch: normal;
+  letter-spacing: -0.01em;
+  padding-right: 0.06em;
+  background: var(--sun);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.sub {
+  margin-top: 2rem;
+  max-width: 36rem;
+  font-size: clamp(1.05rem, 1.5vw, 1.3rem);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* The roadmap, laid out as an edit: six clips on a track, the playhead on the one being cut. */
+.cut { padding: 3rem var(--pad) 0; }
+.cut-label { color: var(--muted); margin-bottom: 0.9rem; }
+.track {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 3px;
+  counter-reset: clip;
+}
+.track li {
+  position: relative;
+  min-height: 4.6rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 6px;
+  border: 1px solid var(--faint);
+  background: rgba(244, 241, 234, 0.03);
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.25;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.track .t { position: relative; z-index: 1; text-shadow: 0 1px 0.6rem rgba(6, 6, 10, 0.9); }
+.track .n { display: block; margin-bottom: 0.45rem; font-size: 0.66rem; opacity: 0.8; }
+.track .done {
+  color: var(--paper);
+  border-color: rgba(244, 241, 234, 0.28);
+  background: rgba(244, 241, 234, 0.1);
+}
+.track .now {
+  color: var(--paper);
+  border-color: transparent;
+  background:
+    linear-gradient(rgba(14, 12, 20, 0.82), rgba(14, 12, 20, 0.82)) padding-box,
+    var(--sun) border-box;
+}
+/* The playhead, crawling through the clip being cut */
+.track .now::after {
+  content: "";
+  position: absolute;
+  top: -0.55rem;
+  bottom: -0.55rem;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: #ff4f8b;
+  box-shadow: 0 0 0.9rem #ff4f8b;
+  opacity: 0.85;
+  animation: playhead 7s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+.track .now::before {
+  content: "";
+  position: absolute;
+  top: -0.85rem;
+  left: 0;
+  width: 0.7rem;
+  height: 0.5rem;
+  margin-left: calc(1px - 0.35rem);
+  background: #ff4f8b;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  animation: playhead 7s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+@keyframes playhead {
+  from { translate: 0.4rem 0; }
+  to { translate: calc(100cqw - 0.6rem) 0; }
+}
+.track li { container-type: inline-size; }
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.6rem 2rem;
+  padding: 2rem var(--pad) var(--pad);
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  .roll::after { background: linear-gradient(to bottom, rgba(6, 6, 10, 0.75), rgba(6, 6, 10, 0.88) 50%, rgba(6, 6, 10, 0.97)); }
+  .track { grid-template-columns: repeat(2, 1fr); }
+  .track li { min-height: 3.9rem; }
+  .hud { font-size: 0.62rem; }
+  .foot { justify-content: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; }
+  .roll video { display: none; }
+  .roll { background: url("/media/roll.jpg") center / cover; filter: saturate(0.55) brightness(0.42); }
+}

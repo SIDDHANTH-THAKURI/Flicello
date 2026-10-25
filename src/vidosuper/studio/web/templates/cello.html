@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   {{ vite("cello") }}
 </head>
-<body class="cello-shell">
+<body class="cello-shell" data-owner="{{ 1 if is_owner else 0 }}">
   <iframe id="cello-app" src="{{ to }}" title="{{ app_name }}" allow="autoplay; fullscreen"></iframe>
   <div id="cello" data-state="sleep" aria-live="polite">
     <canvas id="cello-beam" aria-hidden="true"></canvas>
@@ -20,6 +20,19 @@
     <div class="cello-caption" aria-hidden="true"><span class="you"></span><span class="me"></span></div>
     <div class="cello-pill" hidden></div>
     <form class="cello-type" hidden><input name="t" autocomplete="off" placeholder="Type to Cello, then Enter" aria-label="Type to Cello"></form>
+    <aside class="cello-desk" hidden aria-label="What Cello is doing">
+      <header><b>Cello</b><button type="button" class="cello-desk-fold" data-desk-fold aria-label="Fold">&#8211;</button></header>
+      <section class="desk-now" hidden></section>
+      <section class="desk-done" hidden><h3>Done</h3><ul></ul></section>
+      <section class="desk-choices" hidden><h3>Your film</h3><dl></dl></section>
+    </aside>
+    <button type="button" class="cello-desk-tab" data-desk-open hidden>Cello&#8217;s work</button>
+    <div class="cello-ask" role="dialog" aria-live="assertive" hidden>
+      <p class="ask-lead"></p>
+      <p class="ask-q"></p>
+      <div class="ask-options"></div>
+      <form class="ask-own"><input name="t" autocomplete="off" placeholder="Or say it in your words" aria-label="Your answer"></form>
+    </div>
     <div class="cello-menu" hidden>
       <button type="button" data-cello="type">Type instead</button>
       <button type="button" data-cello="mute">Mute my mic</button>

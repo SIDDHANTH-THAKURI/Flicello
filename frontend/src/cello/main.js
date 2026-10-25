@@ -11,6 +11,7 @@ import './cello.css';
 
 const $ = (s, r = document) => r.querySelector(s);
 const csrf = $('meta[name="csrf"]').content;
+const OWNER = document.body.dataset.owner === '1';
 const frame = $('#cello-app');
 const root = $('#cello');
 const body = $('.cello-body', root);
@@ -22,14 +23,16 @@ const menu = $('.cello-menu', root);
 const typer = $('.cello-type', root);
 const WS = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
 const PARTS = { preview: '[data-preview]', draft: '#draft', timeline: '#timeline', styles: '#styles', ready: '#ready',
-  exports: '#exports', review: '#review', versions: '.screens', brief: '#editor', people: '#editor .people' };
+  exports: '#exports', review: '#review', versions: '.screens', brief: '#editor', people: '#editor .people',
+  clips: '#drop', upload: '#drop', story: '.understood, .posters, .looks', shots: '#shots', settings: '#settings-edit',
+  music: '#film-music' };
 const TOOL_PART = { edit: 'draft', style: 'styles', fix_score: 'ready', export: 'exports', review_link: 'review',
   make_it: 'draft', discard: 'draft', effect: 'timeline', ai_clip: 'timeline', music: 'preview', step: null };
 
 const S = {
   on: false, ws: null, open: false, ever: false, woke: 0, awaiting: false, acting: 0, muted: false, mic: 0,
   out: 0, handle: sessionStorage.getItem('cello-handle') || '', queue: [], lastSound: 0, since: null, cut: false, inReply: 0, heard: 0,
-  greeted: false, retry: 0, aec: true, target: null, targetUntil: 0, pending: [], asked: 0, warned: false,
+  greeted: false, retry: 0, aec: true, target: null, targetUntil: 0, pending: [], asked: 0, warned: false, blocked: '',
 };
 
 // ---------------------------------------------------------------- the frame: which film, which page
@@ -45,9 +48,12 @@ frame.addEventListener('load', () => {
   const d = doc();
   if (!d) return;
   history.replaceState(null, '', `/cello?to=${encodeURIComponent(frame.contentWindow.location.pathname + frame.contentWindow.location.search)}`);
-  d.addEventListener('pointermove', (e) => { // its eyes follow you around the page
+  d.addEventListener('pointermove', (e) => { // its eyes follow you around the page, and it knows what you point at
     const r = body.getBoundingClientRect();
     const fr = frame.getBoundingClientRect();
+    cursor.x = e.clientX;
+    cursor.y = e.clientY;
+    cursor.at = performance.now();
     gazeAt(e.clientX + fr.left, e.clientY + fr.top, r);
   });
   document.title = d.title || 'Flicello';
@@ -58,7 +64,163 @@ frame.addEventListener('load', () => {
     if (a && a.origin !== window.location.origin) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
   }, true);
   S.target = null;
+  watchUploads(d);
 });
+
+const cursor = { x: -1, y: -1, at: 0 };
+
+// their clips going in: Cello hears each one land (or fail, and why) the moment the page shows it
+function watchUploads(d) {
+  const list = d.querySelector('#upload-list');
+  if (!list) return;
+  const told = new WeakSet();
+  new MutationObserver(() => {
+    for (const li of list.querySelectorAll('li')) {
+      if (told.has(li)) continue;
+      const name = (li.querySelector('.name')?.textContent || '').trim();
+      if (li.classList.contains('ok')) {
+        told.add(li);
+        hidden(`(Note, not them talking: their clip "${name}" is in. If they asked you to watch it, call step with start now; else tell them it's in.)`);
+      } else if (li.classList.contains('off')) {
+        told.add(li);
+        hidden(`(Note, not them talking: the upload failed: ${name}. Tell them plainly what went wrong; nothing is in.)`);
+      }
+    }
+  }).observe(list, { subtree: true, attributes: true, attributeFilter: ['class'], childList: true });
+}
+
+function onPageClips() { // what the page shows of their clips right now
+  const d = doc();
+  if (!d) return null;
+  const inFilm = [...d.querySelectorAll('#clip-list li .name')].map((n) => n.textContent.trim());
+  const going = [...d.querySelectorAll('#upload-list li')].map((li) => ({
+    file: (li.querySelector('.name')?.textContent || '').trim(),
+    state: li.classList.contains('ok') ? 'in' : li.classList.contains('off') ? 'failed' : `uploading ${li.querySelector('.sub:last-of-type')?.textContent || ''}`.trim(),
+  }));
+  return inFilm.length || going.length ? { clips_in_film: inFilm, uploads: going } : null;
+}
+
+// ---------------------------------------------------------------- eyes: what they point at, what is playing
+function words(el) { // what a person would call this thing on the page
+  if (!el) return '';
+  const own = el.getAttribute?.('aria-label') || el.getAttribute?.('title') || el.getAttribute?.('placeholder') || '';
+  const text = own || (el.innerText || el.value || '').trim();
+  return text.replace(/\s+/g, ' ').slice(0, 120);
+}
+
+function videoInfo(d) { // the video on screen: the draft preview or the version, where it is, which shot
+  const pv = d.querySelector('[data-preview]');
+  if (pv && pv.player) {
+    const pl = pv.player;
+    const i = pl.shotAt(pl.t);
+    return { which: 'the draft preview', at_s: +pl.t.toFixed(2), of_s: +pl.tl.duration.toFixed(2), playing: !!pl.playing,
+      shot: i + 1, box: pl.stage.getBoundingClientRect() };
+  }
+  const v = d.querySelector('.screens video, #draft video, video');
+  if (!v) return null;
+  const fig = v.closest('[data-shots]');
+  let shot = null;
+  try {
+    const times = JSON.parse(fig?.dataset.shots || '[]');
+    for (const [start, n] of times) if (start <= v.currentTime + 1e-3) shot = n;
+  } catch { /* no shots */ }
+  return { which: 'the film', at_s: +v.currentTime.toFixed(2), of_s: +(v.duration || 0).toFixed(2), playing: !v.paused,
+    shot, box: v.getBoundingClientRect() };
+}
+
+function pointing() {
+  const d = doc();
+  if (!d) return { result: 'The page is not readable right now.' };
+  const out = { ...screen() };
+  const vid = videoInfo(d);
+  if (vid) {
+    const { box, ...rest } = vid;
+    out.video = rest;
+  }
+  if (cursor.at && performance.now() - cursor.at < 120000) {
+    const el = d.elementFromPoint(cursor.x, cursor.y);
+    if (vid && cursor.x >= vid.box.left && cursor.x <= vid.box.right && cursor.y >= vid.box.top && cursor.y <= vid.box.bottom) {
+      out.cursor = { on: `${vid.which}, at ${vid.at_s} s${vid.shot ? `, shot ${vid.shot}` : ''}`,
+        frame_x: +((cursor.x - vid.box.left) / vid.box.width).toFixed(3), frame_y: +((cursor.y - vid.box.top) / vid.box.height).toFixed(3),
+        note: 'frame_x/y: where in the picture they point (0-1 from the top left)' };
+    } else if (el) {
+      const card = el.closest('[data-shot]');
+      const target = el.closest('button, a, label, input, select, textarea, summary, [role=button], h1, h2, h3, li, figure, section') || el;
+      out.cursor = { on: words(target) || target.tagName.toLowerCase(), ...(card ? { shot: +card.dataset.shot } : {}) };
+    }
+  } else {
+    out.cursor = { on: 'nothing: their cursor has not been on the page lately' };
+  }
+  return { result: out };
+}
+
+// ---------------------------------------------------------------- hands on the page
+function find(d, what, kinds) {
+  const want = String(what || '').toLowerCase().trim();
+  if (!want) return null;
+  const all = [...d.querySelectorAll(kinds)].filter((n) => n.offsetParent !== null || n.getClientRects().length);
+  const named = all.map((n) => [n, words(n).toLowerCase() || (n.labels?.[0] && words(n.labels[0]).toLowerCase()) || ''])
+    .filter(([, w]) => w);
+  return (named.find(([, w]) => w === want) || named.find(([, w]) => w.startsWith(want))
+    || named.find(([, w]) => w.includes(want)) || named.find(([, w]) => want.includes(w) && w.length > 3) || [])[0] || null;
+}
+
+function onPage(args) {
+  const d = doc();
+  const w = frame.contentWindow;
+  if (!d || !w) return 'The page is not readable right now.';
+  const what = String(args.where || '').toLowerCase();
+  if (args.do === 'back') { w.history.back(); return 'Went back.'; }
+  if (args.do === 'scroll') {
+    const h = w.innerHeight * 0.75;
+    if (what.includes('top')) w.scrollTo({ top: 0, behavior: 'smooth' });
+    else if (what.includes('bottom')) w.scrollTo({ top: d.body.scrollHeight, behavior: 'smooth' });
+    else w.scrollBy({ top: what.includes('up') ? -h : h, behavior: 'smooth' });
+    return `Scrolled ${what || 'down'}.`;
+  }
+  if (args.do === 'click') {
+    const el = find(d, what, 'button, a, summary, label, [role=button], input[type=submit], input[type=checkbox], input[type=radio]');
+    if (!el) return `There is nothing called "${args.where}" to click on this page.`;
+    reveal(el);
+    if (el.closest('form[data-confirm]')) el.closest('form').removeAttribute('data-confirm'); // they asked by voice: no box to tick
+    el.click();
+    return `Clicked "${words(el)}".`;
+  }
+  if (args.do === 'type') {
+    const el = find(d, what, 'input:not([type=hidden]):not([type=file]), textarea') || d.querySelector('textarea, input[type=text]');
+    if (!el) return 'There is no field to type in on this page.';
+    reveal(el);
+    el.focus();
+    el.value = String(args.text || '');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return `Typed into "${words(el) || 'the field'}".`;
+  }
+  return 'Say scroll, click, type or back.';
+}
+
+function reveal(el) { // a part tucked away in the one-screen view, brought up (and every box it sits in opened)
+  const d = el.ownerDocument;
+  for (let n = el; n && n !== d.body; n = n.parentElement) {
+    if (n.tagName === 'DETAILS') n.open = true;
+    if (getComputedStyle(n).display === 'none' || n.hidden) { n.hidden = false; n.classList.add('cello-shown'); }
+  }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function upload() {
+  const d = doc();
+  const drop = d && d.querySelector('#drop, label.drop');
+  if (!drop) {
+    return { result: film() ? 'This film is past its clips: its clips are in. (To add more, go back to the clips step.)'
+      : 'No film is open: start one with new_film first.' };
+  }
+  point('upload', 9000);
+  drop.classList.add('cello-lit');
+  setTimeout(() => drop.classList.remove('cello-lit'), 9000);
+  return { result: 'The place for their clips is lit up: they tap it to choose files, or drop them on it. Uploads show '
+    + 'progress there; tell them you will watch once they are in.' };
+}
 
 function screen() {
   try { return { page: frame.contentWindow.location.pathname, title: doc().title }; } catch { return {}; }
@@ -151,10 +313,34 @@ async function ears() {
   };
 }
 
+// ---------------------------------------------------------------- the log: what it heard, said and did, kept
+const book = [];
+const turn = { you: '', cello: '' };
+function note(who, text) {
+  book.push({ at: Date.now() / 1000, who, text: typeof text === 'string' ? text : JSON.stringify(text) });
+  if (book.length > 40) sendBook();
+}
+function closeTurn() { // what they said and what it answered, each as one line
+  if (turn.you.trim()) note('you', turn.you.trim());
+  if (turn.cello.trim()) note('cello', turn.cello.trim());
+  turn.you = '';
+  turn.cello = '';
+}
+function sendBook() {
+  if (!book.length) return;
+  const lines = book.splice(0, book.length);
+  fetch('/api/cello/log', { method: 'POST', credentials: 'same-origin', keepalive: true,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf }, body: JSON.stringify({ pid: film(), lines }) })
+    .catch(() => {});
+}
+setInterval(sendBook, 8000);
+window.addEventListener('pagehide', () => { closeTurn(); sendBook(); });
+
 // ---------------------------------------------------------------- the line to Gemini
 function send(msg) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(msg)); }
 function say(text) {
   if (!S.open) { S.pending.push(text); return; }
+  note(text.startsWith('(Note') ? 'note' : 'you', text);
   send({ realtimeInput: { text } });
   S.awaiting = true;
   S.asked = performance.now();
@@ -183,11 +369,25 @@ async function connect() {
     const msg = JSON.parse(typeof e.data === 'string' ? e.data : await e.data.text());
     onMessage(msg);
   };
-  ws.onclose = () => {
+  ws.onclose = (e) => {
     if (S.ws !== ws) return; // an old line closing after a new one opened
     if (ws.resumed && !ws.ready) { S.handle = ''; sessionStorage.removeItem('cello-handle'); } // that handle has expired
     S.open = false;
     S.ws = null;
+    const why = String(e.reason || '').trim();
+    if (why) console.warn(`Cello's line closed (${e.code}): ${why}`);
+    note('line', `closed ${e.code}${why ? `: ${why}` : ''}${ws.ready ? '' : ' (before it was set up)'}`);
+    if (/credit|prepay|billing|quota|exhaust|permission|api key|not enabled|suspended/i.test(why)) {
+      // Google won't carry the voice (no credit, no quota): said plainly, and tried again in a few minutes, not in a loop
+      S.blocked = OWNER ? (/credit|prepay|billing/i.test(why)
+        ? "Cello can't speak: the Gemini API credit has run out. Top it up in Google AI Studio (ai.studio/projects, Billing), then tap Cello."
+        : `Cello can't speak: Google says "${why}".`)
+        : "Cello's voice isn't available right now. Try again a little later.";
+      show(S.blocked, 30000);
+      if (S.on) setTimeout(() => { if (S.on && !S.ws) connect(); }, 180000);
+      return;
+    }
+    S.blocked = '';
     if (S.on && !S.warned) { S.warned = true; show('Reconnecting\u2026'); }
     if (S.on) setTimeout(() => { if (S.on && !S.ws) connect(); }, Math.min(8000, 800 * 2 ** S.retry++));
   };
@@ -227,13 +427,17 @@ function onMessage(m) {
     if (p.inlineData?.data) { S.awaiting = false; S.inReply = performance.now(); play(p.inlineData.data); }
   }
   if (sc.inputTranscription?.text) {
+    if (turn.cello) closeTurn();
+    turn.you += sc.inputTranscription.text;
     S.cut = false;
     if (!said.you) said.me = ''; // a new thing from them: its last answer steps aside
     line('you', sc.inputTranscription.text);
     S.awaiting = true;
     S.asked = performance.now();
   }
-  if (sc.outputTranscription?.text) line('me', sc.outputTranscription.text);
+  if (sc.outputTranscription?.text) { turn.cello += sc.outputTranscription.text; line('me', sc.outputTranscription.text); }
+  if (sc.interrupted) note('event', 'they spoke over it: stopped');
+  if (sc.turnComplete) closeTurn();
   if (sc.turnComplete) { S.awaiting = false; S.asked = 0; S.cut = false; S.inReply = 0; }
 }
 
@@ -254,11 +458,12 @@ function tail(text, n) { // the end of what was said, starting on a whole word
   const sp = cut.indexOf(' ');
   return `\u2026${sp > 0 && sp < 24 ? cut.slice(sp + 1) : cut}`;
 }
-function show(text) {
+function show(text, ms = 4000) {
   pill.textContent = text;
   pill.hidden = false;
+  pill.classList.toggle('long', text.length > 60);
   clearTimeout(show.t);
-  show.t = setTimeout(() => { pill.hidden = true; }, 4000);
+  show.t = setTimeout(() => { pill.hidden = true; }, ms);
 }
 
 // ---------------------------------------------------------------- hands
@@ -269,13 +474,18 @@ async function tools(calls) {
     const name = fc.name;
     show({ look: 'Looking', edit: 'Making the changes', style: 'Trying the style', make_it: 'Making it', export: 'Exporting',
       effect: 'Working on the shot', ai_clip: 'Making a clip', music: 'Remaking the music', open: 'Opening', show: 'Showing you',
-      play: 'Playing', diagnose: 'Checking what broke', repair: 'Repairing' }[name] || 'On it');
+      play: 'Playing', diagnose: 'Checking what broke', repair: 'Repairing', pointing: 'Looking where you point',
+      page: 'On the page', upload: 'Where your clips go', new_film: 'Starting a film', build: 'Building it',
+      brief: 'Noting it', find: 'Watching for it' }[name] || 'On it');
     let result;
+    note('tool', `${name} ${JSON.stringify(fc.args || {})}`);
     try {
       result = await run(name, fc.args || {});
     } catch (err) {
       result = { result: `Not done: ${err.message}` };
+      note('error', `${name}: ${err.message}`);
     }
+    note('result', `${name}: ${JSON.stringify(result.result ?? result).slice(0, 1500)}`);
     S.acting -= 1;
     answers.push({ id: fc.id, name, response: { result: result.result ?? result } });
     if (!String(result.result || '').startsWith('Not done')) orb.nod();
@@ -287,6 +497,9 @@ async function tools(calls) {
 
 async function run(name, args) {
   if (name === 'open') return openThing(String(args.what || ''));
+  if (name === 'pointing') return pointing();
+  if (name === 'page') return { result: onPage(args) };
+  if (name === 'upload') return upload();
   if (name === 'show') return { result: point(String(args.part || '').toLowerCase()) ? 'Shown.' : 'That part is not on this page.' };
   if (name === 'play') return { result: drive(args.do, args.seconds) };
   const part = TOOL_PART[name];
@@ -300,7 +513,9 @@ async function run(name, args) {
     return { result: r.status === 401 ? 'Not done: they are signed out. Ask them to sign in again.'
       : `Not done: ${out.detail || out.result || `the server said ${r.status}`}` };
   }
-  if (name === 'look' && out.result && typeof out.result === 'object') out.result = { ...out.result, ...screen() };
+  if (name === 'look' && out.result && typeof out.result === 'object') {
+    out.result = { ...out.result, ...screen(), ...(onPageClips() ? { on_page: onPageClips() } : {}) };
+  }
   const ui = out.ui || {};
   if (ui.go) frame.src = ui.go;
   else if (ui.reload || ui.wait) frame.contentWindow.location.reload();
@@ -317,6 +532,11 @@ async function openThing(what) {
   };
   const key = what.toLowerCase().trim();
   if (places[key]) { frame.src = places[key][0]; return { result: `Opened ${places[key][1]}.` }; }
+  if (/^(the )?(editor|timeline)$/.test(key)) {
+    if (!film()) return { result: 'No film is open: open one first, then the editor.' };
+    frame.src = `/p/${film()}/edit`;
+    return { result: 'Opened the editor: the film on a timeline, to cut by hand.' };
+  }
   const r = await fetch('/api/cello/act', { method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf }, body: JSON.stringify({ name: 'list_films', args: {} }) });
   const films = (await r.json()).result || [];
@@ -350,9 +570,10 @@ function drive(what, seconds) {
 // the light that reaches from Cello to what it is working on
 function point(part, ms = 3000) {
   const d = doc();
-  const el = d && d.querySelector(PARTS[part] || part);
+  let el = null;
+  try { el = d && d.querySelector(PARTS[part] || part); } catch { el = null; }
   if (!el) return false;
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  reveal(el);
   S.target = el;
   S.targetUntil = performance.now() + ms + 600;
   if (!glows.has(el)) glows.set(el, { shadow: el.style.boxShadow, transition: el.style.transition });
@@ -426,6 +647,7 @@ async function watch() {
       const j = await r.json();
       S.since = j.now;
       if (r.ok && j.events.length) {
+        note('event', j.events.join(' | '));
         orb.notice();
         if (S.watch) frame.contentWindow.location.reload();
         S.watch = false;
@@ -546,6 +768,7 @@ typer.addEventListener('submit', (e) => {
   e.preventDefault();
   const t = typer.t.value.trim();
   if (!t) return;
+  if (S.blocked) { show(S.blocked, 30000); return; } // it can't hear or speak until Google carries the voice again
   typer.t.value = '';
   typer.hidden = true; // said; Cello answers out loud
   line('you', t);
@@ -612,3 +835,131 @@ if (localStorage.getItem('cello-on') === '1') { // it was on: it comes back by i
 }
 window.addEventListener('pointerdown', unlock, true);
 window.addEventListener('keydown', unlock, true);
+
+// ---------------------------------------------------------------- Cello's hands: the desk beside it, the question card
+// What its work sessions are doing (the request, live progress, a stop), what they finished, the film's choices; and
+// any question to the person as a card of options, answered by a tap or by voice (Cello asks it out loud too).
+const desk = $('.cello-desk', root);
+const deskTab = $('[data-desk-open]', root);
+const askCard = $('.cello-ask', root);
+const seenAsk = { id: '' };
+let folded = sessionStorage.getItem('cello-desk') === 'folded';
+
+function ago(t, now) {
+  const s = Math.max(0, Math.round(now - t));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s` : `${Math.floor(s / 3600)}h`;
+}
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+async function answer(id, text, picked) {
+  askCard.classList.add('sending');
+  try {
+    const r = await fetch('/api/work/answer', { method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf }, body: JSON.stringify({ id, text }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    askCard.hidden = true;
+    note('you', `[card] ${text}`);
+    if (picked) hidden(`(Note, not them talking: on the card they picked "${text}". Acknowledge it in a few words; the answer is already passed on.)`);
+  } catch (err) {
+    show(`That answer didn't go through: ${err.message}`);
+  } finally {
+    askCard.classList.remove('sending');
+  }
+}
+
+function drawAsk(w) {
+  if (!w) { askCard.hidden = true; seenAsk.id = ''; return; }
+  if (seenAsk.id === w.id && !askCard.hidden) return;
+  seenAsk.id = w.id;
+  $('.ask-lead', askCard).textContent = w.say || '';
+  $('.ask-q', askCard).textContent = w.question || '';
+  const box = $('.ask-options', askCard);
+  box.replaceChildren();
+  (w.options || []).forEach((o, k) => {
+    const b = el('button', k === 0 ? 'ask-opt best' : 'ask-opt', o);
+    b.type = 'button';
+    b.addEventListener('click', () => answer(w.id, o, true));
+    box.append(b);
+  });
+  const own = $('.ask-own', askCard);
+  own.onsubmit = (e) => { e.preventDefault(); const t = own.t.value.trim(); if (t) { own.t.value = ''; answer(w.id, t, true); } };
+  askCard.hidden = false;
+  orb.notice();
+}
+
+function drawDesk(state) {
+  const now = state.now;
+  const work = state.work || [];
+  const live = work.filter((w) => w.status === 'running' || w.status === 'queued');
+  const asking = work.find((w) => w.status === 'asking');
+  const done = work.filter((w) => ['done', 'failed'].includes(w.status) && w.kind !== 'system').slice(0, 3);
+  const nowBox = $('.desk-now', desk);
+  nowBox.replaceChildren();
+  live.forEach((w) => {
+    const item = el('div', `desk-task ${w.status}`);
+    item.append(el('p', 'desk-what', w.kind === 'scene' ? `Designing a scene: ${w.request}` : w.request));
+    item.append(el('p', 'desk-progress', w.status === 'queued' ? 'Next, after the current task' : (w.progress || 'Thinking…')));
+    const foot = el('p', 'desk-foot', w.status === 'queued' ? '' : `working ${ago(w.created, now)}`);
+    if (w.kind === 'agent') {
+      const stop = el('button', 'desk-stop', 'Stop');
+      stop.type = 'button';
+      stop.addEventListener('click', async () => {
+        await fetch('/api/work/stop', { method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf }, body: JSON.stringify({ id: w.id }) });
+        hidden('(Note, not them talking: they stopped the task in progress. Say it is stopped, in a few words.)');
+      });
+      foot.append(stop);
+    }
+    item.append(foot);
+    nowBox.append(item);
+  });
+  nowBox.hidden = !live.length;
+  const doneBox = $('.desk-done', desk);
+  const list = $('ul', doneBox);
+  list.replaceChildren(...done.map((w) => el('li', w.status, w.say || w.request)));
+  doneBox.hidden = !done.length;
+  const choiceBox = $('.desk-choices', desk);
+  const dl = $('dl', choiceBox);
+  dl.replaceChildren();
+  (state.choices || []).forEach((c) => { dl.append(el('dt', '', c.what), el('dd', '', c.value)); });
+  choiceBox.hidden = !(state.choices || []).length;
+  const anything = live.length || done.length || (state.choices || []).length;
+  desk.hidden = !anything || folded;
+  deskTab.hidden = !anything || !folded;
+  root.classList.toggle('desk-on', !desk.hidden);
+  drawAsk(asking);
+  S.handsBusy = live.some((w) => w.status === 'running');
+}
+
+$('[data-desk-fold]', desk).addEventListener('click', () => { folded = true; sessionStorage.setItem('cello-desk', 'folded'); desk.hidden = true; deskTab.hidden = false; });
+deskTab.addEventListener('click', () => { folded = false; sessionStorage.removeItem('cello-desk'); deskTab.hidden = true; desk.hidden = false; });
+
+// what Cello's hands did on the screen (a film opened, a draft on its way), shown as it happens, voice on or off
+const hands = { since: 0, wait: '' };
+async function deskLoop() {
+  try {
+    const pid = film() || '';
+    const r = await fetch(`/api/work/state?pid=${pid}&since=${hands.since || 1e12}`, { credentials: 'same-origin' });
+    if (r.ok) {
+      const j = await r.json();
+      hands.since = j.now;
+      drawDesk(j);
+      for (const ui of j.ui || []) {
+        if (ui.go) frame.src = ui.go;
+        else if (ui.reload && (!ui.pid || ui.pid === pid)) frame.contentWindow.location.reload();
+        if (ui.wait) hands.wait = ui.pid || pid; // shown once it's made
+      }
+      if (hands.wait && hands.wait === pid && !j.busy) {
+        hands.wait = '';
+        frame.contentWindow.location.reload();
+      }
+    }
+  } catch { /* next time */ }
+  setTimeout(deskLoop, 2500);
+}
+deskLoop();

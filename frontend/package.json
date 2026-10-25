@@ -13,10 +13,7 @@
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@fontsource/instrument-serif": "^5.3.0",
     "gsap": "^3.13.0",
-    "lenis": "^1.1.20",
-    "mediabunny": "^1.61.6",
-    "postprocessing": "^6.36.4",
-    "three": "^0.169.0"
+    "mediabunny": "^1.61.6"
   },
   "devDependencies": {
     "vite": "^5.4.11"

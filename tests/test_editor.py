@@ -10,11 +10,10 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 
 import pytest
-from fastapi.testclient import TestClient
 
 from vidosuper.perceive import prep as prep_module
 from vidosuper.perceive.transcribe import Transcript
-from vidosuper.studio import accounts, agent
+from vidosuper.studio import agent
 from vidosuper.studio import spec as specs
 from vidosuper.studio.brain.context import BeatMap, ClipFacts
 from vidosuper.studio.brain.core import LocalBrain, StoryContext
@@ -22,8 +21,9 @@ from vidosuper.studio.brain.schemas import (DesignPlan, EditorAsk, EditorOffer, 
                                             PoolMoment, SpecAdd)
 from vidosuper.studio.service import ActionError, Studio, ask_text
 from vidosuper.studio.settings import load_settings
-from vidosuper.studio.web.app import create_app
 from vidosuper.studio.worker import Worker
+
+from conftest import local_client, person
 
 
 @pytest.fixture()
@@ -38,8 +38,7 @@ def studio(tmp_path, monkeypatch):
 
 
 def _friend(studio: Studio, name: str) -> dict:
-    token = accounts.create_invite(studio.db, studio.s, name)
-    return accounts.register(studio.db, token, name, "a long password 2")
+    return person(studio.db)
 
 
 def _project(**kw) -> dict:
@@ -279,26 +278,6 @@ def test_a_step_that_breaks_is_said_in_the_conversation_without_our_internals(st
     assert last["body"]["trouble"] and "s06" not in last["body"]["text"] and "owner has been told" in last["body"]["text"]
 
 
-def test_a_renderers_check_in_arrives_after_the_step_it_belongs_to(monkeypatch):
-    from vidosuper.studio import remote
-
-    calls = []
-    monkeypatch.setattr(remote, "_call", lambda http, method, url, **kw: calls.append(kw["json"]) or NS(
-        json=lambda: {"id": 1, "rows": []}))
-    db = remote.RemoteDB(None)
-    db.hold = True
-    db.set_stage("p1", "done")
-    assert db.post_message("p1", "u1", "editor", "checkin", {"text": "Version 2 is ready."}) is None and not calls
-    db.release()
-    assert [c["sql"].split()[0] for c in calls] == ["UPDATE", "INSERT"]  # the stage first, then its check-in
-
-
-# ---------------------------------------------------------------- a whole film, made by talking to the editor
-
-def _csrf(html: str) -> str:
-    return re.search(r'name="csrf" content="([^"]+)"', html).group(1)
-
-
 def _upload(client, csrf, pid, path: Path, kind: str, chunk: int = 300_000):
     data = path.read_bytes()
     up = client.post(f"/api/p/{pid}/uploads", json={"kind": kind, "name": path.name, "size": len(data)},
@@ -321,10 +300,7 @@ def _drain(studio: Studio, limit: int = 10) -> None:
 def test_a_film_made_by_talking_to_your_editor(studio, media, monkeypatch):
     monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake",
                                                                                             language="en"))
-    friend = _friend(studio, "Ana")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Ana", "password": "a long password 2"})
-    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client, friend, csrf = local_client(studio)
     client.post("/welcome", data={"csrf": csrf, "pace": "fast", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Beach", "shapes": "16:9", "length": 15, "intent": "fun"},
                     follow_redirects=False)
@@ -422,7 +398,8 @@ def test_a_film_made_by_talking_to_your_editor(studio, media, monkeypatch):
     # the panel alone, for the page to swap in; signed out it is refused
     panel = client.get(f"/p/{pid}/editor")
     assert panel.status_code == 200 and 'id="editor"' in panel.text and "Version 3 is ready" in panel.text
-    assert TestClient(create_app(studio)).get(f"/p/{pid}/editor").status_code == 401
+    stranger, _, _ = local_client(studio, peer="10.0.0.5")  # another machine gets nothing
+    assert stranger.get(f"/p/{pid}/editor").status_code in (401, 403)
     # their conversation is theirs: in their export, and gone with the film
     talk = studio.export(friend)["projects"][0]["conversation"]
     assert any(x["text"] == "swap 1 and 2" for x in talk)

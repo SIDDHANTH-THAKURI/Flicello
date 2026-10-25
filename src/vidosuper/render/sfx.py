@@ -135,7 +135,10 @@ def pro_path(name: str, library: Path) -> Path | None:
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             audio = r.read()
-    except Exception:  # noqa: BLE001 - the synthesized effect plays instead
+    except Exception as exc:  # noqa: BLE001 - the synthesized effect plays instead (and the reason is noted)
+        from ..local import health
+
+        health.failed("elevenlabs", exc)
         return None
     if len(audio) < 1000:
         return None

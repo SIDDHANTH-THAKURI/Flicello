@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Flicello on this computer. The first run sets up its Python environment, builds the app and the motion engine,
+# then opens http://127.0.0.1:8765/connect, where everything else (models, keys, Blender) is checked and connected.
+# FLICELLO_VENV: where the Python environment lives (default: .venv here).
+set -euo pipefail
+cd "$(dirname "$0")"
+venv="${FLICELLO_VENV:-$PWD/.venv}"
+if [ -x "$venv/Scripts/python.exe" ]; then py="$venv/Scripts/python.exe"; else py="$venv/bin/python"; fi
+
+if [ ! -x "$py" ]; then
+  echo "Setting up Flicello's Python environment in $venv ..."
+  base="$(command -v python3.12 || command -v python3 || command -v python || true)"
+  if [ -z "$base" ]; then echo "Flicello needs Python 3.11 or newer: https://www.python.org/downloads/"; exit 1; fi
+  "$base" -m venv "$venv"
+  if [ -x "$venv/Scripts/python.exe" ]; then py="$venv/Scripts/python.exe"; else py="$venv/bin/python"; fi
+fi
+if ! "$py" -c "import vidosuper.studio.web.app, keyring" 2>/dev/null; then
+  echo "Installing Flicello's Python packages ..."
+  "$py" -m pip install --upgrade pip --quiet
+  "$py" -m pip install -e ".[ai,studio]"
+fi
+
+if ! command -v npm >/dev/null 2>&1; then echo "Flicello needs Node.js 22 or newer: https://nodejs.org"; exit 1; fi
+if [ ! -f src/vidosuper/studio/web/static/dist/manifest.json ]; then
+  echo "Building Flicello's pages ..."
+  (cd frontend && npm ci --no-audit --no-fund && npm run build)
+fi
+if [ ! -e motion/node_modules/.bin/hyperframes ]; then
+  echo "Installing the motion engine ..."
+  (cd motion && npm ci --no-audit --no-fund && npx hyperframes browser ensure)
+fi
+
+exec "$py" -m vidosuper flicello "$@"

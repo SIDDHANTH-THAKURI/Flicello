@@ -520,7 +520,7 @@ def test_a_client_reviews_a_version_without_an_account(studio_film):
     client.post(f"/p/{pid}/review", data={"csrf": csrf})
     token = studio.db.one("SELECT token FROM review_links WHERE project_id=?", (pid,))["token"]
     assert f"/r/{token}" in client.get(f"/p/{pid}").text
-    guest = TestClient(create_app(studio))  # nobody signed in
+    guest = TestClient(create_app(studio), base_url="http://127.0.0.1:8765", client=("10.0.0.7", 50000))  # no session
     page = guest.get(f"/r/{token}")
     assert page.status_code == 200 and "Beach" in page.text and page.headers["x-robots-tag"].startswith("noindex")
     assert guest.get(f"/r/{token}/video").status_code == 200
@@ -565,7 +565,7 @@ def test_a_brand_kit_dresses_every_graphic(studio_film):
 
 def test_the_timeline_shows_the_film_and_takes_changes_by_hand(studio_film):
     studio, client, csrf, pid, work = studio_film
-    assert 'data-timeline="' in client.get(f"/p/{pid}").text
+    assert f'href="/p/{pid}/edit"' in client.get(f"/p/{pid}").text  # the way into the editor
     tl = client.get(f"/api/p/{pid}/timeline?which=1").json()
     assert tl["shots"] and tl["shots"][0]["n"] == 1 and tl["shots"][-1]["end"] == pytest.approx(tl["duration"], abs=0.1)
     assert all(a["end"] <= b["start"] + 0.6 for a, b in zip(tl["shots"], tl["shots"][1:]))

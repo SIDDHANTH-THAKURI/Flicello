@@ -1,5 +1,5 @@
-"""`vido studio ...`: run the studio (web app + worker), manage invites, and run a whole video from the
-command line to measure what one costs."""
+"""`vido studio ...`: run the studio (web app + worker) on this computer, and run a whole video from the command
+line to measure what one costs."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-studio_app = typer.Typer(no_args_is_help=True, help="The studio: a web app where invited people make their own videos.")
+studio_app = typer.Typer(no_args_is_help=True, help="The studio: Flicello's web app on this computer.")
 console = Console(width=150)
 
 
@@ -39,8 +39,7 @@ def serve(host: str = typer.Option(None, help="Address to listen on (default fro
           port: int = typer.Option(None, help="Port (default 8765)"),
           worker: bool = typer.Option(True, "--worker/--no-worker", help="Run the job worker in this process too"),
           reload: bool = typer.Option(False, "--reload", help="Local testing: restart by itself when the code changes")) -> None:
-    """The web app (and, by default, the worker). Listens on 127.0.0.1 only unless told otherwise: put it
-    behind Tailscale (`tailscale serve`) rather than opening a port to the internet."""
+    """The web app (and, by default, the worker), on this computer only (127.0.0.1)."""
     import uvicorn
 
     from .service import Studio
@@ -60,8 +59,6 @@ def serve(host: str = typer.Option(None, help="Address to listen on (default fro
     _logging()
     s = studio_settings()
     studio = Studio(s)
-    if not studio.db.one("SELECT id FROM users WHERE role='owner'"):
-        console.print("[yellow]No owner account yet.[/] Make one with: vido studio invite --owner")
     if worker:
         Worker(studio).start_thread()
     console.print(f"[green]{escape(s.name)}[/] on http://{host or s.host}:{port or s.port}  (data: {escape(str(s.home))})")
@@ -78,48 +75,6 @@ def worker_cmd() -> None:
 
     _logging()
     Worker(Studio(studio_settings())).run()
-
-
-@studio_app.command("remote-worker")
-def remote_worker_cmd(server: str = typer.Option("https://flicello.com", help="The studio this machine renders for"),
-                      token: str = typer.Option("", help="Defaults to VIDO_STUDIO_WORKER_TOKEN (the repo's .env)"),
-                      lane: str = typer.Option("split", help="split (whole films here + a second process for "
-                                                             "everything short), all, long or quick"),
-                      parent: int = typer.Option(0, hidden=True, help="Stop when this process does")) -> None:
-    """Render the site's videos on this machine: claims jobs over HTTPS, mirrors each project's files, runs the job
-    and sends the results back (see remote.py). The server never connects here. Stop with Ctrl+C."""
-    import logging
-
-    from .remote import RemoteWorker, follow_parent, run_split
-
-    logging.basicConfig(level=logging.INFO, format=f"%(asctime)s %(levelname)s [{lane}] %(name)s: %(message)s")
-    if parent:
-        follow_parent(parent)
-    console.print(f"[green]Rendering for {escape(server)}[/] ({escape(lane)} lane)")
-    if lane == "split":
-        run_split(server, token)
-        return
-    if lane not in ("all", "long", "quick"):
-        raise typer.BadParameter("lane: split, all, long or quick")
-    RemoteWorker(server, token, lane=lane).run()
-
-
-@studio_app.command("invite")
-def invite(label: str = typer.Argument("", help="Their first name (shown on the welcome page)"),
-           owner: bool = typer.Option(False, "--owner", help="An invite for the owner's own account (the first one)"),
-           base: str = typer.Option("", help="The address people open, e.g. https://studio.tail1234.ts.net")) -> None:
-    """Make a one-time invite link (valid 7 days). Friends can also be invited from the admin page."""
-    from .accounts import create_invite
-    from .service import Studio
-    from .settings import settings as studio_settings
-
-    s = studio_settings()
-    studio = Studio(s)
-    if owner and studio.db.one("SELECT id FROM users WHERE role='owner'"):
-        raise typer.BadParameter("there is already an owner account")
-    token = create_invite(studio.db, s, label, "owner" if owner else "friend")
-    host = base.rstrip("/") or f"http://{s.host}:{s.port}"
-    console.print(f"Invite link (works once, for {s.invite_days} days):\n{host}/join/{token}")
 
 
 @studio_app.command("status")
@@ -202,30 +157,6 @@ def bench(project: str = typer.Option(None, help="Only this project id")) -> Non
         table.add_row(r["project"], r["pace"], str(r["shots"]), str(r["mean_shot"]), f"{r['under_half_second']:.0%}",
                       str(r["distinct_windows"]), str(r["mirrored"]), r["hits"] or "-", str(r["rated_liked"]))
     console.print(table)
-
-
-@studio_app.command("deploy")
-def deploy_cmd(branch: str = typer.Argument(..., help="The improvement branch to put live"),
-               worktree: Path = typer.Option(None, help="Its worktree (where the tests run)"),
-               wait: float = typer.Option(45.0, help="Minutes to wait for running videos to finish")) -> None:
-    """Put an improvement branch live if every gate passes (see studio/deploy.py); undone by itself if the site does
-    not come back."""
-    import sys
-
-    from ..config import REPO_ROOT
-    from .alerts import alert
-    from .deploy import DeployRefused, deploy
-    from .service import Studio
-    from .settings import settings as studio_settings
-
-    studio = Studio(studio_settings())
-    try:
-        report = deploy(studio, REPO_ROOT, branch, worktree or REPO_ROOT, sys.executable, wait)
-        alert(studio.db, studio.s, "improve", report, level="info")
-        console.print(escape(report))
-    except DeployRefused as exc:
-        alert(studio.db, studio.s, "improve", f"Not deployed: {exc}", level="warning")
-        console.print(f"[yellow]Not deployed:[/] {escape(str(exc))}")
 
 
 @studio_app.command("notify")

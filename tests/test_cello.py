@@ -3,15 +3,13 @@ and its tools act with the same ownership checks as the page's buttons."""
 
 from __future__ import annotations
 
-import re
-
 import pytest
-from fastapi.testclient import TestClient
 
-from vidosuper.studio import accounts, cello
+from vidosuper.studio import cello
 from vidosuper.studio.service import Studio
 from vidosuper.studio.settings import load_settings
-from vidosuper.studio.web.app import create_app
+
+from conftest import local_client, person
 
 
 @pytest.fixture()
@@ -20,14 +18,6 @@ def studio(tmp_path, monkeypatch):
     s = load_settings(tmp_path / "home", {"brain": "local", "owner_brain": "local"})
     s.limits.min_free_gb = 0.0
     return Studio(s)
-
-
-def _signed_in(studio: Studio, name: str) -> tuple[TestClient, dict, str]:
-    user = accounts.register(studio.db, accounts.create_invite(studio.db, studio.s, name), name, "a long password 9")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": name, "password": "a long password 9"}, follow_redirects=False)
-    csrf = re.search(r'name="csrf" content="([^"]+)"', client.get("/cello").text).group(1)
-    return client, user, csrf
 
 
 def p_stage(studio: Studio, p: dict) -> str:
@@ -45,7 +35,7 @@ def test_every_tool_cello_is_told_about_is_one_it_can_use():
 
 
 def test_server_tools_all_answer(studio):
-    user = accounts.register(studio.db, accounts.create_invite(studio.db, studio.s, "Ana"), "Ana", "a long password 9")
+    user = person(studio.db)
     for name in [t["name"] for t in cello.TOOLS if t["name"] not in cello.BROWSER]:
         try:
             out = cello.act(studio, user, None, name, {})
@@ -57,31 +47,33 @@ def test_server_tools_all_answer(studio):
 
 
 def test_the_shell_only_holds_flicellos_own_pages(studio):
-    client, _, _ = _signed_in(studio, "Ana")
+    client, _, _ = local_client(studio)
     for bad in ("https://evil.example/x", "//evil.example/x", "/cello?to=/cello", "javascript:alert(1)"):
         r = client.get("/cello", params={"to": bad})
         assert r.status_code == 200 and 'src="/"' in r.text, bad
     r = client.get("/cello", params={"to": "/style"})
     assert 'src="/style"' in r.text
-    r = TestClient(create_app(studio)).get("/cello", follow_redirects=False)
-    assert r.status_code == 303  # signed out: to sign-in, not the shell
-    assert "frame-ancestors 'self'" in r.headers["content-security-policy"]
+    stranger, _, _ = local_client(studio, peer="10.0.0.5")  # another machine: no session, no shell
+    r = stranger.get("/cello", follow_redirects=False)
+    assert r.status_code == 403 and 'src="/"' not in r.text
+    assert "frame-ancestors 'self'" in client.get("/cello").headers["content-security-policy"]
     assert "wss://generativelanguage.googleapis.com" in client.get("/").headers["content-security-policy"]
 
 
 def test_no_voice_token_without_csrf_or_a_key(studio, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    client, _, csrf = _signed_in(studio, "Ana")
+    client, _, csrf = local_client(studio)
     assert client.post("/api/cello/token").status_code == 403
     r = client.post("/api/cello/token", headers={"X-CSRF": csrf})
     assert r.status_code == 503 and "GEMINI_API_KEY" in r.json()["detail"]
-    assert TestClient(create_app(studio)).post("/api/cello/token", headers={"X-CSRF": csrf}).status_code in (401, 403)
+    stranger, _, _ = local_client(studio, peer="10.0.0.5")
+    assert stranger.post("/api/cello/token", headers={"X-CSRF": csrf}).status_code in (401, 403)
 
 
 def test_cello_cannot_touch_someone_elses_film(studio):
-    owner = accounts.register(studio.db, accounts.create_invite(studio.db, studio.s, "Bo"), "Bo", "a long password 9")
-    theirs = studio.create_project(owner, "Bo's film", "9:16", 15, "fun")
-    client, user, csrf = _signed_in(studio, "Ana")
+    other = person(studio.db, "Bo", "friend")  # someone else's film in the same database stays out of reach
+    theirs = studio.create_project(other, "Bo's film", "9:16", 15, "fun")
+    client, user, csrf = local_client(studio)
     mine = studio.create_project(user, "Ana's film", "9:16", 15, "fun")
     r = client.post("/api/cello/act", headers={"X-CSRF": csrf}, json={"pid": theirs["id"], "name": "discard", "args": {}})
     assert r.json()["result"] == "That film isn't theirs or doesn't exist."
@@ -97,7 +89,7 @@ def test_cello_cannot_touch_someone_elses_film(studio):
 
 
 def test_cello_hears_when_a_step_ends(studio):
-    user = accounts.register(studio.db, accounts.create_invite(studio.db, studio.s, "Ana"), "Ana", "a long password 9")
+    user = person(studio.db)
     p = studio.create_project(user, "Ana's film", "9:16", 15, "fun")
     since = cello.now() - 1
     studio.db.run("INSERT INTO jobs (project_id, kind, status, error, created, finished) VALUES (?, 'render', 'failed', "
@@ -105,3 +97,24 @@ def test_cello_hears_when_a_step_ends(studio):
     said = cello.events(studio, p, since)
     assert said == ["[event] the render step failed: ffmpeg ran out of disk"]
     assert cello.events(studio, p, cello.now() + 5) == []
+
+
+def test_nothing_new_means_nothing_to_say_even_while_building(studio):
+    user = person(studio.db)
+    p = studio.create_project(user, "Ana's film", "9:16", 15, "fun")
+    studio._set_info(p, autopilot=True)
+    assert cello.events(studio, p, cello.now() - 60) == []  # no step ended: Cello stays quiet (no note every 4 s)
+    studio.db.run("INSERT INTO jobs (project_id, kind, status, created, finished) VALUES (?, 'sample', 'done', ?, ?)",
+                  (p["id"], cello.now(), cello.now()))
+    studio.db.run("INSERT INTO jobs (project_id, user_id, kind, status, progress, created) VALUES (?, ?, 'render', "
+                  "'running', 0.1, ?)", (p["id"], user["id"], cello.now()))
+    said = cello.events(studio, p, cello.now() - 60)
+    assert said[0] == "[event] the sample step finished" and "not ready yet" in said[-1]
+
+
+def test_the_log_keeps_their_conversation_with_cello(studio):
+    client, user, csrf = local_client(studio)
+    lines = [{"who": "you", "text": "make it hype"}, {"who": "cello", "text": "Done."}, {"who": "tool", "text": "style"},
+             {"who": "bogus", "text": "x"}]
+    assert client.post("/api/cello/log", headers={"X-CSRF": csrf}, json={"lines": lines}).json()["kept"] == 3
+    assert client.post("/api/cello/log", json={"lines": lines}).status_code == 403  # no CSRF

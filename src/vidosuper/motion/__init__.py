@@ -26,7 +26,7 @@ from pathlib import Path
 from ..config import REPO_ROOT
 
 HERE = Path(__file__).parent / "blocks"
-BLOCKS = ("title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent", "logo")
+BLOCKS = ("title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent", "logo", "thing")
 RUNTIME = ("motion.js", "boot.js")
 ENGINE = REPO_ROOT / "motion"
 ENGINE_VERSION = "0.8.185"
@@ -120,6 +120,28 @@ def render(block: str, variables: dict, width: int, height: int, fps: int, durat
         return out
     finally:
         shutil.rmtree(project, ignore_errors=True)
+
+
+def snapshot(block: str, variables: dict, width: int, height: int, duration: float, times: list[float], out: Path,
+             timeout: float = 240.0) -> list[Path]:
+    """The block's frames at these times (seconds from its start, in order), as transparent PNGs: a graphic seen at
+    an instant without rendering all of it (a draft's stills, work/frames.py)."""
+    shutil.rmtree(out, ignore_errors=True)
+    project = out / "page"
+    project.mkdir(parents=True)
+    (project / "index.html").write_text(page(block, {**variables}, width, height, duration), encoding="utf-8")
+    for name in (*RUNTIME, f"{block}.js"):
+        shutil.copyfile(HERE / name, project / name)
+    shots = out / "frames"
+    env = {**os.environ, "HYPERFRAMES_NO_TELEMETRY": "1", "DO_NOT_TRACK": "1"}
+    at = ",".join(f"{max(0.0, min(duration - 0.001, t)):.4f}" for t in times)
+    proc = subprocess.run([*engine(), "snapshot", str(project), "--at", at, "--no-end", "--json", "--describe", "false",
+                           "-o", str(shots)], capture_output=True, timeout=timeout, env=env, cwd=str(project))
+    drawn = sorted(shots.glob("frame-*.png"))
+    if proc.returncode != 0 or len(drawn) != len(times):
+        tail = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace")[-800:]
+        raise MotionError(f"the {block} graphic could not be drawn: {tail}")
+    return drawn
 
 
 def _trim(cache: Path) -> None:

@@ -89,6 +89,8 @@ def pinned(plan: DesignPlan, edl: dict | None, tall: dict | None = None) -> Desi
         shots.append(shot.model_copy(update=upd))
     music = edl.get("music") or {}
     start = music.get("start") if music.get("path") else None
+    if start is not None and plan.music is not None:  # the beat grid it was cut on, without their slide of the song
+        start = float(start) + plan.music.slide
     return plan.model_copy(update={"plan": shots, "start_at": round(float(start), 3) if start is not None else plan.start_at})
 
 
@@ -164,15 +166,15 @@ class Applied:
     touched: set[int] = field(default_factory=set)  # indexes in plan.plan that changed (the rest are as they were)
 
 
-GRAPHIC_OPS = ("title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent")
+GRAPHIC_OPS = ("title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent", "thing")
 TITLE_STYLES = ("rise", "slam", "mask", "split")
 CAPTION_STYLES = {"pop": "the word being said lights up", "karaoke": "the words light up as they're said",
                   "box": "a colour block on the word being said"}
 STYLES = {"title": TITLE_STYLES, "transition": ("panels", "iris", "bars", "flash"), "callout": ("circle", "box", "arrow"),
           "accent": ("brackets", "sweep", "leak", "lines")}
 WHAT = {"title": "title", "lowerthird": "name", "transition": "transition", "kinetic": "beat words",
-        "callout": "callout", "route": "route", "accent": "finish"}
-BEATS = {"title": 4.0, "lowerthird": 6.0, "callout": 6.0, "route": 8.0, "accent": 4.0, "transition": 1.0}
+        "callout": "callout", "route": "route", "accent": "finish", "thing": "thing"}
+BEATS = {"title": 4.0, "lowerthird": 6.0, "callout": 6.0, "route": 8.0, "accent": 4.0, "transition": 1.0, "thing": 6.0}
 FOLLOW_PICTURE = ("lowerthird", "callout", "accent")  # the rest keep their place in the film
 
 
@@ -186,8 +188,33 @@ def article(word: str) -> str:
     return ("an " if word[:1].lower() in "aeiou" else "a ") + word
 
 
+def sized(asked: float | None, was: float = 1.0) -> float:
+    """How big a graphic is asked to be against the usual, kept to what still reads and fits (0.4 to 3)."""
+    return round(min(3.0, max(0.4, float(asked))), 2) if asked else was
+
+
+def look_words(scale: float, place: str) -> str:
+    """'bigger, at the top': a graphic's size and place as the lines they read before a change is made say them."""
+    size = ("much bigger" if scale >= 1.5 else "bigger" if scale > 1.05 else "much smaller" if scale <= 0.65
+            else "smaller" if scale < 0.95 else "")
+    where = {"top": "at the top", "middle": "in the middle", "bottom": "at the bottom"}.get(place, "")
+    return ", ".join(x for x in (size, where) if x)
+
+
+def change_words(was: PlanGraphic, scale: float, place: str) -> str:
+    """How a graphic there changed, as they read it before it is made: 'smaller, still at the top'."""
+    size = "" if abs(scale - was.scale) < 0.01 else "back to the usual size" if abs(scale - 1.0) < 0.01 else \
+        "bigger" if scale > was.scale else "smaller"
+    where = {"top": "at the top", "middle": "in the middle", "bottom": "at the bottom"}.get(place, "")
+    if place == was.place:
+        where = f"still {where}" if where and size else ""
+    elif not where:
+        where = "back in its usual place"
+    return ", ".join(x for x in (size, where) if x) or "as it was"
+
+
 def graphic_op(op: ChangeOp, marks: list[PlanGraphic], total: int, done: Applied) -> list[PlanGraphic]:
-    """A graphic added or taken away (shot numbers as in the version they watched)."""
+    """A graphic added, taken away, made bigger or smaller or moved (shot numbers as in the version they watched)."""
     kind = op.op
     if kind == "captions":
         kept = [g for g in marks if g.kind != "captions"]
@@ -197,10 +224,19 @@ def graphic_op(op: ChangeOp, marks: list[PlanGraphic], total: int, done: Applied
             else:
                 done.lines.append("The captions are taken away")
             return kept
-        style = op.style if op.style in CAPTION_STYLES else "pop"
-        done.lines.append(f"Captions of what is said, word by word ({CAPTION_STYLES[style]})")
-        return [*kept, PlanGraphic(kind="captions", style=style)]
+        was = next((g for g in marks if g.kind == "captions"), None)
+        style = op.style if op.style in CAPTION_STYLES else was.style if was and was.style in CAPTION_STYLES else "pop"
+        scale, place = sized(op.scale, was.scale if was else 1.0), op.place or (was.place if was else "auto")
+        look = look_words(scale, place)
+        if was and op.style not in CAPTION_STYLES and (op.scale or op.place):  # the captions there, resized or moved
+            done.lines.append(f"The captions are {change_words(was, scale, place)}")
+        else:
+            done.lines.append(f"Captions of what is said, word by word ({CAPTION_STYLES[style]}"
+                              + (f"; {look}" if look else "") + ")")
+        return [*kept, PlanGraphic(kind="captions", style=style, scale=scale, place=place)]
     what = WHAT[kind]
+    if kind == "thing" and not op.off:
+        return thing_op(op, marks, total, done)
     if op.off:
         gone = [g for g in marks if g.kind == kind and g.shot == op.shot] or [g for g in marks if g.kind == kind]
         if not gone:
@@ -208,6 +244,18 @@ def graphic_op(op: ChangeOp, marks: list[PlanGraphic], total: int, done: Applied
             return marks
         done.lines.append(f"The {what}{'s are' if len(gone) > 1 else ' is'} taken away")
         return [g for g in marks if all(g is not x for x in gone)]
+    if (op.scale or op.place) and not op.text.strip() and not op.want.strip():
+        # bigger, smaller or somewhere else: the ones already there (on that shot, else every one of that kind)
+        hit = [g for g in marks if g.kind == kind and g.shot == op.shot] or [g for g in marks if g.kind == kind]
+        if not hit:
+            done.skipped.append(f"there is no {what} to " + ("resize" if op.scale else "move"))
+            return marks
+        out = [g.model_copy(update={"scale": sized(op.scale, g.scale), "place": op.place or g.place})
+               if any(g is x for x in hit) else g for g in marks]
+        now = next(g for g in out if g.kind == kind and g.shot == hit[0].shot)
+        done.lines.append(f"The {what}{'s are' if len(hit) > 1 else ' is'} {change_words(hit[0], now.scale, now.place)}"
+                          + (f" (shot {hit[0].shot})" if len(hit) == 1 else ""))
+        return out
     text = " ".join(op.text.split())[:80]
     if kind == "route":
         text = "|".join(x.strip() for x in re.split(r"\||\s+(?:to|via|then|and)\s+|,|->|\u2192", text, flags=re.I) if x.strip())
@@ -232,10 +280,41 @@ def graphic_op(op: ChangeOp, marks: list[PlanGraphic], total: int, done: Applied
                        + (f' ("{text}")' if text else ""),
             "route": f"A route drawing itself: {text.replace('|', ' to ')}, from shot {op.shot}",
             "accent": f"{article(style or 'brackets').capitalize()} finish on shot {op.shot}"}[kind]
-    done.lines.append(said)
-    return [g for g in marks if not (g.kind == kind and g.shot == op.shot)] + [PlanGraphic(
+    scale, place = sized(op.scale), op.place or "auto"
+    look = look_words(scale, place)
+    done.lines.append(said + (f" ({look})" if look else ""))
+    say = " ".join(op.say.split())[:80]
+    if say:
+        done.lines[-1] = f'{done.lines[-1]}, as you say "{say}"'
+    return [g for g in marks if not (g.kind == kind and g.shot == op.shot and g.say == say)] + [PlanGraphic(
         kind=kind, shot=op.shot, beats=beats, text=text, sub=" ".join(op.sub.split())[:60], style=style,
-        want=want or (text if kind == "callout" else ""), behind=bool(op.behind) and kind == "title")]
+        want=want or (text if kind == "callout" else ""), behind=bool(op.behind) and kind == "title", say=say,
+        scale=scale, place=place)]
+
+
+def thing_op(op: ChangeOp, marks: list[PlanGraphic], total: int, done: Applied) -> list[PlanGraphic]:
+    """Something they described, made real and moving over the film (a red ball dropping from their head)."""
+    from ..motion.things import bounces_said, read
+
+    want = " ".join((op.want or op.text).split())[:160]
+    if not want:
+        done.skipped.append(f"a thing on shot {op.shot}: what should it be?")
+        return marks
+    if not 1 <= op.shot <= total:
+        done.skipped.append(f"a thing on shot {op.shot}: there are only {total} shots")
+        return marks
+    seen = read(want)
+    motion = op.style if op.style in ("drop", "bounce", "pop", "fly", "float", "orbit", "spin", "shake", "burst", "rain",
+                                      "grow") else seen["motion"] or "pop"
+    anchor = " ".join(op.anchor.split())[:80]
+    say = " ".join(op.say.split())[:80]
+    beats = float(op.beats) if op.beats else (8.0 if motion in ("drop", "bounce", "rain") else BEATS["thing"])
+    done.lines.append(f"{want[:1].upper()}{want[1:]}: drawn and moving ({motion})"
+                      + (f" from {anchor}" if anchor else "") + (f', as you say "{say}"' if say else f" on shot {op.shot}")
+                      + (f', with the words "{op.text}"' if op.text and op.text != want else ""))
+    return [*marks, PlanGraphic(kind="thing", shot=op.shot, beats=beats, text=op.text if op.text != want else "",
+                                style=motion, want=want, anchor=anchor, say=say, count=seen["count"],
+                                bounces=bounces_said(want), accent=seen["color"])]
 
 
 def placed(marks: list[PlanGraphic], slots: list, total: int, keys: dict[int, str] | None = None) -> list[PlanGraphic]:
@@ -387,6 +466,10 @@ def apply(plan: DesignPlan, ctx, ops: list[ChangeOp], earlier: dict[int, DesignP
             beats = span(gone.shot)
             if op.never_again:
                 ban(gone, "removed")
+            if getattr(ctx, "speech", False):  # a talk: what was said there goes, and the film is that much shorter
+                done.lines.append(f"Cut {name(op.shot)}: the film is {beats * period:.1f} s shorter, the words around "
+                                  "it join up")
+                continue
             prev = (op.side or "previous") == "previous" and i > 0 or i >= len(slots)
             nb = slots[i - 1] if prev else slots[i]
             set_beats(nb, span(nb.shot) + beats)
@@ -398,6 +481,15 @@ def apply(plan: DesignPlan, ctx, ops: list[ChangeOp], earlier: dict[int, DesignP
             beats = round(float(op.beats or 1.0) * 2) / 2
             if beats <= 0:
                 done.skipped.append(f"{op.op} shot {op.shot}: give a number of beats")
+                continue
+            if getattr(ctx, "speech", False):  # a talk: the shot's own end moves (its words stay whole at its start)
+                new = span(x.shot) + (beats if op.op == "longer" else -beats)
+                if new < MIN_BEATS:
+                    done.skipped.append(f"shorter shot {op.shot}: it would be gone; cut it instead")
+                    continue
+                set_beats(x, new)
+                done.lines.append(f"{name(op.shot)} {'holds' if op.op == 'longer' else 'ends'} {beats * period:.1f} s "
+                                  f"{'longer' if op.op == 'longer' else 'sooner'}")
                 continue
             side = op.side or "next"
             j = i + 1 if side == "next" else i - 1
@@ -799,7 +891,7 @@ def check_request(req: ChangeRequest, n: int, facts: dict, earlier: dict[int, in
                 problems.append(f"change {k}: there is no earlier version {op.from_version}")
             elif not op.from_shot or not 1 <= op.from_shot <= earlier[op.from_version]:
                 problems.append(f"change {k}: version {op.from_version} has shots 1 to {earlier[op.from_version]}")
-        if op.op in ("title", "lowerthird") and not op.off and not op.text.strip():
+        if op.op in ("title", "lowerthird") and not op.off and not op.text.strip() and not (op.scale or op.place):
             problems.append(f"change {k}: {op.op} needs `text`, the words to show")
         if op.op == "style":
             from . import styles
@@ -864,12 +956,14 @@ def graphics_text(graphics: list[PlanGraphic]) -> list[str]:
     """The film's graphics, one line each, as the change reader and the editor read them."""
     out = []
     for g in graphics:
+        look = look_words(g.scale, g.place)
         if g.kind == "captions":
-            out.append(f"- captions of what is said ({g.style or 'pop'})")
+            out.append(f"- captions of what is said ({g.style or 'pop'}" + (f", {look}" if look else "") + ")")
         else:
             out.append(f"- {WHAT.get(g.kind, g.kind)} on shot {g.shot} for {g.beats:g} beats: "
                        f"\"{g.text}\"" + (f" / \"{g.sub}\"" if g.sub else "") + (f" ({g.style})" if g.style else "")
-                       + (f" on {g.want}" if g.kind == "callout" and g.want else "") + (" behind the person" if g.behind else ""))
+                       + (f" on {g.want}" if g.kind == "callout" and g.want else "") + (" behind the person" if g.behind else "")
+                       + (f", {look}" if look else ""))
     return out
 
 

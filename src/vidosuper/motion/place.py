@@ -266,9 +266,11 @@ def layers(edl: EDL, timeline: Timeline, transcripts: dict | None = None, seen: 
         start, end = max(0.0, g.start), min(total, g.end)
         if end - start < 0.3:
             continue
+        scale = min(3.0, max(0.3, g.scale or 1.0))  # bigger or smaller than the usual, as they asked
         if g.kind == "captions":
             words = [w for w in (g.words or speech_words(timeline, transcripts or {})) if start <= w.s < end]
-            size = CAPTION_SIZE[kind]
+            size = CAPTION_SIZE[kind] * scale
+            per = 3 if scale < 1.35 else 2 if scale < 1.9 else 1  # bigger words, fewer to a phrase: still two lines
             half = size * 1.15  # two lines at most
             y = {"top": top + half + 0.01, "middle": 0.5}.get(g.place, 1 - bottom - half - 0.01)
             # a stretch per run of speech: the long quiet parts between have nothing to render
@@ -282,8 +284,8 @@ def layers(edl: EDL, timeline: Timeline, transcripts: dict | None = None, seen: 
                 a, b = max(start, run[0].s - 0.2), min(end, total, run[-1].e + 0.8)
                 out.append(Layer(g, "captions", round(a, 3), round(b, 3), {**({"font": g.font} if g.font else {}),
                     "words": [{"w": w.w, "s": round(w.s - a, 3), "e": round(min(w.e, b) - a, 3)} for w in run],
-                    "style": g.style or "pop", "y": round(y, 3), "size": size, "side": side,
-                    "accent": g.accent or "#ffd84d"}))
+                    "style": g.style or "pop", "y": round(y, 3), "size": round(size, 4), "side": side,
+                    "accent": g.accent or "#ffd84d", **({"per": per} if per != 3 else {})}))
             continue
         accent = g.accent or "#ffd38a"
         beats = [round(b - start, 3) for b in g.beats if start <= b < end]
@@ -308,12 +310,26 @@ def layers(edl: EDL, timeline: Timeline, transcripts: dict | None = None, seen: 
             out.append(Layer(g, "route", round(start, 3), round(end, 3), {
                 "points": [[round(x, 3), round(y, 3)] for x, y in points], "names": names, "accent": accent}))
             continue
+        if g.kind == "thing":  # what they said, made into something that moves (motion/things.py)
+            from .things import paths
+
+            size = g.size or (0.07 if kind == "tall" else 0.1)
+            floor = 0.9 if kind == "tall" else 0.93  # the ground: near the frame's foot
+            anchor = tuple(g.points[0]) if g.points else (0.5, 0.3)
+            copies, _ = paths(g.style or "pop", anchor, end - start, size, floor, g.count, g.bounces,
+                              seed=int(start * 1000) % 9973)
+            out.append(Layer(g, "thing", round(start, 3), round(end, 3), {
+                "copies": copies, "shape": g.shape, "svg": g.svg, "color": g.accent or "#e8322d", "size": size,
+                "label": g.text, **({"floor": round(floor, 4)} if (g.style or "") in ("drop", "bounce", "rain") else {})}))
+            continue
         if not g.text.strip():
             continue
         if g.kind == "kinetic":
             out.append(Layer(g, "kinetic", round(start, 3), round(end, 3), {
                 **({"font": g.font} if g.font else {}),
-                "text": g.text, "beats": beats, "y": 0.45 if kind == "tall" else 0.5, "size": KINETIC_SIZE[kind],
+                "text": g.text, "beats": beats, "size": round(KINETIC_SIZE[kind] * scale, 4),
+                "y": round({"top": top + KINETIC_SIZE[kind] * scale, "bottom": 1 - bottom - KINETIC_SIZE[kind] * scale}
+                           .get(g.place, 0.45 if kind == "tall" else 0.5), 3),
                 "side": side, "accent": accent}))
             continue
         if g.kind == "callout":
@@ -322,13 +338,13 @@ def layers(edl: EDL, timeline: Timeline, transcripts: dict | None = None, seen: 
                 x, y = g.points[0] if g.points else (0.5, 0.5)
                 track = [[0.0, x, y]]
             out.append(Layer(g, "callout", round(start, 3), round(end, 3), {
-                "track": track, "text": g.text, "sub": g.sub, "style": g.style or "circle", "size": CALLOUT_SIZE[kind],
+                "track": track, "text": g.text, "sub": g.sub, "style": g.style or "circle", "size": round(CALLOUT_SIZE[kind] * scale, 4),
                 "accent": accent}))
             continue
         faces = faces_under(timeline, seen, start, end)
         if g.kind == "title":
             text = title_lines(g.text, kind)
-            size = TITLE_SIZE[kind]
+            size = TITLE_SIZE[kind] * scale
             lines = text.count("\n") + 1
             half = size * (0.55 * lines + (0.6 if g.sub else 0.1))
             lo, hi = top + half, 1 - bottom - half
@@ -346,7 +362,7 @@ def layers(edl: EDL, timeline: Timeline, transcripts: dict | None = None, seen: 
                 "size": size, "side": side, "accent": g.accent or "#ffd38a",
                 **({"scrim": g.scrim} if g.scrim is not None else {})}))
         else:
-            size = NAME_SIZE[kind]
+            size = NAME_SIZE[kind] * scale
             y = 1 - bottom - size * 1.6
             over_captions = any(min(end, b) - max(start, a) > 0 for a, b in captioned)
             if g.place == "top" or (kind == "tall" and over_captions):  # a tall frame's tag goes up top-left

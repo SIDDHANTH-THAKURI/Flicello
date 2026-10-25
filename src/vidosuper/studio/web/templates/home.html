@@ -7,12 +7,6 @@
     <p class="eyebrow-s rise">Your films</p>
     <h1 class="page-title rise d1">{% if projects %}Hi {{ user.display or user.name }}. <em class="sun-text">What's next?</em>{% else %}Let's make your <em class="sun-text">first film.</em>{% endif %}</h1>
   </div>
-  {% if credits %}
-  <a class="allowance rise d2" href="/account#credits" title="A film uses credits by its length">
-    {% if credits.monthly %}<i>{% for n in range([credits.monthly, 12]|min) %}<span class="{{ 'on' if n < credits.monthly_left else '' }}"></span>{% endfor %}</i>{% endif %}
-    {{ credits.total }} credit{{ '' if credits.total == 1 else 's' }}{% if credits.monthly %} · more on {{ credits.resets }}{% endif %}
-  </a>
-  {% endif %}
 </header>
 
 {% if not projects %}

@@ -5,8 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "vidosuper"
 version = "0.1.0"
-description = "AI video editor: turns a folder of raw trip clips into a polished, shareable edit."
-readme = "PLAN.md"
+description = "Flicello: an AI video studio on your own computer, driven by your own Claude."
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
@@ -25,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 ai = [
   "faster-whisper>=1.0",
+  "ctranslate2>=4.0",  # faster-whisper's engine: asked directly whether a CUDA GPU is there
   "librosa>=0.10.2",
   "scenedetect>=0.6.4",
   "imagehash>=4.3",
@@ -35,17 +37,17 @@ studio = [
   "uvicorn>=0.32",
   "python-multipart>=0.0.12",
   "anthropic>=0.40",
-  # the portrait cut-out (MODNet) for designed talking videos: on Windows through DirectML (the GPU), elsewhere the
-  # plain build (the server image; a cloud renderer adds CUDA's)
+  # the AI models (cut-outs, depth, object removal, upscaling): on Windows any GPU through DirectML, elsewhere the
+  # plain build (Apple Silicon's Core ML is in it); NVIDIA machines add the `nvidia` extra for CUDA
   "onnxruntime>=1.17; sys_platform != 'win32'",
   "onnxruntime-directml>=1.17; sys_platform == 'win32'",
   "rlottie-python>=1.3",  # designer animations (Lottie)
-  "webauthn>=2.2",  # passkeys (sign in with Face ID / fingerprint / security key)
-  "PyJWT[crypto]>=2.9",  # Google sign-in: the ID token's signature is checked against Google's keys
-  "markdown>=3.7",  # the legal pages are written in markdown
-  "httpx>=0.27",  # sign-in emails (Resend) and Google's token exchange; anthropic 1.x no longer brings it
+  "httpx>=0.27",  # the work agent's hands (work/fl.py) and service checks
   "google-genai>=2.30",  # the clip watcher: Gemini watches each clip with its sound (studio/brain/gemini.py)
+  "keyring>=25",  # local Flicello: the person's keys in their keychain (local/keys.py)
+  "psutil>=5.9",  # local Flicello: what this machine has (local/machine.py)
 ]
+nvidia = ["onnxruntime-gpu>=1.20"]  # the models on an NVIDIA GPU (CUDA 12): every cut-out frame on the GPU
 dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [project.scripts]

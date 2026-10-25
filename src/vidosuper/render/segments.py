@@ -80,6 +80,8 @@ def segment_key(item: TimelineItem, width: int, height: int, fps: int, quality: 
         payload["zoom"] = [round(seg.zoom, 4), [round(v, 4) for v in seg.zoom_center]]
     if seg.flip:
         payload["flip"] = 1
+    if seg.keys:  # framing keyframes, set by hand on the timeline
+        payload["keys"] = [[round(float(v), 4) for v in k] for k in seg.keys]
     if tuple(seg.frame_center) != (0.5, 0.5):
         payload["frame_center"] = [round(v, 4) for v in seg.frame_center]
     if seg.freeze > 0:

@@ -8,7 +8,7 @@
   <meta name="csrf" content="{{ csrf }}">
   <meta name="theme-color" content="{{ '#06060a' if theme == 'dark' else '#fbf6ee' }}">
   <meta name="color-scheme" content="{{ theme }}">
-  {% if not is_public(request) %}<meta name="robots" content="noindex, nofollow, noarchive">{% endif %}
+  <meta name="robots" content="noindex, nofollow, noarchive">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   {% block meta %}{% endblock %}
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
@@ -29,16 +29,12 @@
       {% if user %}
       <a href="/" {% if active == 'films' %}aria-current="page"{% endif %}>Films</a>
       <a href="/style" {% if active == 'style' %}aria-current="page"{% endif %} class="hide-s">My style</a>
-      {% if is_owner %}<a href="/admin" {% if active == 'admin' %}aria-current="page"{% endif %} class="hide-s">Admin</a>{% endif %}
-      <a href="/account" {% if active == 'account' %}aria-current="page"{% endif %}>Account</a>
+      <a href="/connect" {% if active == 'connect' %}aria-current="page"{% endif %}>Connect</a>
       <a class="cello-wake" href="/cello" data-cello-wake title="Cello: your editor, by voice" aria-label="Turn on Cello"><i aria-hidden="true"></i><span>Cello</span></a>
       <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to {{ 'light' if theme == 'dark' else 'dark' }} mode" title="Light or dark">
         <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
       </button>
-      {% else %}
-      <a href="/signin">Sign in</a>
-      <a class="btn-sun" href="/signup"><span>Start free</span></a>
       {% endif %}
     </nav>
   </header>
@@ -48,10 +44,9 @@
   </main>
   {% block foot %}
   <footer class="app-foot">
-    <span>© {{ now_year or 2026 }} Siddhanth Thakuri, trading as Flicello · ABN 25 443 793 186</span>
-    <nav aria-label="Legal">
-      <a href="/legal/terms">Terms</a><a href="/legal/privacy">Privacy</a><a href="/legal/cookies">Cookies</a>
-      <a href="/legal/acceptable-use">Acceptable use</a><a href="/legal/ai">AI</a><a href="/legal/contact">Contact</a>
+    <span>Flicello runs on this computer. Your footage stays here.</span>
+    <nav aria-label="About">
+      <a href="https://flicello.com" rel="noopener" target="_blank">flicello.com</a><a href="/connect">Connect</a>
     </nav>
   </footer>
   {% endblock %}

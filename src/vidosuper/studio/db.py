@@ -262,25 +262,17 @@ class DB:
                         "VALUES (?,?,?,?, 'queued', ?, ?)",
                         (project_id, user_id, kind, json.dumps(params or {}), priority, time.time()))
 
-    def claim(self, lane: str = "all", worker: str | None = None, cloud: bool = False,
-              pc_only: tuple[str, ...] = ()) -> dict | None:
+    def claim(self, lane: str = "all", worker: str | None = None) -> dict | None:
         """The next queued job of this lane (lowest priority number first, then oldest), marked running atomically
-        and as `worker`'s (so a worker starting again puts back only its own jobs, not another lane's). A `cloud`
-        worker never takes the steps of people in `pc_only` (the owner's videos use Claude Code, which only exists on
-        the PC); a cloud self-test is only ever taken by a cloud worker."""
+        and as `worker`'s."""
         if lane not in LANES:
             raise ValueError(f"unknown lane {lane!r}")
-        if cloud and pc_only:
-            who = " AND (user_id IS NULL OR user_id NOT IN (" + ",".join("?" * len(pc_only)) + "))"
-        else:
-            who = "" if cloud else " AND kind != 'selftest'"
         con = self.connect()
         try:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("SELECT * FROM jobs WHERE status='queued' AND (after IS NULL OR after <= ?)"
-                              + _lane_sql(lane) + who + " ORDER BY priority, id LIMIT 1",
-                              (time.time(), *(LONG_KINDS if lane != "all" else ()),
-                               *(pc_only if cloud else ()))).fetchone()
+                              + _lane_sql(lane) + " ORDER BY priority, id LIMIT 1",
+                              (time.time(), *(LONG_KINDS if lane != "all" else ()))).fetchone()
             if row is None:
                 con.execute("COMMIT")
                 return None
@@ -335,7 +327,7 @@ class DB:
         return rows[::-1]
 
     def take_back(self, job_id: int, why: str, delay: float = 0.0) -> None:
-        """Put a running job back in the queue and tell whoever runs it to drop it (remote.py checks `abort`)."""
+        """Put a running job back in the queue and tell whoever runs it to drop it (its step checks `abort`)."""
         self.run("UPDATE jobs SET status='queued', after=?, error=?, abort=? WHERE id=?",
                  (time.time() + delay, why[:500], time.time(), job_id))
         self.__dict__.setdefault("_steps", {}).pop(job_id, None)

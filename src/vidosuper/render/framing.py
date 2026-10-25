@@ -114,11 +114,26 @@ def segment_video_filter(clip: ClipInfo, seg: Segment, width: int, height: int, 
     return ",".join(pre) + "," + framing_filter(mode, width, height, blur_sigma, seg.frame_center) + "," + ",".join(post)
 
 
+def keyed(keys: list[list[float]], k: int) -> str:
+    """An FFmpeg expression of t: field `k` of the keyframes (1 zoom, 2 x, 3 y), eased between keys (the same
+    half-cosine as the preview's), held before the first and after the last."""
+    pts = sorted(keys, key=lambda p: p[0])
+    expr = f"{pts[-1][k]:.4f}"
+    for a, b in reversed(list(zip(pts, pts[1:]))):
+        u = f"((t-{a[0]:.4f})/{max(1e-3, b[0] - a[0]):.4f})"
+        expr = f"if(lt(t,{b[0]:.4f}),{a[k]:.4f}+({b[k] - a[k]:.4f})*(0.5-0.5*cos(PI*{u})),{expr})"
+    return f"if(lt(t,{pts[0][0]:.4f}),{pts[0][k]:.4f},{expr})"
+
+
 def motion_filter(seg: Segment, width: int, height: int, seconds: float) -> str | None:
     """Push-in/out over the shot plus its hits, as one per-frame scale+crop (and a brightness lift for
     flashes). t is seconds into the shot. A pulse is a quick zoom bump that decays; a shake jitters the
     frame inside a few percent of zoom margin; a flash lifts brightness and decays."""
     zoom_terms, dx_terms, dy_terms, flash_terms = [], [], [], []
+    kx, ky = "0.5", "0.5"  # the point of the framed picture kept at the centre (keyframes move it)
+    if seg.keys:
+        zoom_terms.append(f"({keyed(seg.keys, 1)})")
+        kx, ky = keyed(seg.keys, 2), keyed(seg.keys, 3)
     if seg.push and seconds > 0:
         ease = f"(0.5-0.5*cos(PI*min(1,t/{seconds:.4f})))"
         zoom_terms.append(f"(1+{seg.push:.4f}*{ease})" if seg.push > 0 else f"(1+{-seg.push:.4f}*(1-{ease}))")
@@ -142,8 +157,8 @@ def motion_filter(seg: Segment, width: int, height: int, seconds: float) -> str 
         dx = "+".join(dx_terms) or "0"
         dy = "+".join(dy_terms) or "0"
         parts.append(f"scale=w='2*trunc({width}*{z}/2)':h='2*trunc({height}*{z}/2)':eval=frame:flags=bicubic")
-        parts.append(f"crop=w={width}:h={height}:x='max(0,min(iw-{width},(iw-{width})/2+{dx}))'"
-                     f":y='max(0,min(ih-{height},(ih-{height})/2+{dy}))'")
+        parts.append(f"crop=w={width}:h={height}:x='max(0,min(iw-{width},({kx})*iw-{width}/2+{dx}))'"
+                     f":y='max(0,min(ih-{height},({ky})*ih-{height}/2+{dy}))'")
     if flash_terms:
         parts.append(f"eq=brightness='min(1,{'+'.join(flash_terms)})':eval=frame")
     return ",".join(parts)

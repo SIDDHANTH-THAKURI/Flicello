@@ -102,11 +102,6 @@
   <label class="field"><span>What's it about? <small class="muted">(optional: leave it empty to be surprised)</small></span>
     <textarea name="intent" rows="3" maxlength="600" placeholder="A lazy Sunday at the beach with my dog. Make it feel warm and a bit funny.">{{ f.get('intent', '') }}</textarea></label>
 
-  {% if credits %}
-  <p class="cost-line" id="cost-line" data-per-minute="{{ pricing.per_minute }}" data-looks="{{ pricing.looks }}" data-have="{{ credits.total }}" data-resets="{{ credits.resets if credits.monthly else '' }}">
-    A film uses {{ pricing.per_minute }} credit{{ '' if pricing.per_minute == 1 else 's' }} for each minute it lasts. You have {{ credits.total }}.</p>
-  {% endif %}
   <button class="btn-sun wide" type="submit"><span>Next: add my clips</span></button>
-  <p class="help">Nothing is used yet: credits are taken only when you press start, after you see how many.</p>
 </form>
 {% endblock %}

@@ -27,7 +27,7 @@ from pathlib import Path
 from .alerts import alert
 from .brain import BrainError, BudgetExceeded, PersonLimit, Usage, brain_kind_for, make_brain, make_watcher
 from .brain.context import look_from_note, pace_from_note
-from .brain.schemas import ChangeOp, DesignPlan, Direction, StoryPitch
+from .brain.schemas import ChangeOp, DesignPlan, Direction, StoryBeat, StoryPitch
 from .db import DB, JobStopped
 from .improve import maybe_start as maybe_start_improve
 from . import agent, requirements
@@ -63,10 +63,10 @@ PRIORITY = {"changes": 1, "draft": 1, "export": 1, "generate": 2, "effect": 2, "
 FEEDBACK_TAGS = ["too fast", "too slow", "boring start", "wrong music", "bad shots", "shaky", "too short",
                  "too long", "didn't follow my idea", "colour", "sound"]
 LENGTHS = (15, 30, 45, 60, 90, 120, 180, 300, 600)  # who may ask for which: Studio.lengths_for (access levels)
-MAX_SAMPLE_TRIES = 10  # a quiet safety net only: samples will be paid for with credits
+MAX_SAMPLE_TRIES = 10  # a quiet safety net only
 MAX_TRACKS = 5  # tracks made for one film, for everyone: after that they pick one of them or upload their own song
-MAX_IDEAS = 6  # story ideas (or looks) for one film, the first three included; the owner gets more
-MAX_POLISH = 3  # times the AI may reword 'what I understood' for one film
+MAX_IDEAS = 9  # story ideas for one film, the first three included (painted looks: 12)
+MAX_POLISH = 10  # times the AI may reword 'what I understood' for one film
 
 
 IMPROVISE = [  # what the AI is told for each part of the slider (the person sees the left-hand words)
@@ -176,6 +176,19 @@ class Studio:
 
         self._editors = ThreadPoolExecutor(max_workers=4, thread_name_prefix="editor")  # started on first use
         self.soon = lambda fn: self._editors.submit(fn)  # your editor's turns (tests run them at once)
+        from ..work.sessions import ensure as work_table
+
+        work_table(self.db)  # Cello's hands' table is there before anything asks; their sessions start on first use
+        self._work = None
+
+    @property
+    def work(self):
+        """Cello's hands: the Claude Code work sessions on this studio's films (work/sessions.py), made on first use."""
+        if self._work is None:
+            from ..work.sessions import Sessions
+
+            self._work = Sessions(self)
+        return self._work
 
     # ------------------------------------------------------------------ people
     def user(self, uid: str) -> dict | None:
@@ -230,121 +243,16 @@ class Studio:
             p.save()
         return p
 
-    # ------------------------------------------------------------------ access (closed beta; see auth.ACCESS)
+    # ------------------------------------------------------------------ what a film may be: on their own machine, anything
     def tier(self, user: dict):
-        """What this person's access level allows; the owner gets everything special people get, and more."""
+        """What a film may be: films as long as the studio makes them, recordings up to the project limit."""
         from .settings import Tier
 
-        if self.is_owner(user):
-            top = self.s.tiers.get("special") or Tier()
-            return Tier(videos=None, max_seconds=max(LENGTHS), max_recording=max(top.max_recording,
-                                                                                 int(self.s.limits.project_seconds)),
-                        beats=99)
-        return self.s.tiers.get("special" if user.get("access") == "special" else "beta") or Tier()
+        return Tier(videos=None, max_seconds=max(LENGTHS), max_recording=int(self.s.limits.project_seconds), beats=99)
 
     def lengths_for(self, user: dict) -> list[int]:
         return [n for n in LENGTHS if n <= self.tier(user).max_seconds]
 
-    def request_access(self, user: dict, note: str) -> bool:
-        """Someone waiting for the beta says what they would make. True the first time (the owner is told then)."""
-        note = " ".join((note or "").split())[:600]
-        if len(note) < 3:
-            raise ActionError("Tell us in a few words what you'd like to make.")
-        first = not (user.get("request_note") or "")
-        self.db.run("UPDATE users SET request_note=?, requested=COALESCE(requested, ?) WHERE id=?",
-                    (note, time.time(), user["id"]))
-        if first:
-            from . import mail
-
-            who = user.get("display") or user["name"]
-            alert(self.db, self.s, "access", f"{who} asked for access: {note[:200]}", "warn")
-            if mail.available(self.s):
-                site = (self.s.site_url or "").rstrip("/")
-                for owner in [{"email": e} for e in self.s.alert_emails]:
-                    try:
-                        mail.send(self.s, owner["email"], *mail.notice_email(self.s, f"{who} asked for access", [
-                            f"{who} ({user.get('email') or 'no email'}) would like to use Flicello.",
-                            f"What they'd make: {note}",
-                            f"Approve or decline on the admin page: {site}/admin"]))
-                    except Exception:  # noqa: BLE001 - the request is saved and on the admin page either way
-                        log.warning("could not email the owner about an access request")
-        return first
-
-    def decide_access(self, target: dict, access: str) -> None:
-        """The owner approves (beta or special), declines, or puts someone back to waiting. An approval is emailed."""
-        from .auth import ACCESS
-
-        if access not in ACCESS or target["role"] == "owner":
-            raise ActionError("Not changed.")
-        was = target.get("access") or "beta"
-        self.db.run("UPDATE users SET access=?, decided=? WHERE id=?", (access, time.time(), target["id"]))
-        if access in ("beta", "special") and was in ("requested", "declined") and target.get("email"):
-            from . import mail
-
-            if mail.available(self.s):
-                site = (self.s.site_url or "").rstrip("/")
-                monthly = self.tier_credits().get(access, 0)
-                p = self.pricing()
-                lines = ["Your Flicello access is approved. You can make your first video now.",
-                         f"You get {monthly} credits every month. A film uses {p['per_minute']} for each minute it "
-                         "lasts (we show it before anything starts), so you can try things freely.",
-                         f"Sign in here: {site}/signin"]
-                if access == "special":
-                    lines.insert(1, "You also have special access: films up to 10 minutes long.")
-                try:
-                    mail.send(self.s, target["email"], *mail.notice_email(self.s, "You're in", lines))
-                except Exception:  # noqa: BLE001 - they can sign in anyway; the owner sees no email went
-                    log.warning("could not email an approval")
-
-    # ------------------------------------------------------------------ problems people report
-    def report_problem(self, user: dict, project: dict, note: str) -> int:
-        """Someone says something is wrong with a video. Kept with everything needed to look into it (the stage, the
-        step and its log, the recent events), and the owner is told at once."""
-        note = " ".join((note or "").split())[:1500]
-        if len(note) < 3:
-            raise ActionError("Tell us in a few words what went wrong.")
-        if self.db.value("SELECT COUNT(*) FROM reports WHERE user_id=? AND at > ?", (user["id"], time.time() - 86400),
-                         0) >= 3:
-            raise ActionError("We've got your reports from today and are on them. Thank you!")
-        if self.db.value("SELECT COUNT(*) FROM reports WHERE user_id=? AND project_id=? AND at > ?",
-                         (user["id"], project["id"], time.time() - 3600), 0) >= 1:
-            raise ActionError("We've got your report about this video and are on it. You can add more in an hour.")
-        job = self.db.active_job(project["id"]) or self.db.one(
-            "SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1", (project["id"],))
-        context = {
-            "stage": project["stage"], "error": project.get("error"), "kind": project["kind"],
-            "style": project.get("style"), "length": project["length"], "shapes": project["shapes"],
-            "job": {k: job.get(k) for k in ("id", "kind", "status", "progress", "message", "attempts", "error",
-                                            "worker", "started", "moved")} if job else None,
-            "steps": self.db.steps(job["id"], 30) if job else [],
-            "events": [{"at": e["at"], "level": e["level"], "message": e["message"][:600]} for e in self.db.all(
-                "SELECT at, level, message FROM events WHERE project_id=? ORDER BY id DESC LIMIT 25", (project["id"],))],
-            "renderer_seen": self.renderer_seen(),
-        }
-        rid = self.db.run("INSERT INTO reports(at, user_id, project_id, job_id, note, context) VALUES (?,?,?,?,?,?)",
-                          (time.time(), user["id"], project["id"], job["id"] if job else None, note,
-                           json.dumps(context, default=str)))
-        who = user.get("display") or user["name"]
-        alert(self.db, self.s, "report", f"{who} reported a problem with a video ({project['stage']}): {note[:200]}")
-        from . import mail
-
-        if mail.available(self.s):
-            site = (self.s.site_url or "").rstrip("/")
-            for owner in [{"email": e} for e in self.s.alert_emails]:
-                try:
-                    mail.send(self.s, owner["email"], *mail.notice_email(self.s, f"{who} reported a problem", [
-                        f"{who} ({user.get('email') or 'no email'}) says: {note}",
-                        f"The video is at the '{project['stage']}' stage"
-                        + (f"; the last step: {job['message'] or job['kind']} ({job['status']})." if job else "."),
-                        f"Everything about it is on the admin page: {site}/admin#reports"]))
-                except Exception:  # noqa: BLE001 - the report is saved either way
-                    log.warning("could not email the owner about a report")
-        return rid
-
-    # ------------------------------------------------------------------ credits: a film uses them by its length
-    # Each access level gives credits every calendar month (UTC); the owner can give anyone extra credits, which
-    # never run out. A film's credits are taken when it starts (this month's first, then extra ones), the difference
-    # when it starts again after a change, and all of them come back if it is deleted before it is finished.
     def _config(self, key: str, default):
         row = self.db.one("SELECT value FROM config WHERE key=?", (key,))
         return json.loads(row["value"]) if row else default
@@ -353,12 +261,11 @@ class Studio:
         self.db.run("INSERT INTO config(key, value, at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET "
                     "value=excluded.value, at=excluded.at", (key, json.dumps(value), time.time()))
 
-    def pricing(self) -> dict:
-        return {**self.s.pricing.model_dump(), **self._config("pricing", {})}
-
     # ------------------------------------------------------------------ money protection: caps and the off switch
+    # Their own keys pay for Gemini, ElevenLabs (and the Anthropic API when it is their brain): the caps keep a loop
+    # or a mistake from spending more than they meant (studio.yaml: limits.monthly_usd, video_usd, person_day_usd).
     def money(self) -> dict:
-        """The spending caps in force: the settings' defaults, changed by the owner on the admin page."""
+        """The spending caps in force: the settings' defaults, changed with set_money."""
         lim = self.s.limits
         base = {"monthly_usd": lim.monthly_usd, "video_usd": lim.video_usd, "person_day_usd": lim.person_day_usd}
         return {**base, **{k: float(v) for k, v in self._config("money", {}).items() if k in base}}
@@ -373,7 +280,7 @@ class Studio:
                                    "person_day_usd": round(float(person_day), 2)})
 
     def paused(self) -> dict | None:
-        """The owner's off switch: while on, no new step starts (running ones finish) and people are told why."""
+        """The off switch: while on, no new step starts (running ones finish), and they are told why."""
         return self._config("paused", None)
 
     def set_paused(self, on: bool, why: str = "") -> None:
@@ -386,141 +293,6 @@ class Studio:
     def person_spend(self, user_id: str, hours: float = 24.0) -> float:
         return float(self.db.value("SELECT COALESCE(SUM(usd), 0) FROM spend WHERE user_id=? AND billed=1 AND at > ?",
                                    (user_id, time.time() - hours * 3600), 0) or 0)
-
-    def flags(self, user: dict) -> list[str]:
-        """Why an account may need a look (the admin page shows them; switching it off is one click there)."""
-        if user["role"] == "owner":
-            return []
-        out = []
-        day = time.time() - 86400
-        spent = self.person_spend(user["id"])
-        if spent >= self.money()["person_day_usd"] * 2 / 3:
-            out.append(f"spent ${spent:.2f} in a day")
-        failed = self.db.value("SELECT COUNT(*) FROM jobs WHERE user_id=? AND status='failed' AND finished > ?",
-                               (user["id"], day), 0) or 0
-        if failed >= 4:
-            out.append(f"{failed} failed steps in a day")
-        films = self.db.value("SELECT COUNT(*) FROM projects WHERE user_id=? AND created > ?", (user["id"], day), 0) or 0
-        if films >= 6:
-            out.append(f"{films} films started in a day")
-        gb = (self.db.value("SELECT COALESCE(SUM(size), 0) FROM uploads WHERE user_id=? AND created > ? AND status='done'",
-                            (user["id"], day), 0) or 0) / 1e9
-        if gb >= 5:
-            out.append(f"{gb:.1f} GB uploaded in a day")
-        return out
-
-    def tier_credits(self) -> dict[str, int]:
-        return {**{name: t.credits for name, t in self.s.tiers.items()}, **self._config("tier_credits", {})}
-
-    def set_pricing(self, per_minute: int, looks: int, beta: int, special: int) -> None:
-        """The owner's numbers: what a film uses, and what each access level gets a month."""
-        for n in (per_minute, looks, beta, special):
-            if not 0 <= int(n) <= 1000:
-                raise ActionError("Use whole numbers from 0 to 1000.")
-        if int(per_minute) < 1:
-            raise ActionError("A minute of film must use at least 1 credit.")
-        self._set_config("pricing", {"per_minute": int(per_minute), "looks": int(looks)})
-        self._set_config("tier_credits", {"beta": int(beta), "special": int(special)})
-
-    @staticmethod
-    def month_key(at: float | None = None) -> str:
-        return time.strftime("%Y-%m", time.gmtime(at if at is not None else time.time()))
-
-    @staticmethod
-    def next_month_label(at: float | None = None) -> str:
-        t = time.gmtime(at if at is not None else time.time())
-        year, month = (t.tm_year + 1, 1) if t.tm_mon == 12 else (t.tm_year, t.tm_mon + 1)
-        return f"1 {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month - 1]}"
-
-    def credits(self, user: dict) -> dict | None:
-        """What they can spend now: this month's allowance left, and extra credits. None: the owner (no limit)."""
-        if self.is_owner(user):
-            return None
-        allowance = int(self.tier_credits().get("special" if user.get("access") == "special" else "beta", 0))
-        used = -int(self.db.value("SELECT COALESCE(SUM(monthly), 0) FROM credits WHERE user_id=? AND month=?",
-                                  (user["id"], self.month_key()), 0) or 0)
-        extra = max(0, int(self.db.value("SELECT COALESCE(SUM(extra), 0) FROM credits WHERE user_id=?",
-                                         (user["id"],), 0) or 0))
-        left = max(0, allowance - used)
-        return {"monthly": allowance, "monthly_left": left, "extra": extra, "total": left + extra,
-                "resets": self.next_month_label()}
-
-    def cost_of(self, kind: str, seconds: float, style: str = "designed") -> int:
-        """Credits for a film: per started minute (a few frames over the minute don't count), and painted looks."""
-        import math
-
-        p = self.pricing()
-        minutes = max(1, math.ceil(max(0.0, float(seconds) - 1.0) / 60.0))
-        looks = kind == "voice" or (kind == "talk" and style == "designed")
-        return minutes * int(p["per_minute"]) + (int(p["looks"]) if looks else 0)
-
-    def film_seconds(self, project: dict) -> float | None:
-        """How long the film is, for its credits: the length asked for; a voice or talking video, its recording."""
-        if project["kind"] == "montage":
-            return float(project["length"])
-        if project["kind"] == "voice":
-            return float(project["song_seconds"]) if project.get("song_seconds") else None
-        secs = self.db.value("SELECT SUM(seconds) FROM clips WHERE project_id=?", (project["id"],), None)
-        return float(secs) if secs else None
-
-    def film_cost(self, project: dict) -> int | None:
-        seconds = self.film_seconds(project)
-        return None if seconds is None else self.cost_of(project["kind"], seconds, project.get("style") or "designed")
-
-    def credit_history(self, user: dict, n: int = 20) -> list[dict]:
-        return self.db.all("SELECT c.*, p.title FROM credits c LEFT JOIN projects p ON p.id=c.project_id "
-                           "WHERE c.user_id=? ORDER BY c.id DESC LIMIT ?", (user["id"], n))
-
-    def grant_credits(self, target: dict, n: int, note: str = "") -> None:
-        """The owner gives someone extra credits (they never run out), or takes back unused extra ones."""
-        n = int(n)
-        if not -1000 <= n <= 1000 or n == 0:
-            raise ActionError("Give between 1 and 1000 credits (or take some back with a minus).")
-        have = self.credits(target)
-        if have is not None and n < 0 and -n > have["extra"]:
-            raise ActionError(f"They have {have['extra']} extra credits to take back.")
-        self.db.run("INSERT INTO credits(user_id, at, month, monthly, extra, kind, note) VALUES (?,?,?,?,?,?,?)",
-                    (target["id"], time.time(), self.month_key(), 0, n, "grant", " ".join((note or "").split())[:200]))
-
-    def _pay_for(self, project: dict, check: bool = False) -> None:
-        """Take the credits a film uses as it starts: the difference from what it already used (it may have been
-        started before, then changed). Not enough: nothing starts, and they are told how many they need. `check`:
-        only make sure there are enough (before the step is queued: a step that can't be queued takes nothing)."""
-        user = self.user(project["user_id"])
-        cost = self.film_cost(project)
-        if user is None or cost is None or self.is_owner(user):
-            return
-        need = cost - int(project.get("credits") or 0)
-        if need > 0:
-            have = self.credits(user)
-            if need > have["total"]:
-                raise ActionError(
-                    f"This film uses {cost} credit{'s' if cost != 1 else ''}"
-                    + (f" ({need} more than it has used)" if need != cost else "")
-                    + f"; you have {have['total']}. A shorter film uses fewer"
-                    + (f", and your monthly credits come back on {have['resets']}." if have["monthly"] else "."))
-            if check:
-                return
-            take_m = min(need, have["monthly_left"])
-            self.db.run("INSERT INTO credits(user_id, at, month, monthly, extra, kind, project_id, note) "
-                        "VALUES (?,?,?,?,?,?,?,?)", (user["id"], time.time(), self.month_key(), -take_m,
-                                                    -(need - take_m), "film", project["id"], project["title"][:120]))
-        elif need < 0 and not check:
-            self._refund(user, project, -need, "made shorter")
-        if not check:
-            self.db.run("UPDATE projects SET credits=? WHERE id=?", (cost, project["id"]))
-
-    def _refund(self, user: dict, project: dict, n: int, why: str) -> None:
-        """Credits back: to this month's allowance as far as this film used it this month, the rest as extra ones
-        (credits from an earlier month are never lost)."""
-        if n <= 0:
-            return
-        used_now = -int(self.db.value("SELECT COALESCE(SUM(monthly), 0) FROM credits WHERE project_id=? AND month=?",
-                                      (project["id"], self.month_key()), 0) or 0)
-        back_m = max(0, min(n, used_now))
-        self.db.run("INSERT INTO credits(user_id, at, month, monthly, extra, kind, project_id, note) VALUES "
-                    "(?,?,?,?,?,?,?,?)", (user["id"], time.time(), self.month_key(), back_m, n - back_m, "refund",
-                                          project["id"], f"{project['title'][:100]} ({why})"))
 
     # ------------------------------------------------------------------ projects
     def projects(self, user: dict) -> list[dict]:
@@ -588,6 +360,14 @@ class Studio:
             log.warning("could not post the editor's hello for %s", pid, exc_info=True)
         return project
 
+    def rename(self, project: dict, title: str) -> str:
+        """A film's name, at any time (Cello names it once it knows what it is)."""
+        title = " ".join((title or "").split())[:60]
+        if not title:
+            raise ActionError("Say what to call it.")
+        self.db.run("UPDATE projects SET title=?, updated=? WHERE id=?", (title, time.time(), project["id"]))
+        return title
+
     def shapes(self, project: dict) -> list[str]:
         return ["9:16", "16:9"] if project["shapes"] == "both" else [project["shapes"]]
 
@@ -601,10 +381,6 @@ class Studio:
         self.db.run("DELETE FROM messages WHERE project_id=?", (project["id"],))
         self.db.run("DELETE FROM review_notes WHERE project_id=?", (project["id"],))
         self.db.run("DELETE FROM review_links WHERE project_id=?", (project["id"],))
-        owner = self.user(project["user_id"])
-        if owner and int(project.get("credits") or 0) > 0 and not project["version"]:  # never finished
-            self._refund(owner, project, int(project["credits"]), "deleted before it was finished")
-            self.db.run("UPDATE projects SET credits=0 WHERE id=?", (project["id"],))
         self.db.run("DELETE FROM clips WHERE project_id=?", (project["id"],))
 
     def delete_everything(self, user: dict) -> None:
@@ -682,7 +458,10 @@ class Studio:
         if self.db.active_job(project["id"]):
             raise ActionError("Still working on the last step; give it a moment.")
         if stages and project["stage"] not in stages:
-            raise ActionError("That can't be done at this step.")
+            raise ActionError({"confirm": "Changes are waiting for an OK on screen first: make them or drop them.",
+                               "failed": "The last step didn't work: try it again first.",
+                               "paused": "The film is paused: carry it on first."}.get(project["stage"],
+                                                                                      "That can't be done at this step."))
 
     def _enqueue(self, project: dict, kind: str, params: dict | None = None) -> int:
         user = self.user(project["user_id"])
@@ -763,17 +542,11 @@ class Studio:
         return seconds * rate * shapes + (90.0 if job["kind"] == "revise" else 0.0)
 
     def ahead(self, job: dict) -> tuple[list[dict], list[dict]]:
-        """The jobs a queued job waits for: those running and those queued before it, in its own lane (with the
-        renderer's quick lane online, a short step never waits for a whole film; see db.LONG_KINDS)."""
-        from .db import lane_of
-
-        quick = self.db.one("SELECT at FROM heartbeat WHERE name='renderer-quick'")
-        split = self.s.jobs == "remote" and quick is not None and time.time() - quick["at"] < 90
+        """The jobs a queued job waits for: those running and those queued before it."""
         rows = self.db.all("SELECT * FROM jobs WHERE status IN ('queued','running') AND id != ? AND kind != 'learn'",
                            (job["id"],))
-        same = [r for r in rows if not split or lane_of(r["kind"]) == lane_of(job["kind"])]
-        running = [r for r in same if r["status"] == "running"]
-        queued = [r for r in same if r["status"] == "queued" and (r["priority"], r["id"]) < (job["priority"], job["id"])]
+        running = [r for r in rows if r["status"] == "running"]
+        queued = [r for r in rows if r["status"] == "queued" and (r["priority"], r["id"]) < (job["priority"], job["id"])]
         return running, queued
 
     def eta(self, job: dict | None) -> int | None:
@@ -783,10 +556,6 @@ class Studio:
             return None
         typical = self.expected_seconds(job)
         if job["status"] == "queued" and job.get("id"):  # a real one in the queue
-            from . import cloud
-
-            if cloud.can_take(self, job):  # a cloud renderer starts for it if the PC doesn't take it soon
-                return int(typical + 60)
             running, queued = self.ahead(job)
             return int(typical + sum(self.eta(r) or 0 for r in running)
                        + sum(self.expected_seconds(r) for r in queued))
@@ -897,14 +666,7 @@ class Studio:
 
     # ------------------------------------------------------------------ music made for the film (music/made.py)
     def can_compose(self) -> bool:
-        """Tracks can be made: the renderer says it has an ElevenLabs key (or, with local jobs, this machine has)."""
-        if self.s.jobs == "remote":
-            row = self.db.one("SELECT info FROM heartbeat WHERE name IN ('renderer', 'renderer-quick') AND info IS NOT "
-                              "NULL ORDER BY at DESC LIMIT 1")
-            try:
-                return bool(json.loads(row["info"]).get("music")) if row else False
-            except (TypeError, ValueError):
-                return False
+        """Tracks can be made: this machine has an ElevenLabs key."""
         from ..music.compose import available
 
         return available()
@@ -1252,9 +1014,7 @@ class Studio:
         if footage > self.s.limits.project_seconds:
             raise ActionError(f"That's {footage / 60:.0f} minutes of footage; the most a video can use is "
                               f"{self.s.limits.project_seconds / 60:.0f}. Remove some clips.")
-        self._pay_for(project, check=True)
         self._enqueue(project, "prepare")
-        self._pay_for(project)
 
     def choose(self, project: dict, pitch_id: int) -> None:
         self._guard(project, "choose")
@@ -1294,8 +1054,7 @@ class Studio:
                                          "base": int(base or 0)})
 
     def idea_cap(self, project: dict) -> int:
-        user = self.user(project["user_id"])
-        return (12 if uses_looks(project) else 9) if user and self.is_owner(user) else MAX_IDEAS
+        return MAX_IDEAS + 3 if uses_looks(project) else MAX_IDEAS
 
     def ideas_left(self, project: dict) -> int:
         """More ideas (or looks) this film may still have: another, their own, improvised, changed."""
@@ -1409,33 +1168,6 @@ class Studio:
                 raise ActionError("Let's try a different story instead: go back and pick another idea.")
             self.db.run("UPDATE projects SET sample_tries=sample_tries+1 WHERE id=?", (project["id"],))
         self._enqueue(project, "sample", {"pitch": project["chosen"], "edits": edits})
-
-    def want_gap(self, project: dict, ability: str) -> None:
-        """They want to hear when an ability they asked for exists (the owner tells them from the admin page)."""
-        if not self.db.one("SELECT id FROM gaps WHERE project_id=? AND ability=?", (project["id"], ability)):
-            raise ActionError("That wasn't something this film asked for.")
-        self.db.run("UPDATE gaps SET notify=1 WHERE project_id=? AND ability=?", (project["id"], ability))
-
-    def tell_gap(self, ability: str) -> int:
-        """The owner says an ability has shipped: everyone who asked to hear is emailed (once). Returns how many."""
-        from . import mail
-        from .abilities import BY_ID
-
-        rows = self.db.all("SELECT g.id, u.email, COALESCE(u.display, u.name) AS who FROM gaps g JOIN users u ON "
-                           "u.id = g.user_id WHERE g.ability=? AND g.notify=1 AND g.told IS NULL", (ability,))
-        name = BY_ID[ability].name if ability in BY_ID else ability
-        sent = 0
-        for r in rows:
-            if r["email"] and mail.available(self.s):
-                site = (self.s.site_url or "").rstrip("/")
-                try:
-                    mail.send(self.s, r["email"], *mail.notice_email(self.s, "Flicello can do it now", [
-                        f"You asked Flicello for {name}. It can do that now.", f"Make a film with it: {site}/new"]))
-                    sent += 1
-                except Exception:  # noqa: BLE001 - marked as told anyway; the owner sees the count
-                    log.warning("could not email about a new ability")
-            self.db.run("UPDATE gaps SET told=? WHERE id=?", (time.time(), r["id"]))
-        return sent
 
     def board(self, project: dict, plan_id: int | None) -> dict | None:
         row = self.db.one("SELECT board FROM plans WHERE id=? AND project_id=?", (plan_id, project["id"])) if plan_id else None
@@ -1758,6 +1490,7 @@ class Studio:
         pipe = Pipeline(work, self.cfg, None, progress, owner=owner)
         pipe.no_music = project["music"] == "none" and not project["song"]
         pipe.natural_sound = project.get("sound") == "natural"
+        pipe.speech = bool(self._info(project).get("speech"))
         # no sound from the clips: asked for in this film's words (the mix obeys, music or not), or their style says
         # "music only" and music plays (unless this film's own words ask to hear its clips)
         pipe.mute_clips = self._mutes_clips(project, user, pipe.no_music)
@@ -1783,6 +1516,8 @@ class Studio:
     def _mutes_clips(self, project: dict, user: dict, no_music: bool) -> bool:
         """No sound from the clips: asked for in this film's words (the mix obeys, music or not), or their style says
         "music only" and music plays (unless this film's own words ask to hear its clips)."""
+        if self._info(project).get("speech"):  # a talking film: their voice is the film
+            return False
         return project.get("sound") == "silent" or (
             project["kind"] == "montage" and not no_music and self.profile(user).answers.get("sound") == "music"
             and not requirements.wants_clip_sound(ask_text(project)))
@@ -1793,6 +1528,7 @@ class Studio:
         ctx = pipe.context(self.shapes(project), project["length"], ask_text(project), rules,
                            project["pace"], start_at=start_at)
         ctx.bans = list(self._info(project).get("bans") or [])
+        ctx.speech = bool(self._info(project).get("speech"))
         # what they said on earlier samples and versions of this film still holds ('beat sync' once is beat sync)
         said = [project.get("intent") or "", project.get("cut_note") or ""]
         said += [r["text"] for r in self.db.all("SELECT text FROM feedback WHERE project_id=? AND text<>''", (project["id"],))]
@@ -1884,6 +1620,7 @@ class Studio:
             except Exception:  # noqa: BLE001 - a check-in never fails the step it reports on
                 log.warning("check-in after %s failed for %s", job["kind"], project["id"], exc_info=True)
             self.db.job_done(job["id"])
+            agent.carry_on(self, self.db.project(project["id"]), job["kind"])  # building by itself: the next step
         except JobStopped:
             log.info("job %s stopped by the person", job["id"])
             self._stopped(job)
@@ -2000,9 +1737,7 @@ class Studio:
                 raise ActionError("Add the one video of you talking.")
             if clips[0]["seconds"] and clips[0]["seconds"] > 600:
                 raise ActionError("A talking video can be up to 10 minutes.")
-        self._pay_for(project, check=True)
         self._enqueue(project, "prepare")
-        self._pay_for(project)
 
     def _save_script(self, project: dict, script, kind: str) -> int:
         return self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
@@ -2308,11 +2043,15 @@ class Studio:
         old = json.loads(project["info"]) if project.get("info") else {}
         if old.get("fit_declined"):
             info["fit_declined"] = True
-        fitted = self._fit_length(project, pipe, info)
+        if old.get("autopilot"):
+            info["autopilot"] = True
+        info["speech"] = self._speech_film(project, pipe, old.get("speech"))
+        fitted = False if info["speech"] else self._fit_length(project, pipe, info)
+        if info["speech"]:
+            fitted = self._speech_length(project, pipe)
         self.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps(info), project["id"]))
         if fitted:
             project = self.db.project(project["id"])
-            self._pay_for(project)  # a shorter film uses fewer credits: the difference comes back
             if self._ensure_track(job, project, user, pipe, (0.8, 0.84)) is not None:  # music made for the old length
                 project = self.db.project(project["id"])
         if info["skipped"]:
@@ -2322,6 +2061,35 @@ class Studio:
         understood = pipe.brain.understand(ctx)
         self.db.run("UPDATE projects SET understood=?, brief=NULL WHERE id=?", (understood.model_dump_json(), project["id"]))
         self.db.set_stage(project["id"], "understood")
+
+    def _speech_film(self, project: dict, pipe, said) -> bool:
+        """Someone talking to camera (they said so, or most of the footage is speech): the film is cut on what they
+        say (speech_cut), not on a story of moments."""
+        from . import speech_cut
+
+        clips = pipe.project.clips()
+        spoken = speech_cut.share(pipe.project, list(clips), {c: float(v.duration) for c, v in clips.items()})
+        if spoken >= 0.6:  # mostly someone talking: chopping their sentences to a beat is never right
+            return True
+        if said is not None:
+            return bool(said)
+        return spoken >= 0.45
+
+    def _speech_length(self, project: dict, pipe) -> bool:
+        """A talking film is as long as what they say (pauses out): its length, and its music, follow that."""
+        from ..perceive.prep import load_transcript
+        from . import speech_cut
+
+        total = 0.0
+        for cid in pipe.project.clips():
+            t = load_transcript(pipe.project, cid)
+            if t is not None:
+                total += sum(b - a + speech_cut.LEAD + speech_cut.TAIL
+                             for a, b, _ in speech_cut.phrases(speech_cut._words(t)))
+        if total < 1.0 or abs(total - float(project["length"])) < 1.0:
+            return False
+        self.db.run("UPDATE projects SET length=? WHERE id=?", (round(total, 1), project["id"]))
+        return True
 
     FIT_SLACK = 1.15  # a film up to this much longer than its footage carries is left alone
 
@@ -2375,9 +2143,7 @@ class Studio:
 
     def polish_left(self, project: dict) -> int:
         u = self.understanding(project) or {}
-        user = self.user(project["user_id"])
-        cap = 10 if user and self.is_owner(user) else MAX_POLISH
-        return max(0, cap - int(u.get("_polished") or 0))
+        return max(0, MAX_POLISH - int(u.get("_polished") or 0))
 
     @staticmethod
     def _their_words(u: dict, brief: dict) -> str:
@@ -2498,6 +2264,15 @@ class Studio:
         if job["params"].get("improvise") is not None:  # 'Improvise one': this idea at the strength they set
             project = {**project, "improvise": int(job["params"]["improvise"])}
         ctx = self._context(pipe, project, user)
+        if self._info(project).get("speech"):  # cut on what they say: one way, nothing to pick between
+            pitch = StoryPitch(title="Your talk, cut clean", logline="What you say, in your order, the pauses and "
+                               "fumbles cut out; graphics and music on top.", feeling="as you said it",
+                               hook="Your first words.", turn="As you said it.", ending="Your last words.",
+                               beats=[StoryBeat(what="What you say, cut on your words.", moments=[])], stills=[],
+                               why="A talking video is cut on its words.")
+            self._save_pitches(project, [{"pitch": pitch.model_dump(), "stills": []}], 1)
+            self.db.set_stage(project["id"], "choose")
+            return
         if job["params"].get("first"):  # the first ideas, from the brief they agreed
             self.db.job_progress(job["id"], 0.1, "Thinking up story ideas from what we agreed")
             self._save_pitches(project, pipe.pitch(ctx, n=3, tag="r1"), 1)
@@ -2542,6 +2317,10 @@ class Studio:
                     + [f"Fix only this, which their changes left: {p}" for p in problems]
                     + ["Keep every other shot exactly as it is."]))
                 changes += [f"Shot change you asked for: {n.split(': ', 1)[-1]}" for n in notes]
+        elif self._info(project).get("speech"):
+            from . import speech_cut
+
+            plan = speech_cut.plan(ctx, pipe.project)
         else:
             plan = pipe.design(ctx, pitch, note)
         plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
@@ -2589,6 +2368,15 @@ class Studio:
                      base: int | None = None, changes: list[str] | None = None) -> None:
         version = project["version"] + 1
         infos = pipe.render(ctx, plan, self.shapes(project), version, look=self._grade(project, user, plan))
+        if any(g.kind == "scene" for g in plan.graphics):  # its designed scenes, laid back in where the cut is the same
+            from ..work.scenes_in_film import lay_back
+
+            left = []
+            for info in infos:
+                for note in lay_back(self, project, plan, version, info.shape, pipe.work.out / info.path):
+                    self.db.event(project["id"], note, "warn", job["id"])
+                    left.append(note)
+            changes = [*(changes or []), *dict.fromkeys(left)]  # said with the version, where they look
         for info in infos:
             rows = self._montage_requirements(project, user, ctx, plan, info.seconds)
             info.findings.extend(rows)
@@ -2601,6 +2389,9 @@ class Studio:
                 alert(self.db, self.s, "check", f"A finished video failed a check: "
                       + "; ".join(f"{f['check']}: {f['detail'][:80]}" for f in info.failed), "warning")
         self.db.run("UPDATE projects SET version=?, base=NULL WHERE id=?", (version, project["id"]))
+        draft = self.draft_of(project)
+        if draft and int(draft.get("base") or 0) < version:  # made on an older version: making it now would undo this one
+            self._set_info(project, draft=None, draft_back=[], draft_fwd=[])
         strip = None
         try:  # its shots, numbered as they see them, for the next change
             self.db.job_progress(job["id"], 0.97, "Numbering its shots")
@@ -2788,6 +2579,7 @@ class Studio:
                           "kind": s.kind, "thumb": by_key.get(s.key) or "", "clip": pieces[0]["clip"]})
         return {"which": which, "duration": data["duration"], "shots": shots,
                 "graphics": [g.model_dump(exclude={"x", "y", "accent", "by"}) for g in plan.graphics],
+                "over": [o.model_dump() for o in plan.over],
                 "motion": [{"block": m["block"], "start": m["start"], "end": m["end"]} for m in data.get("motion", [])],
                 "style": plan.style}
 
@@ -3123,8 +2915,12 @@ class Studio:
 
     def _job_draft(self, job, project, user):
         pipe = self._pipeline(job, project, user)
-        self.db.job_progress(job["id"], 0.1, "Changing only the shots you named")
-        version, row, ctx, new, lines = self._apply_ops(job, project, user, pipe)
+        if "plan" in job["params"]:  # a whole plan, rewritten by the work agent (plan_draft)
+            self.db.job_progress(job["id"], 0.1, "Laying out your editor's new plan")
+            version, row, ctx, new, lines = self._given_plan(job, project, user, pipe)
+        else:
+            self.db.job_progress(job["id"], 0.1, "Changing only the shots you named")
+            version, row, ctx, new, lines = self._apply_ops(job, project, user, pipe)
         plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
                               (project["id"], "draft", row["pitch_id"], new.model_dump_json(), time.time()))
         k = int(self._info(project).get("drafts") or 0) + 1
@@ -3144,8 +2940,9 @@ class Studio:
             pipe.make_previews()
         except Exception:  # noqa: BLE001 - the draft is made; its shots show their stills without copies
             log.warning("could not make preview copies for %s", project["id"], exc_info=True)
-        self._set_info(project, drafts=k, draft={"k": k, "base": version, "plan_id": plan_id, "edl": f"{name}.edl.json",
-                                                 "said": lines, "text": text, "made": time.time()})
+        self._set_info(project, drafts=k)
+        self._draft_now(project, {"k": k, "base": version, "plan_id": plan_id, "edl": f"{name}.edl.json",
+                                  "said": lines, "text": text, "made": time.time()})
 
     def _job_copies(self, job, project, user):
         """Light copies of the clips for the instant preview, and who is in the footage, for a film made before
@@ -3226,6 +3023,68 @@ class Studio:
     def draft_of(self, project: dict) -> dict | None:
         return self._info(project).get("draft")
 
+    def _draft_now(self, project: dict, entry: dict) -> None:
+        """A new draft on screen: the one it replaces is kept to go back to (undo, when it was made on the same
+        version), and nothing is left to redo."""
+        info = self._info(project)
+        prev = info.get("draft")
+        back = list(info.get("draft_back") or []) if prev and int(prev.get("base") or 0) == int(entry["base"]) else []
+        if prev and int(prev.get("base") or 0) == int(entry["base"]):
+            back = [*back, prev][-40:]
+        self._set_info(project, draft=entry, draft_back=back, draft_fwd=[])
+
+    def draft_undo(self, project: dict) -> None:
+        """Back to the draft before (the first one undone: the version itself)."""
+        self._guard(project, "done")
+        info = self._info(project)
+        now = info.get("draft")
+        if not now:
+            raise ActionError("Nothing to undo: this is the version as it was made.")
+        back = list(info.get("draft_back") or [])
+        self._set_info(project, draft=back.pop() if back else None, draft_back=back,
+                       draft_fwd=[*(info.get("draft_fwd") or []), now][-40:])
+
+    def draft_redo(self, project: dict) -> None:
+        self._guard(project, "done")
+        info = self._info(project)
+        fwd = list(info.get("draft_fwd") or [])
+        if not fwd:
+            raise ActionError("Nothing to redo.")
+        now = info.get("draft")
+        back = [*(info.get("draft_back") or []), now][-40:] if now else list(info.get("draft_back") or [])
+        self._set_info(project, draft=fwd.pop(), draft_back=back, draft_fwd=fwd)
+
+    def _hand_pipeline(self, project: dict, user: dict) -> Pipeline:
+        """The pipeline for edits made by hand (studio/editing.py): no step runs, so nothing reports progress."""
+        pipe = self._pipeline({"id": 0}, project, user)
+        pipe.progress = lambda f, m: None
+        return pipe
+
+    def lay_out_draft(self, user: dict, project: dict, pipe: Pipeline, ctx, plan: DesignPlan, lines: list[str],
+                      on_draft: bool) -> dict:
+        """A plan changed by hand (studio/editing.py), laid out as the new draft at once: its edit list (a second or
+        two, no queue), its changes added to the draft's own when it was made on the draft on screen, and what they
+        did remembered (the learning pass reads it)."""
+        version = self.work_version(project)
+        row = self._version_plan(project, version)[0]
+        plan_id = self.db.run("INSERT INTO plans(project_id, kind, pitch_id, data, created) VALUES (?,?,?,?,?)",
+                              (project["id"], "draft", row["pitch_id"], plan.model_dump_json(), time.time()))
+        k = int(self._info(project).get("drafts") or 0) + 1
+        shape = self.shapes(project)[0]
+        name = f"draft-{k}-{shape.replace(':', 'x')}"
+        path = pipe.draft(ctx, plan, shape, name, look=self._grade(project, user, plan))
+        said = [*lines, *graphics_notes(path), *getattr(pipe, "motion_notes", [])]
+        prev = self.draft_of(project)
+        if on_draft and prev:
+            said = list(dict.fromkeys([*(prev.get("said") or []), *said]))
+        entry = {"k": k, "base": version, "plan_id": plan_id, "edl": f"{name}.edl.json", "said": said[-40:],
+                 "text": (prev or {}).get("text", "") if on_draft else "", "made": time.time()}
+        self._set_info(project, drafts=k)
+        self._draft_now(project, entry)
+        self.db.run("INSERT INTO feedback(project_id, user_id, stage, version, text, created) VALUES (?,?,?,?,?,?)",
+                    (project["id"], user["id"], "manual", version, "; ".join(lines)[:600], time.time()))
+        return entry
+
     def make_draft(self, user: dict, project: dict) -> None:
         """The draft on screen becomes a real version: rendered in full quality from exactly that plan."""
         self._guard(project, "done")
@@ -3234,14 +3093,124 @@ class Studio:
             raise ActionError("There's no draft to make.")
         self._check_revisions(user, project)
         self.db.run("UPDATE projects SET revisions=revisions+1 WHERE id=?", (project["id"],))
-        self._set_info(project, draft=None)
+        self._set_info(project, draft=None, draft_back=[], draft_fwd=[])
         self._enqueue(project, "revise", {"plan_id": draft["plan_id"], "base": draft["base"], "said": draft["said"],
                                           "text": draft.get("text", "")})
 
     def discard_draft(self, project: dict) -> None:
-        if not self.draft_of(project):
+        """Back to the version (the draft can be brought back with redo)."""
+        draft = self.draft_of(project)
+        if not draft:
             raise ActionError("There's no draft to discard.")
-        self._set_info(project, draft=None)
+        info = self._info(project)
+        self._set_info(project, draft=None, draft_fwd=[*(info.get("draft_fwd") or []), draft][-40:])
+
+    # ------------------------------------------------------------------ the whole plan, for the work agent (work/)
+    def _light_context(self, project: dict, user: dict, start_at: float | None):
+        """The film's context without the AI (the footage's log, the beat grid, their rules and bans): enough to
+        list the moments and check a plan, at once."""
+        from .pipeline import Pipeline
+
+        pipe = Pipeline(workdir(self.s, project["user_id"], project["id"]), self.cfg, None)
+        pipe.speech = bool(self._info(project).get("speech"))
+        return self._context(pipe, project, user, start_at=start_at)
+
+    def _plan_ready(self, project: dict) -> None:
+        """A film whose plan can be rewritten now, or why not (in words the work agent can act on)."""
+        if project["kind"] != "montage":
+            raise ActionError("This film is made as scenes (a voice film): change it in words (the change tool).")
+        if project["stage"] == "confirm":
+            raise ActionError("Changes read from their words are waiting for their OK on screen: make them (step "
+                              "confirm_change) or drop them (step cancel_change) first.")
+        if project["stage"] != "done":
+            raise ActionError(f"The film is {project['stage']} now: its plan can be rewritten once that step is done.")
+
+    def plan_view(self, project: dict, user: dict) -> dict:
+        """What they're watching as one plan to rewrite (the draft on screen, else the version they work on), with
+        every logged moment of their footage and what a plan must keep (see plan_draft)."""
+        from .brain.context import people_in
+        from .brain.core import plan_beats
+
+        self._plan_ready(project)
+        version = self.work_version(project)
+        draft = self.draft_of(project)
+        on_draft = bool(draft and int(draft.get("base") or 0) == version)
+        plan = self.draft_plan(project) if on_draft else self._version_plan(project, version)[1]
+        ctx = self._light_context(project, user, plan.start_at)
+        used = [(m.clip, m.start, m.end) for m in plan.pool if any(s.key == m.key for s in plan.plan)]
+        moments = []
+        for short, f in ctx.facts.items():
+            for k, m in enumerate(f.moments, start=1):
+                a, b = float(m["start"]), float(m["end"])
+                moments.append({
+                    "id": f"{short}#{k}", "clip": short, "start": round(a, 2), "end": round(b, 2),
+                    "peak": m.get("peak"), "what": m.get("description") or "", "strength": m.get("strength", 0),
+                    "place": m.get("place") or "", "people": people_in(m),
+                    "used": any(c == short and min(b, e) - max(a, s) > 0.25 for c, s, e in used),
+                    "never": any(x["clip"] == short and min(b, x["end"]) - max(a, x["start"]) > 0.25
+                                 for x in ctx.bans)})
+        clips = {short: {"seconds": round(f.duration, 2), "fps": f.fps, "vertical": f.vertical,
+                         "unusable": [[round(a, 2), round(b, 2)] for a, b in f.avoid]} for short, f in ctx.facts.items()}
+        which = f"the draft on screen (made on version {version})" if on_draft else f"version {version}"
+        rule = ("it is a talking film: as long as what is said" if ctx.speech else
+                f"the shots' beats must add up to exactly {ctx.beats.target:g} (now {plan_beats(plan):g})")
+        about = [
+            f"The plan of {which}: {len(plan.plan)} shots, {len(plan.graphics)} graphics"
+            + (f" ({', '.join(g.kind for g in plan.graphics)})" if plan.graphics else "") + ".",
+            f"One beat = {ctx.beats.period:.3f} s; {rule}"
+            + (f"; the music's drop is on beat {ctx.beats.drop:g}" if ctx.beats.drop is not None else "") + ".",
+            "Each pool moment is a window of one clip (clip seconds), mostly inside a logged moment of it (moments "
+            "list them, with `used` for those in the film now and `never` for scenes they ruled out); pool keys are "
+            "unique and every shot's key is in the pool. Shots last at least 0.21 s; a shot needs its footage "
+            "(a hold or slow shot needs more of the clip than its length).",
+        ]
+        return {"which": which, "version": version, "plan": plan.model_dump(mode="json"), "moments": moments,
+                "clips": clips, "beat": round(ctx.beats.period, 4),
+                "beats_total": None if ctx.speech else ctx.beats.target, "about": about}
+
+    def plan_draft(self, user: dict, project: dict, data: dict, said: list[str], text: str = "") -> int:
+        """A whole plan from the work agent (plan_view's, rewritten), checked at once like any plan (the footage, the
+        beats, the shot lengths: check_plan without the rules of taste, as for their own storyboard changes) and
+        laid out as a draft on their screen. Returns the draft's job."""
+        from pydantic import ValidationError
+
+        from .brain.core import check_plan
+
+        self._plan_ready(project)
+        self._guard(project, "done")
+        try:
+            plan = DesignPlan.model_validate(data)
+        except ValidationError as exc:
+            raise ActionError("That plan doesn't read: " + "; ".join(
+                f"{'.'.join(str(x) for x in e['loc'])}: {e['msg']}" for e in exc.errors()[:12])) from exc
+        version = self.work_version(project)
+        if plan.start_at is None:  # the beat grid of the version it was made on
+            plan.start_at = self._version_plan(project, version)[1].start_at
+        problems = check_plan(plan, self._light_context(project, user, plan.start_at), taste=False)
+        if problems:
+            raise ActionError("The plan can't be made yet: " + " | ".join(problems))
+        lines = [" ".join(str(x).split())[:200] for x in said if str(x).strip()][:12] or ["The edit, rearranged"]
+        params = {"plan": plan.model_dump(mode="json"), "said": lines, "text": " ".join(str(text).split())[:600],
+                  "base": version}
+        draft = self.draft_of(project)
+        if draft and int(draft.get("base") or 0) == version:  # rewritten from the draft on screen: its lines carry on
+            params["on"] = draft["plan_id"]
+        return self._enqueue(project, "draft", params)
+
+    def _given_plan(self, job, project, user, pipe):
+        """A whole plan from the work agent (plan_draft), checked again with the film's full context: (version, its
+        plan row, context, the plan, what was done in words)."""
+        from .brain.core import check_plan
+
+        params = job["params"]
+        version = int(params.get("base") or self.work_version(project))
+        row, _, _ = self._version_plan(project, version)
+        plan = DesignPlan.model_validate(params["plan"])
+        ctx = self._context(pipe, project, user, start_at=plan.start_at)
+        problems = check_plan(plan, ctx, taste=False)
+        if problems:
+            raise ActionError("The plan can't be made: " + " | ".join(problems))
+        return version, row, ctx, plan, list(params.get("said") or [])
 
     def _revise_plan(self, job, project, user):
         """A version rendered from a plan already made (a draft they watched and said "make it" to)."""
@@ -3357,43 +3326,52 @@ class Studio:
         self.db.event(project["id"], f"Style profile: {update.summary or 'no change'} "
                                      f"(+{len(entry['added'])}, -{len(entry['dropped'])})")
 
-    # ------------------------------------------------------------------ remote renderer (see remote.py)
-    def renderer_seen(self) -> float | None:
-        """Seconds since a remote worker (either lane) last checked in, or None if none ever has."""
-        at = self.db.value("SELECT MAX(at) FROM heartbeat WHERE name IN ('renderer', 'renderer-quick') OR name LIKE "
-                           "'modal-%'", (), None)
-        return round(time.time() - at, 1) if at else None
-
     def queued_note(self, job: dict | None) -> str:
-        """What a waiting video says while remote rendering is on and no renderer is online."""
+        """What a waiting video says while it waits."""
         if not job or job["status"] != "queued":
             return ""
         if self.paused():
             return "Flicello is paused for a moment. Your video carries on by itself when it's back; you can leave this page."
-        if self.s.jobs != "remote":
-            return ""
-        from . import cloud
-
-        if cloud.can_take(self, job) and (self.s.modal_mode == "always" or not cloud.pc_online(self.db)):
-            return "Starting a cloud renderer for it: it begins in about a minute. You can leave this page."
-        seen = self.renderer_seen()
-        if seen is None or seen >= 90:
-            return "Waiting for the video renderer to come online. Your video will start by itself; you can leave this page."
         running, queued = self.ahead(job)
         n = len(running) + len(queued)
         if not n:
             return ""
-        return (f"Waiting for its turn: {n} video{'s are' if n > 1 else ' is'} being made before yours. "
-                f"Yours starts by itself right after.")
+        return (f"Waiting for its turn: {n} video{'s are' if n > 1 else ' is'} being made before this one. "
+                f"It starts by itself right after.")
 
-    # ------------------------------------------------------------------ admin
+    def find_moments(self, user: dict, project: dict, what: str) -> dict:
+        """Where in the version they work on `what` happens (watched with its sound by the watcher), with the shots
+        it falls in, so a change can name them ('cut where my eyes are closed')."""
+        what = " ".join((what or "").split())[:200]
+        if not what:
+            raise ActionError("Say what to look for.")
+        version = self.work_version(project)
+        if not version:
+            raise ActionError("There is no version to look through yet: it comes after the first cut.")
+        work = workdir(self.s, project["user_id"], project["id"])
+        video = work.out / f"v{version}-{self.shapes(project)[0].replace(':', 'x')}.mp4"
+        if not video.exists():
+            raise ActionError("That version's video isn't here to look through.")
+        watcher = make_watcher(brain_kind_for(self.s, self.is_owner(user)), self.s,
+                               self._spender(project, user["id"], None), work.brain)
+        if watcher is None or not hasattr(watcher, "find_moments"):
+            raise ActionError("Finding moments by what happens needs the Gemini watcher (GEMINI_API_KEY).")
+        found = watcher.find_moments(video, what)
+        shots = []
+        if project["kind"] == "montage":
+            try:
+                shots = self.timeline_of(project, str(version))["shots"]
+            except Exception:  # noqa: BLE001 - the times alone still say where
+                shots = []
+        for m in found:
+            m["shots"] = [s["n"] for s in shots if min(m["end"], s["end"]) - max(m["start"], s["start"]) > 0.1]
+        return {"version": version, "looked_for": what, "moments": found}
+
     def health(self) -> dict:
         from .storage import free_gb
 
         beat = self.db.one("SELECT * FROM heartbeat WHERE name='worker'")
         return {
-            "jobs": self.s.jobs,
-            "renderer_seen": self.renderer_seen(),
             "worker_seen": round(time.time() - beat["at"], 1) if beat else None,
             "queued": self.db.value("SELECT COUNT(*) FROM jobs WHERE status='queued'", (), 0),
             "running": self.db.value("SELECT COUNT(*) FROM jobs WHERE status='running'", (), 0),
@@ -3405,14 +3383,7 @@ class Studio:
             "month_usd_all": round(self.db.month_spend(billed_only=False), 3),
             "cap_usd": self.money()["monthly_usd"],
             "paused": self.paused(),
-            "cloud": cloud_status(self),
         }
-
-
-def cloud_status(studio) -> dict:
-    from .cloud import status
-
-    return status(studio)
 
 
 def edit_lines(edits: dict) -> list[str]:

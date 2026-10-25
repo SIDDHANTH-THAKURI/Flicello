@@ -922,5 +922,54 @@ from .studio.cli import studio_app  # noqa: E402 - the studio's own commands
 
 app.add_typer(studio_app, name="studio")
 
+
+@app.command()
+def connect(as_json: bool = typer.Option(False, "--json", help="Machine-readable (for the setup prompt)"),
+            test: bool = typer.Option(False, "--test", help="Also test each key against its service")) -> None:
+    """What Flicello has on this machine: the brain, keys, tools, models and the computer itself."""
+    from .local import checks, keys
+    from .studio.settings import settings as studio_settings
+
+    s = studio_settings()
+    keys.load(s.home)
+    rep = checks.report(s.home, s.models_dir)
+    if test:
+        rep["tests"] = {svc: checks.test(svc) for svc in ("gemini", "elevenlabs", "anthropic")}
+    if as_json:
+        print(json.dumps(rep, indent=1))
+        return
+    m = rep["machine"]
+    console.print(f"[bold]This computer[/]: {m['ram_gb']:g} GB memory, {m['cores']} threads, "
+                  f"{m['disk_free_gb']:g} GB free, " + ", ".join(g["name"] for g in m["gpus"]) or "no GPU found")
+    if not m["ready"]:
+        console.print("[yellow]Below what Flicello is built for:[/] " + "; ".join(m["short"]))
+    table = Table(show_lines=False)
+    for col in ("Group", "Item", "Status", "Details / what to do"):
+        table.add_column(col, overflow="fold")
+    colour = {"ok": "green", "missing": "red", "failing": "red", "not set": "yellow"}
+    for i in rep["items"]:
+        table.add_row(i["group"], i["label"], f"[{colour[i['status']]}]{i['status']}[/]",
+                      escape(i["detail"] if i["status"] == "ok" else f"{i['detail']}: {i['fix']}"))
+    console.print(table)
+    for svc, r in (rep.get("tests") or {}).items():
+        console.print(f"test {svc}: " + ("[green]ok[/] " if r["ok"] else "[red]no[/] ") + escape(r["detail"]))
+
+
+@app.command()
+def flicello(port: int = typer.Option(8765, help="Port on this machine"),
+             open_browser: bool = typer.Option(True, "--open/--no-open", help="Open it in the browser")) -> None:
+    """Flicello on this machine (only you, only this computer), opened in the browser."""
+    import os
+    import threading
+    import webbrowser
+
+    os.environ["VIDO_STUDIO_HOST"] = "127.0.0.1"
+    os.environ["VIDO_STUDIO_PORT"] = str(port)
+    from .studio.cli import serve
+
+    if open_browser:
+        threading.Timer(2.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/connect")).start()
+    serve(host="127.0.0.1", port=port, worker=True, reload=False)
+
 if __name__ == "__main__":
     app()

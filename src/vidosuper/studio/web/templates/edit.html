@@ -1,0 +1,58 @@
+{% set theme = 'dark' if request.cookies.get('theme') == 'dark' else 'light' %}
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf" content="{{ csrf }}">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="color-scheme" content="{{ theme }}">
+  <title>Edit · {{ p.title }} · {{ app_name }}</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  {{ vite("editor") }}
+</head>
+<body class="edit-page" data-editor="{{ p.id }}" data-title="{{ p.title }}">
+  <header class="ed-top">
+    <a class="ed-back" href="/p/{{ p.id }}" title="Back to the film">&larr; <span>{{ p.title }}</span></a>
+    <span class="ed-status" data-status>Opening the timeline&hellip;</span>
+    <span class="ed-gap"></span>
+    <button type="button" class="ed-btn" data-act="undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
+    <button type="button" class="ed-btn" data-act="redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+    <button type="button" class="ed-btn quiet" data-act="discard" title="Back to the version as it was made" disabled>Discard</button>
+    <button type="button" class="ed-btn sun" data-act="make" title="Render the draft as a new version" disabled>Make it</button>
+    <button type="button" class="ed-btn icon" data-act="keys" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+  </header>
+  <main class="ed-main">
+    <section class="ed-stage" aria-label="The film"><div class="pv" data-player data-preview="{{ p.id }}" data-which="draft"></div></section>
+    <aside class="ed-inspector" data-inspector aria-label="Selected"></aside>
+  </main>
+  <section class="ed-timeline" aria-label="Timeline">
+    <div class="ed-tools" data-tools></div>
+    <div class="ed-lanes">
+      <div class="ed-labels" data-labels></div>
+      <div class="ed-scroll" data-scroll tabindex="0" aria-label="Tracks: arrows move the playhead">
+        <div class="ed-canvas" data-canvas></div>
+      </div>
+    </div>
+  </section>
+  <div class="ed-toasts" data-toasts aria-live="polite"></div>
+  <dialog class="ed-keys" data-keys-dialog>
+    <h2>Keys</h2>
+    <dl>
+      <dt>Space</dt><dd>Play or pause</dd>
+      <dt>J K L</dt><dd>Back, pause, forward</dd>
+      <dt>&larr; &rarr;</dt><dd>One frame (Shift: to the next cut)</dd>
+      <dt>S</dt><dd>Split the shot at the playhead</dd>
+      <dt>O</dt><dd>Lay a shot over the picture (B-roll) at the playhead</dd>
+      <dt>Q / W</dt><dd>Trim the shot's start / end to the playhead</dd>
+      <dt>Delete</dt><dd>Delete what's selected (the film closes up)</dd>
+      <dt>Ctrl+Z / Ctrl+Shift+Z</dt><dd>Undo / redo</dd>
+      <dt>+ / &minus; / 0</dt><dd>Zoom in, out, the whole film</dd>
+      <dt>R</dt><dd>Ripple on or off (off: the next shot takes up a trim)</dd>
+      <dt>N</dt><dd>Snapping on or off (beats, bars, words, cuts)</dd>
+      <dt>Alt + drag</dt><dd>The other way of ripple, for one drag</dd>
+    </dl>
+    <form method="dialog"><button class="ed-btn">Close</button></form>
+  </dialog>
+</body>
+</html>

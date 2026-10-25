@@ -192,6 +192,12 @@ class ApiBackend:
             return s.get_final_message()
 
     def ask(self, req: Request, correction: str | None = None) -> tuple[dict, Usage]:
+        from ...local.health import watching
+
+        with watching("anthropic"):  # credit out, key refused, limits: said on Connect and by Cello
+            return self._ask(req, correction)
+
+    def _ask(self, req: Request, correction: str | None = None) -> tuple[dict, Usage]:
         schema = model_schema(req.schema)
         base = dict(model=req.model, max_tokens=req.max_tokens,
                     system=[{"type": "text", "text": req.system, "cache_control": {"type": "ephemeral"}}],
@@ -258,12 +264,20 @@ class ClaudeCodeBackend:
 
     name = "claude_code"
 
-    def __init__(self, exe: str = "claude", timeout: float = 900.0, cap_usd: float = 3.0):
-        self.exe = exe
+    def __init__(self, exe: str | None = None, timeout: float = 900.0, cap_usd: float = 3.0):
+        from ...local import claude_exe
+
+        self.exe = exe or claude_exe()
         self.timeout = timeout
         self.cap_usd = cap_usd
 
     def ask(self, req: Request, correction: str | None = None) -> tuple[dict, Usage]:
+        from ...local.health import watching
+
+        with watching("claude_code"):  # credit out, key refused, limits: said on Connect and by Cello
+            return self._ask(req, correction)
+
+    def _ask(self, req: Request, correction: str | None = None) -> tuple[dict, Usage]:
         prompt = req.text.replace(CACHE_SPLIT, "\n\n")
         if req.images:
             prompt += ("\n\nLook at every one of these images with the Read tool, in this order, before you "
@@ -283,8 +297,9 @@ class ClaudeCodeBackend:
                 cmd += ["--add-dir", folder]
             t0 = time.monotonic()
             try:
-                proc = subprocess.run(cmd, input=prompt.encode("utf-8"), capture_output=True, cwd=cwd,
-                                      timeout=self.timeout)
+                from ...local import plan_env, run_claude
+
+                proc = run_claude(cmd, prompt, tmp, cwd=cwd, timeout=self.timeout, env=plan_env())  # their plan
             except subprocess.TimeoutExpired as exc:
                 raise BrainError(f"{req.task}: Claude Code took longer than {self.timeout:.0f}s") from exc
         out = proc.stdout.decode("utf-8", errors="replace")

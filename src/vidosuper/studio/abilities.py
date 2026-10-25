@@ -39,22 +39,18 @@ GAPS = [
         "a title in the film's own style"),
     Gap("subtitles", "subtitles for what people say in the clips", r"\b(subtitles?|captions?)\b",
         "a talking video, which has captions", ("montage",)),
-    Gap("map", "a map or a travel route", r"\b(map|route animation|travel route|flight path|show the route)\b",
-        "a title with the place's name"),
     Gap("photos", "photos in the film", r"\b(my|these|the|some|our) (photos|pictures|images)\b|\bslideshow\b|"
         r"\bphoto ?montage\b|\bstill (photos|images)\b",
         "short clips (a phone's live photos work)", ("montage",)),
     Gap("stock", "footage from the internet", r"\bstock (footage|video|clips?)\b|\bb-?roll (from|off) (the )?(internet|web)\b",
         "your own clips"),
     Gap("generated", "AI-generated shots", r"\b(ai[- ]generated|generate (a|the|some|new) (shot|scene|clip|video)s?|"
-        r"text[- ]to[- ]video|(turn|make) (me|it|this|us) (into )?(an? )?(anime|cartoon|pixar)|generate footage)\b",
+        r"text[- ]to[- ]video|generate footage)\b",
         "painted looks in a voice or talking video"),
     Gap("voiceover", "a voice that reads a script", r"\b(ai voice|voice ?over|narrat(e|ion|or)|read (it|this|my script) (out|aloud))\b",
         "recording your own voice: 'Just my voice' makes an animation from it", ("montage",)),
     Gap("medley", "more than one song", r"\b(two|2|three|3|multiple|several|different) songs\b|\bmedley\b|\bmash-?up\b",
         "one song, extended to fit the film"),
-    Gap("countdown", "a countdown, timer or progress bar", r"\bcount ?down\b|\btimer\b|\bprogress bar\b",
-        "a title card"),
     Gap("blur", "blurring a face or a number plate", r"\bblur (the |his |her |their |my )?(face|faces|plate|number|people)\b|"
         r"\bhide (the |his |her |their )?face",
         "leaving those clips out (on 'what I understood')"),

@@ -32,9 +32,8 @@ Thumbs.db
 .env.*
 !.env.example
 
-# front end: installs stay local; the landing page's own footage is part of the site
+# front end: installs stay local
 frontend/node_modules/
-!src/vidosuper/studio/web/static/media/*.mp4
 
 # the story engine (Remotion): its packages, the media it is given, its renders
 story/node_modules/
@@ -42,3 +41,8 @@ story/public/
 story/out/
 
 motion/node_modules/
+
+# the holding page and gallery for flicello.com (deployed from site/)
+!site/media/*.mp4
+site/.vercel/
+site/.env*

@@ -85,7 +85,7 @@
   <summary>Delete all my films and my style (keep my account)</summary>
   <form method="post" action="/account/wipe" data-confirm="Delete every film, clip and your style? This can't be undone." data-confirm-yes="Delete everything" data-confirm-danger>
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="tick"><input type="checkbox" name="sure" value="yes" required><span><b>Yes, delete every film, clip and my style</b><small>Your account stays, so you can start again. To delete the account too, see your <a href="/account">account page</a>.</small></span></label>
+    <label class="tick"><input type="checkbox" name="sure" value="yes" required><span><b>Yes, delete every film, clip and my style</b><small>Flicello stays set up (your keys and Connect settings), so you can start again.</small></span></label>
     <button class="btn danger gap-top" type="submit">Delete everything</button>
   </form>
 </details>

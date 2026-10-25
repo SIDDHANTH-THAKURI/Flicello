@@ -1,6 +1,6 @@
 """The studio's newer choices and safety nets: "Other" and "Decide for each film" answers, the clip-sound rule,
-changing the settings and adding a note at the clips step, polishing what was understood, the caps on ideas, tracks
-and reports, stopping a step that runs on this machine, clip pictures, and the pages in both themes."""
+changing the settings and adding a note at the clips step, polishing what was understood, the caps on ideas and
+tracks, stopping a step that runs on this machine, clip pictures, and the pages in both themes."""
 
 from __future__ import annotations
 
@@ -14,12 +14,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from vidosuper.render.looks import look_filter
-from vidosuper.studio import accounts, mail, requirements
+from vidosuper.studio import requirements
 from vidosuper.studio.service import MAX_IDEAS, MAX_POLISH, MAX_TRACKS, ActionError, Studio
 from vidosuper.studio.settings import load_settings
 from vidosuper.studio.storage import workdir
 from vidosuper.studio.web.app import create_app
 from vidosuper.studio.worker import Worker
+
+from conftest import local_client, person
 
 
 @pytest.fixture()
@@ -32,16 +34,11 @@ def studio(tmp_path, monkeypatch):
 
 
 def _friend(studio: Studio, name: str = "Ava") -> dict:
-    token = accounts.create_invite(studio.db, studio.s, name)
-    user = accounts.register(studio.db, token, name, "a long password 2")
-    studio.db.run("UPDATE users SET onboarded=1 WHERE id=?", (user["id"],))
-    return studio.user(user["id"])
+    return person(studio.db)  # the one person of this Flicello
 
 
 def _client(studio: Studio, user: dict) -> TestClient:
-    client = TestClient(create_app(studio))
-    client.cookies.set("vs_session", accounts.new_session(studio.db, studio.s, user["id"], "1.2.3.4"))
-    return client
+    return local_client(studio)[0]  # the browser on this computer, signed in as them by itself
 
 
 def _csrf(html: str) -> str:
@@ -305,30 +302,6 @@ def test_ideas_and_tracks_have_a_cap(studio):
         studio.db.run("INSERT INTO beats(project_id, created, ask, idea, plan, file, seconds) VALUES (?,?,?,?,?,?,?)",
                       (p["id"], time.time(), "", "{}", "{}", f"b{k}.mp3", 17.0))
     assert studio.beats_left(p) == 0
-
-
-def test_reports_are_limited_and_go_to_the_owners_address(studio):
-    studio.s.mail_outbox = True
-    studio.s.alert_emails = ["alerts@example.com"]
-    user = _friend(studio)
-    p = studio.create_project(user, "Trip", "9:16", 15, "")
-    studio.report_problem(user, p, "stuck for ages")
-    with pytest.raises(ActionError, match="in an hour"):
-        studio.report_problem(user, p, "still stuck")
-    for _ in range(2):
-        studio.db.run("UPDATE reports SET at=at-4000")  # an hour later
-        studio.report_problem(user, p, "still stuck")
-    studio.db.run("UPDATE reports SET at=at-4000")
-    with pytest.raises(ActionError, match="today"):
-        studio.report_problem(user, p, "a fourth time")
-    assert [m["to"] for m in mail.outbox(studio.s)] == ["alerts@example.com"] * 3
-
-
-def test_the_owners_address_comes_from_the_settings(tmp_path, monkeypatch):
-    monkeypatch.setenv("VIDO_STUDIO_ALERT_EMAILS", " a@example.com, b@example.com ,")
-    assert load_settings(tmp_path / "a").alert_emails == ["a@example.com", "b@example.com"]
-    monkeypatch.delenv("VIDO_STUDIO_ALERT_EMAILS")
-    assert load_settings(tmp_path / "b").alert_emails == ["zenithvelocitylabs@gmail.com"]
 
 
 # ---------------------------------------------------------------- stopping a step on this machine

@@ -273,6 +273,17 @@ def _sync_line(plan, ctx) -> tuple[bool, str]:
     return not problems, f"{on} of {cuts} cuts on the hits" + (f"; {said}" if said else "")
 
 
+def _speech_sync_line(plan, ctx) -> tuple[bool, str]:
+    pos, on, cuts = 0.0, 0, 0
+    for i, s in enumerate(plan.plan):
+        if i:
+            cuts += 1
+            on += abs(pos - round(pos)) < 0.02
+        pos += _span_beats(s)
+    return on * 2 >= cuts, (f"{on} of {cuts} cuts on a beat (a talk is cut on its words: a cut lands on the beat "
+                            "where the pause after a phrase allows)")
+
+
 def _shots(numbers: str) -> str:
     n = [x.strip() for x in numbers.split(",") if x.strip()]
     return f"shot {n[0]}" if len(n) == 1 else "shots " + ", ".join(n[:-1]) + " and " + n[-1]
@@ -338,7 +349,9 @@ def checklist(items: list[dict], plan, ctx, cards: list[dict] | None = None, row
         asked = [it for it in items if it["on"] and it.get("check") == name]
         if not asked:
             continue
-        if name == "sync":
+        if name == "sync" and getattr(ctx, "speech", False):  # cut on the words: on the beat where a pause allows
+            ok, detail = _speech_sync_line(plan, ctx)
+        elif name == "sync":
             ok, detail = _sync_line(plan, ctx)
         elif name == "no_people":
             ok, detail = _people_line(plan, ctx, cards)

@@ -111,15 +111,19 @@ def timeline(edl: EDL, copy_url, music_url: str | None, numbers: dict[str, int] 
             "trans": {"type": seg.transition_in.type, "dur": round(item.trans_frames / fps, 3)},
             "fx": [{"type": f.type, "at": f.at, "dur": f.duration, "k": f.strength} for f in seg.fx],
             "mute": not clip_sound or seg.audio.mode == "mute" or bool(seg.ramp), "gain": seg.audio.gain_db,
-            "look": seg.look,
+            "look": seg.look, "keys": seg.keys,
         })
     music = None
     if edl.music and music_url:
         m = edl.music
         music = {"src": music_url, "start": m.start, "gain": m.gain_db, "fade_in": m.fade_in, "fade_out": m.fade_out,
                  "jumps": [{"at": j.at, "to": j.to} for j in m.jumps],
-                 "dips": [{"t": g.t, "db": g.gain_db} for g in m.automation]}
+                 "dips": [{"t": g.t, "db": g.gain_db} for g in m.automation],
+                 "duck_db": m.duck_db if m.duck_db is not None else -12.0}
+    over = [{"start": round(o.at, 3), "end": round(o.until, 3), "src": copy_url(o.clip_id), "in": round(o.src_in, 3),
+             "rate": o.speed, "fc": list(o.frame_center), "zoom": o.zoom, "zc": [0.5, 0.5]} for o in edl.over]
     return {"w": edl.meta.width, "h": edl.meta.height, "fps": fps, "duration": round(tl.duration, 3), "shots": shots,
+            "over": over,
             "music": music, "look": edl.meta.look, "fade_in": edl.meta.fade_in, "fade_out": edl.meta.fade_out,
             "letterbox": edl.meta.letterbox, "clip_sound": clip_sound,
             "texts": [{"text": t.text, "start": t.start, "end": t.end, "position": t.position, "size": t.size,

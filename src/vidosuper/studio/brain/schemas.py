@@ -139,9 +139,16 @@ class PlanShot(BaseModel):
     flip: bool | None = Field(None, description="Leave empty.")
     crack_db: float | None = Field(None, description="Leave empty.")
     src_in: float | None = Field(None, description="Leave empty: set by the tool for a shot kept from an earlier version.")
+    speed: float | None = Field(None, description="Leave empty (set by hand on the timeline: how fast it plays).")
+    push: float | None = Field(None, description="Leave empty (set by hand: an animated zoom over the shot).")
+    gain_db: float | None = Field(None, description="Leave empty (set by hand: its own sound, louder or softer).")
+    mute: bool | None = Field(None, description="Leave empty (set by hand: its own sound off).")
+    keys: list[list[float]] | None = Field(None, description=(
+        "Leave empty (set by hand: framing keyframes [seconds into the shot, zoom, x, y])."))
 
 
-GraphicKind = Literal["title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent"]
+GraphicKind = Literal["title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent", "thing",
+                      "scene"]
 
 
 class PlanGraphic(BaseModel):
@@ -162,8 +169,53 @@ class PlanGraphic(BaseModel):
     x: float | None = Field(None, description="callout: where that is across the shot's frame, 0-1 (empty: found).")
     y: float | None = Field(None, description="callout: where that is down the shot's frame, 0-1 (empty: found).")
     behind: bool = Field(False, description="title: behind the person in the shot, who stands in front of it.")
+    anchor: str = Field("", description=(
+        "thing: where it starts or stays, in words ('the top of my head', 'my hand', 'the sky'); empty: the middle."))
+    say: str = Field("", description="thing / any graphic: comes in as these words are said (empty: as its shot starts).")
+    count: int = Field(0, description="thing: how many (empty: one; rain and burst: a dozen).")
+    bounces: int = Field(0, description="thing: how many bounces they asked for (empty: as physics has it).")
+    scale: float = Field(1.0, description=(
+        "title / captions / lowerthird / kinetic / callout: how big against the usual (1 = the usual; 1.3 = bigger, "
+        "0.8 = smaller; 0.4 to 3)."))
+    place: Literal["auto", "top", "middle", "bottom"] = Field("auto", description=(
+        "title / captions / lowerthird / kinetic: where on the frame (auto: clear of faces and the apps' buttons)."))
+    scene: str = Field("", description="Leave empty (scene: a designed scene's folder, set by the tool).")
+    at: float | None = Field(None, description="Leave empty (the film second it starts when placed by hand or a scene).")
+    until: float | None = Field(None, description="Leave empty (the film second it ends when placed by hand or a scene).")
     accent: str = Field("", description="Leave empty (the style's colour).")
     by: str = Field("", description="Leave empty ('style': put there by a style, replaced when the style changes).")
+
+
+class MusicPoint(BaseModel):
+    t: float = Field(..., description="Film seconds.")
+    db: float = Field(..., description="The music's extra level there, dB (0 = as mixed, -60 = silent).")
+
+
+class MusicSkip(BaseModel):
+    at: float = Field(..., description="Film seconds where the music jumps.")
+    to: float = Field(..., description="Song seconds it carries on from.")
+
+
+class MusicEdit(BaseModel):
+    """The music as edited by hand on the timeline, on top of how the film was cut to it."""
+    slide: float = Field(0.0, description="Seconds the song starts later (+) or earlier (-) against the picture.")
+    gain_db: float = Field(0.0, description="Its level, dB (0 = as mixed).")
+    fade_in: float | None = Field(None, description="Seconds it fades in (empty: as made).")
+    fade_out: float | None = Field(None, description="Seconds it fades out at the end (empty: as made).")
+    duck_db: float | None = Field(None, description="How far it dips while someone speaks, dB (empty: the usual).")
+    points: list[MusicPoint] = Field(default_factory=list, description="Its level over the film (dB between points).")
+    jumps: list[MusicSkip] = Field(default_factory=list, description="Cuts in the song: a part left out or played again.")
+
+
+class OverShot(BaseModel):
+    """A shot laid over the film's own picture for a stretch (B-roll, a cutaway): the film's sound goes on under it."""
+    at: float = Field(..., description="Film second it comes in.")
+    until: float = Field(..., description="Film second it goes.")
+    clip: str = Field(..., description="Catalog short id of its clip ('c03').")
+    src_in: float = Field(..., description="The clip second it starts at.")
+    speed: float = Field(1.0, description="How fast it plays, 0.25 to 4.")
+    frame_x: float | None = Field(None, description="Vertical films: where its subject sits across the crop, 0-1.")
+    zoom: float = Field(1.0, description="Punch-in, 1 to 2.5.")
 
 
 class DesignPlan(BaseModel):
@@ -177,6 +229,8 @@ class DesignPlan(BaseModel):
     graphics: list[PlanGraphic] = Field(default_factory=list, description=(
         "Motion graphics: only what they asked for (a title, captions of what is said, a name or a place). Empty "
         "unless they asked."))
+    music: MusicEdit | None = Field(None, description="Leave empty (the music as edited by hand on the timeline).")
+    over: list[OverShot] = Field(default_factory=list, description="Leave empty (shots laid over the picture by hand).")
 
 
 class RangePlan(BaseModel):
@@ -197,7 +251,7 @@ class PlaceTags(BaseModel):
 
 
 ChangeKind = Literal["remove", "replace", "swap", "move", "longer", "shorter", "speed", "redo", "title", "captions",
-                     "lowerthird", "transition", "kinetic", "callout", "route", "accent", "style"]
+                     "lowerthird", "transition", "kinetic", "callout", "route", "accent", "style", "thing"]
 
 
 class ChangeOp(BaseModel):
@@ -212,7 +266,10 @@ class ChangeOp(BaseModel):
         "arrow on something in that shot that follows it as the camera moves (`want`: what; `text`: its label). "
         "route: a route drawing itself between places (`text`: 'Sydney|Wollongong|Kiama'). accent: a finish over that "
         "shot (`style`: brackets, sweep, leak or lines). `off` takes any of them away. style: the whole film in an "
-        "edit style (`want`: cinematic, hype, travel, soft, documentary or camcorder; shot 1)."))
+        "edit style (`want`: cinematic, hype, travel, soft, documentary or camcorder; shot 1). thing: something they "
+        "describe made real and moving over the film, not words (`want`: the thing and its motion in their words, "
+        "'a small red ball drops and bounces three times'; `anchor`: where from; `say`: the words it comes in on; "
+        "`text`: an optional label)."))
     shot: int = Field(..., description="The shot it is about: its number in the version they watched (1 = first).")
     other: int | None = Field(None, description=(
         "swap: the other shot. move: the number of the shot whose place it takes. redo: the last shot of the stretch "
@@ -239,6 +296,15 @@ class ChangeOp(BaseModel):
         "title: rise, slam, mask or split; captions: pop, karaoke or box (empty: the usual)."))
     off: bool = Field(False, description="title / captions / lowerthird / any graphic: take it away instead.")
     behind: bool = Field(False, description="title: behind the person in the shot.")
+    anchor: str = Field("", description="thing: where it starts, in words ('the top of my head').")
+    say: str = Field("", description="thing or any graphic: the words it comes in on, as they say them (empty: as "
+                                     "its shot starts).")
+    scale: float | None = Field(None, description=(
+        "title / captions / lowerthird / kinetic / callout: how big against the usual (1 = the usual; 'bigger' 1.3, "
+        "'much bigger' 1.6, 'smaller' 0.8). Without `text` it resizes the one already there (captions: shot 1)."))
+    place: Literal["top", "middle", "bottom"] | None = Field(None, description=(
+        "title / captions / lowerthird / kinetic: where on the frame ('captions at the top'). Without `text` it moves "
+        "the one already there."))
 
 
 class ChangeRequest(BaseModel):

@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 
 from vidosuper.perceive import prep as prep_module
 from vidosuper.perceive.transcribe import Transcript
-from vidosuper.studio import accounts
 from vidosuper.studio.brain import BrainError, brain_kind_for
 from vidosuper.studio.brain.backends import Request, Usage, model_schema, structured
 from vidosuper.studio.brain.context import BeatMap, ClipFacts
@@ -28,6 +27,8 @@ from vidosuper.studio.storage import safe_child
 from vidosuper.studio.web.app import create_app
 from vidosuper.studio.worker import Worker
 
+from conftest import local_client, person
+
 
 @pytest.fixture()
 def studio(tmp_path, monkeypatch):
@@ -39,49 +40,11 @@ def studio(tmp_path, monkeypatch):
 
 
 def _owner(studio: Studio, name: str = "owner") -> dict:
-    token = accounts.create_invite(studio.db, studio.s, "", "owner")
-    return accounts.register(studio.db, token, name, "a long password 1")
+    return person(studio.db)  # the one person of this Flicello
 
 
 def _friend(studio: Studio, name: str) -> dict:
-    token = accounts.create_invite(studio.db, studio.s, name)
-    return accounts.register(studio.db, token, name, "a long password 2")
-
-
-# ---------------------------------------------------------------- accounts
-
-def test_passwords_invites_and_sessions(studio):
-    stored = accounts.hash_password("correct horse")
-    assert accounts.verify_password("correct horse", stored) and not accounts.verify_password("wrong", stored)
-    token = accounts.create_invite(studio.db, studio.s, "Mia")
-    assert accounts.open_invite(studio.db, token)["label"] == "Mia"
-    with pytest.raises(accounts.AccountError):
-        accounts.register(studio.db, token, "Mia", "short")
-    user = accounts.register(studio.db, token, "Mia", "a long password")
-    assert user["role"] == "friend"
-    with pytest.raises(accounts.AccountError):  # one use only
-        accounts.register(studio.db, token, "Mia2", "a long password")
-    _, session = accounts.login(studio.db, studio.s, "mia", "a long password", "1.2.3.4")
-    found = accounts.session_user(studio.db, session)
-    assert found and found[0]["id"] == user["id"]
-    assert studio.db.one("SELECT token FROM sessions")["token"] != session  # stored hashed
-    accounts.end_session(studio.db, session)
-    assert accounts.session_user(studio.db, session) is None
-
-
-def test_logins_are_rate_limited(studio):
-    _friend(studio, "Sam")
-    for _ in range(studio.s.limits.login_attempts):
-        with pytest.raises(accounts.AccountError, match="don't match"):
-            accounts.login(studio.db, studio.s, "Sam", "wrong password", "9.9.9.9")
-    with pytest.raises(accounts.AccountError, match="Too many"):
-        accounts.login(studio.db, studio.s, "Sam", "a long password 2", "9.9.9.9")
-
-
-def test_invites_expire(studio):
-    token = accounts.create_invite(studio.db, studio.s, "Old")
-    studio.db.run("UPDATE invites SET expires=?", (time.time() - 1,))
-    assert accounts.open_invite(studio.db, token) is None
+    return person(studio.db)  # the one person of this Flicello (the films of the hosted studio's friends are gone)
 
 
 # ---------------------------------------------------------------- brain: schemas and checks
@@ -149,14 +112,6 @@ def test_structured_gives_up():
     backend = _FakeBackend([{"add": 5}] * 3)
     with pytest.raises(BrainError, match="not valid after 3 tries"):
         structured(backend, Request("learn", "sys", "text", ProfileUpdate, "m"), lambda u: None)
-
-
-def test_claude_code_never_works_on_friends_videos(studio):
-    studio.s.brain = "claude_code"
-    with pytest.raises(BrainError):
-        brain_kind_for(studio.s, owner=False)
-    studio.s.owner_brain = "claude_code"
-    assert brain_kind_for(studio.s, owner=True) == "claude_code"
 
 
 # ---------------------------------------------------------------- profiles, files, templates
@@ -229,17 +184,11 @@ def _agree(client, csrf, pid, studio) -> None:
 
 def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
-    owner = _owner(studio)
-    friend = _friend(studio, "Ana")
-    app = create_app(studio)
-    client = TestClient(app)
-    other = TestClient(app)
-    # Ana signs in and makes a video
-    r = client.post("/login", data={"name": "Ana", "password": "a long password 2"}, follow_redirects=False)
-    assert r.status_code == 303 and "vs_session" in r.headers["set-cookie"]
-    home = client.get("/", follow_redirects=True)
-    csrf = _csrf(home.text)
-    assert "Three questions" in home.text  # friends answer the style questions first
+    client, friend, csrf = local_client(studio)  # the browser on this computer, signed in by itself
+    owner = friend
+    other = person(studio.db, "Bo", "friend")  # someone else in the same database
+    home = client.get("/")
+    assert home.status_code == 200 and "vs_session" not in home.headers.get("set-cookie", "")  # the same session
     client.post("/welcome", data={"csrf": csrf, "pace": "fast", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Beach", "shapes": "both", "length": 15, "intent": "fun"},
                     follow_redirects=False)
@@ -249,10 +198,12 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     _upload(client, csrf, pid, media / "music.wav", "song")
     bad = client.post(f"/api/p/{pid}/uploads", json={"kind": "clip", "name": "x.exe", "size": 10}, headers={"X-CSRF": csrf})
     assert bad.status_code == 400
-    # someone else can't see it, nor its files
-    other.post("/login", data={"name": "owner", "password": "a long password 1"})
-    assert other.get(f"/p/{pid}").status_code == 404
-    assert other.get(f"/api/p/{pid}/status").status_code == 404
+    # another machine can't see it, nor its files; nor can someone else's film be opened as theirs
+    stranger = local_client(studio, peer="10.0.0.5")[0]
+    assert stranger.get(f"/p/{pid}").status_code == 403
+    assert stranger.get(f"/api/p/{pid}/status").status_code == 401
+    theirs = studio.create_project(other, "Theirs", "9:16", 15, "")
+    assert client.get(f"/p/{theirs['id']}").status_code == 404
     # start: analyse + pitch
     assert client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=False).status_code == 303
     assert client.get(f"/api/p/{pid}/status").json()["busy"]
@@ -289,7 +240,7 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     page = client.get(f"/p/{pid}").text
     assert "Looks right" in page
     sample = re.search(r'src="(/m/[^"]+\.mp4)"', page).group(1)
-    assert client.get(sample).status_code == 200 and other.get(sample).status_code == 404
+    assert client.get(sample).status_code == 200 and stranger.get(sample).status_code in (401, 403)
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
     _drain(studio)
     page = client.get(f"/p/{pid}").text
@@ -348,7 +299,7 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
 def test_budget_cap_pauses_instead_of_spending(studio):
     owner = _owner(studio)
     friend = _friend(studio, "Bo")
-    studio.s.brain = "api"
+    studio.s.brain = studio.s.owner_brain = "api"
     studio.s.limits.monthly_usd = 1.0
     studio.db.run("INSERT INTO spend(at, user_id, usd, billed) VALUES (?,?,?,1)", (time.time(), owner["id"], 1.5))
     p = studio.create_project(friend, "x", "9:16", 15, "")
@@ -389,36 +340,6 @@ def test_open_uploads_reserve_space_and_are_capped(studio):
         start_upload(studio.db, studio.s, friend, p, "clip", "z.mp4", 1000)
 
 
-def test_someone_elses_bad_passwords_cannot_lock_you_out(studio):
-    _friend(studio, "Eve")
-    user, _ = accounts.login(studio.db, studio.s, "Eve", "a long password 2", "127.0.0.1")
-    device = accounts.new_device(studio.db, user["id"])
-    for _ in range(studio.s.limits.login_attempts):  # a griefer on another browser
-        with pytest.raises(accounts.AccountError):
-            accounts.login(studio.db, studio.s, "Eve", "guess", "127.0.0.1")
-    with pytest.raises(accounts.AccountError, match="Too many"):
-        accounts.login(studio.db, studio.s, "Eve", "a long password 2", "127.0.0.1")
-    found, _ = accounts.login(studio.db, studio.s, "Eve", "a long password 2", "127.0.0.1", device)
-    assert found["id"] == user["id"]
-
-
-def test_one_active_video_per_friend(studio):
-    from vidosuper.studio.service import ActionError
-
-    friend = _friend(studio, "Fay")
-    projects = []
-    for k in range(2):
-        p = studio.create_project(friend, f"v{k}", "9:16", 15, "")
-        studio.db.run("UPDATE projects SET song='s.mp3' WHERE id=?", (p["id"],))
-        studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, created) VALUES (?, ?, 'a', 'a.mp4', 1, 30.0, 0)",
-                      (f"c{k}", p["id"]))
-        projects.append(studio.db.project(p["id"]))
-    studio.start(projects[0])
-    with pytest.raises(ActionError, match="One video at a time"):
-        studio.start(projects[1])
-    assert studio.credits(studio.user(friend["id"]))["total"] == 2  # the film that didn't start took no credit
-
-
 def test_the_api_key_is_read_from_the_dotenv_file(tmp_path, monkeypatch):
     from vidosuper import config as config_module
     from vidosuper.studio.brain.backends import ApiBackend
@@ -433,75 +354,15 @@ def test_the_api_key_is_read_from_the_dotenv_file(tmp_path, monkeypatch):
     assert ApiBackend().client.api_key == "sk-test-123"
 
 
-def test_wrong_sign_in_and_bad_sign_up_show_a_message_not_a_crash(studio):
-    _friend(studio, "Gus")
-    client = TestClient(create_app(studio), raise_server_exceptions=True)
-    r = client.post("/login", data={"name": "Gus", "password": "wrong password"})
-    assert r.status_code == 200 and "don&#39;t match" in r.text and 'value="Gus"' in r.text
-    r = client.post("/login", data={"name": "nobody", "password": "whatever"})
-    assert r.status_code == 200 and "don&#39;t match" in r.text
-    token = accounts.create_invite(studio.db, studio.s, "Hal")
-    r = client.post(f"/join/{token}", data={"name": "Hal", "password": "a long password", "password2": "different one!!",
-                                            "agree": "yes"})
-    assert r.status_code == 200 and "different" in r.text and 'value="Hal"' in r.text
-
-
-def test_a_spray_of_guesses_from_one_address_is_stopped_and_known_browsers_still_get_in(studio):
-    _friend(studio, "Ivy")
-    user, _ = accounts.login(studio.db, studio.s, "Ivy", "a long password 2", "9.9.9.9")
-    device = accounts.new_device(studio.db, user["id"])
-    for k in range(studio.s.limits.login_attempts):  # one address tries many different accounts
-        with pytest.raises(accounts.AccountError, match="match"):
-            accounts.login(studio.db, studio.s, f"name{k}", "x", "5.6.7.8")
-    with pytest.raises(accounts.AccountError, match="Too many"):
-        accounts.login(studio.db, studio.s, "another", "x", "5.6.7.8")
-    found, _ = accounts.login(studio.db, studio.s, "Ivy", "a long password 2", "1.1.1.1", device)  # her phone is fine
-    assert found["id"] == user["id"]
-
-
 def test_private_pages_are_kept_out_of_search_and_every_page_carries_security_headers(studio):
-    client = TestClient(create_app(studio))
+    client = local_client(studio)[0]
     r = client.get("/robots.txt")
-    assert r.status_code == 200 and "Disallow: /admin\n" in r.text and "Disallow: /p/\n" in r.text
-    r = client.get("/login?legacy=1")  # the owner's password fallback: never in search
+    assert r.status_code == 200 and "Disallow: /\n" in r.text
+    r = client.get("/style")
     assert "noindex" in r.headers["x-robots-tag"] and "noindex" in r.text and "Flicello" in r.text
     assert r.headers["x-frame-options"] == "SAMEORIGIN" and "default-src 'self'" in r.headers["content-security-policy"]
     assert client.get("/static/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
     assert client.get("/static/icon-192.png").status_code == 200
-
-
-def test_the_proxys_forwarded_address_is_only_believed_from_loopback(studio):
-    from fastapi import Request
-
-    app = create_app(studio)
-    # the TestClient connects from "testclient", not loopback: a forged header must be ignored there
-    client = TestClient(app)
-    for _ in range(studio.s.limits.login_attempts):
-        client.post("/login", data={"name": "ghost", "password": "x"}, headers={"X-Forwarded-For": "8.8.4.4"})
-    r = client.post("/login", data={"name": "ghost2", "password": "x"}, headers={"X-Forwarded-For": "1.2.3.4"})
-    assert "Too many" in r.text  # limited by the real peer address, whatever the header says
-
-
-def test_visitors_get_the_landing_page_and_people_signed_in_get_their_videos(studio, monkeypatch):
-    from vidosuper.studio.web import app as web
-
-    monkeypatch.setattr(web, "_manifest", lambda: {"src/landing/main.js": {"file": "assets/landing-x.js",
-                                                                          "css": ["assets/landing-x.css"]}})
-    client = TestClient(create_app(studio))
-    r = client.get("/")
-    assert r.status_code == 200 and "camera roll" in r.text
-    assert '<script type="module" src="/static/dist/assets/landing-x.js">' in r.text  # external only: CSP holds
-    assert "/static/dist/assets/landing-x.css" in r.text and "<script>" not in r.text
-    # Google's brand check reads the home page: what Flicello is, what Google sign-in is for, no intimate fakes
-    assert "Flicello is an AI video editor" in r.text and "Sign in with Google is used only" in r.text
-    assert "deepfakes" in r.text and 'href="/legal/acceptable-use"' in r.text and 'href="/legal/privacy"' in r.text
-    assert client.get("/tour").status_code == 200
-    owner = _owner(studio)
-    studio.db.run("UPDATE users SET onboarded=1 WHERE id=?", (owner["id"],))
-    _, token = accounts.login(studio.db, studio.s, "owner", "a long password 1", "1.2.3.4")
-    client.cookies.set(web.COOKIE, token)
-    r = client.get("/")
-    assert r.status_code == 200 and "Your films" in r.text and "camera roll" not in r.text
 
 
 def test_an_unbuilt_front_end_says_how_to_build_it_instead_of_failing(monkeypatch):
@@ -509,21 +370,6 @@ def test_an_unbuilt_front_end_says_how_to_build_it_instead_of_failing(monkeypatc
 
     monkeypatch.setattr(web, "_manifest", lambda: {})
     assert "npm run build" in str(web.vite_tags("landing"))
-
-
-def test_on_the_server_the_proxys_network_is_believed_and_other_addresses_are_not(studio):
-    studio.s.proxy_net = "172.18.0.0/16"  # Caddy's Docker network
-    app = create_app(studio)
-    caddy = TestClient(app, client=("172.18.0.3", 40000))
-    for _ in range(studio.s.limits.login_attempts):
-        caddy.post("/login", data={"name": "ghost", "password": "x"}, headers={"X-Forwarded-For": "8.8.4.4"})
-    r = caddy.post("/login", data={"name": "ghost2", "password": "x"}, headers={"X-Forwarded-For": "1.2.3.4"})
-    assert "Too many" not in r.text  # another visitor behind the same proxy is not locked out
-    outsider = TestClient(app, client=("203.0.113.9", 40000))
-    for _ in range(studio.s.limits.login_attempts):
-        outsider.post("/login", data={"name": "phantom", "password": "x"}, headers={"X-Forwarded-For": "8.8.4.4"})
-    r = outsider.post("/login", data={"name": "phantom2", "password": "x"}, headers={"X-Forwarded-For": "1.2.3.5"})
-    assert "Too many" in r.text  # a forged header from outside the proxy's network is ignored
 
 
 def _thin_ctx():
@@ -602,8 +448,7 @@ def test_the_page_warns_when_the_song_is_shorter_than_the_length(studio):
     friend = _friend(studio, "Kit")
     p = studio.create_project(friend, "x", "9:16", 30, "")
     studio.db.run("UPDATE projects SET song='s.mp3', song_seconds=15.8 WHERE id=?", (p["id"],))
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Kit", "password": "a long password 2"})
+    client = local_client(studio)[0]
     page = client.get(f"/p/{p['id']}").text
     assert "Heads-up about the length" in page and "about 14 s" in page and "Make it 15 s instead" in page
     csrf = _csrf(page)
@@ -644,8 +489,7 @@ def test_the_page_extends_a_short_song_and_the_video_can_then_be_long(studio, me
     work = workdir(studio.s, friend["id"], p["id"]).ensure()
     (work.music / "song.wav").write_bytes((media / "music.wav").read_bytes())
     studio.db.run("UPDATE projects SET song='mine.wav', song_seconds=30.0 WHERE id=?", (p["id"],))
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Lou", "password": "a long password 2"})
+    client = local_client(studio)[0]
     page = client.get(f"/p/{p['id']}").text
     assert "Extend the song to fit 60 s" in page
     r = client.post(f"/p/{p['id']}/extend", data={"csrf": _csrf(page)}, follow_redirects=True)
@@ -875,8 +719,7 @@ def test_shots_the_renderer_finds_too_short_are_folded_away_and_the_edl_validate
 def test_a_video_needs_no_song_and_the_note_picks_one_shot_per_beat(studio, media, monkeypatch):
     monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
     friend = _friend(studio, "Eli")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Eli", "password": "a long password 2"})
+    client = local_client(studio)[0]
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Beat", "shapes": "9:16", "length": 15, "pace": "balanced",
@@ -944,8 +787,7 @@ def test_no_song_asks_for_a_made_beat_or_no_music_and_no_music_means_none_plays(
 
     monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
     friend = _friend(studio, "Gus")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Gus", "password": "a long password 2"})
+    client = local_client(studio)[0]
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Quiet", "shapes": "9:16", "length": 15, "pace": "every", "intent": ""},
@@ -1030,8 +872,7 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
 
     monkeypatch.setattr(explainer_make, "transcribe", _fake_speech)
     friend = _friend(studio, "Ivy")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Ivy", "password": "a long password 2"})
+    client = local_client(studio)[0]
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
     page = client.get("/new").text
@@ -1111,8 +952,7 @@ def test_a_talking_video_gets_callouts_and_keeps_its_own_sound(studio, media, mo
 
     monkeypatch.setattr(prep_mod, "transcribe", speech)
     friend = _friend(studio, "Joe")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Joe", "password": "a long password 2"})
+    client = local_client(studio)[0]
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Talk", "shapes": "both", "length": 30, "kind": "talk",
@@ -1225,8 +1065,7 @@ def test_a_new_film_takes_their_own_length_cut_and_kind_and_the_ai_is_told_all_o
     from vidosuper.studio.service import ActionError, ask_text
 
     fay = _friend(studio, "Fay")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Fay", "password": "a long password 2"})
+    client = local_client(studio)[0]
     studio.db.run("UPDATE users SET onboarded=1 WHERE id=?", (fay["id"],))
     page = client.get("/new").text
     assert "Something else" in page and "My own length" in page and 'name="improvise"' in page
@@ -1239,8 +1078,6 @@ def test_a_new_film_takes_their_own_length_cut_and_kind_and_the_ai_is_told_all_o
     assert p["length"] == 40 and p["cut_note"] == "slow, then hard at the drop" and p["improvise"] == 90
     ask = ask_text(p)
     assert "my cafe's morning" in ask and "slow, then hard at the drop" in ask and "Go wild" in ask
-    with pytest.raises(ActionError, match="special access"):
-        studio.create_project(fay, "x", "9:16", 75, "")
     # 'something else' is routed to the engine that can make it, with the reason shown and a way to change it
     other = studio.create_project(fay, "Pod", "9:16", 30, "", kind="other", describe="my podcast as a cartoon")
     assert other["kind"] == "voice" and "recording of a voice" in other["routed"] and "podcast" in other["intent"]
@@ -1261,8 +1098,7 @@ def test_a_clip_made_lighter_on_the_device_ends_at_its_real_size_and_a_given_up_
     """The page streams a clip it re-encodes while sending it: it declares the original's size as an upper bound and
     says the real size at the end; when it gives up, it cancels and sends the original."""
     fay = _friend(studio, "Fay")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Fay", "password": "a long password 2"})
+    client = local_client(studio)[0]
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     pid = studio.create_project(fay, "Light", "9:16", 15, "")["id"]
     data = (media / "clips" / "a_stable.mp4").read_bytes()
@@ -1286,28 +1122,12 @@ def test_a_clip_made_lighter_on_the_device_ends_at_its_real_size_and_a_given_up_
     assert client.post(f"/api/uploads/{up['id']}/done", headers=h).status_code == 400
 
 
-def test_a_recording_longer_than_their_access_allows_is_refused_with_their_own_limit(studio):
-    from vidosuper.studio.service import ActionError
-
-    fay = _friend(studio, "Fay")
-    for kind in ("voice", "talk"):
-        p = studio.create_project(fay, "Long", "9:16", 30, "", kind=kind)
-        if kind == "voice":
-            studio.db.run("UPDATE projects SET song='talk.m4a', song_seconds=400 WHERE id=?", (p["id"],))
-        else:
-            studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, created) VALUES "
-                          "('c1', ?, 'me.mp4', 'c1.mp4', 1, 400, 0)", (p["id"],))
-        with pytest.raises(ActionError, match="up to 3"):
-            studio.start(studio.db.project(p["id"]))
-
-
 def test_a_talk_with_clean_labels_checks_what_was_heard_then_makes_a_sample_and_can_go_back(studio, media, monkeypatch):
     from vidosuper.perceive import prep as prep_mod
 
     monkeypatch.setattr(prep_mod, "transcribe", _fake_speech)
     _friend(studio, "Lu")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Lu", "password": "a long password 2"})
+    client = local_client(studio)[0]
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Labels", "shapes": "9:16", "length": 30, "kind": "talk",
@@ -1373,14 +1193,16 @@ def _fake_composer(monkeypatch, calls: list, fail: bool = False) -> None:
 
 
 def _signed_in(studio, name: str):
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": name, "password": "a long password 2"})
+    client = local_client(studio)[0]
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
     return client, csrf
 
 
 def test_music_made_for_the_film_is_read_heard_changed_and_picked_before_anything_is_cut(studio, media, monkeypatch):
+    from vidosuper.studio.settings import Tier
+
+    monkeypatch.setattr(studio, "tier", lambda user: Tier(videos=None, max_seconds=600, max_recording=600, beats=3))
     calls: list = []
     _fake_composer(monkeypatch, calls)
     monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
@@ -1472,6 +1294,9 @@ def test_a_long_film_hears_a_taste_first_and_its_full_track_is_made_from_it(stud
 
 
 def test_when_the_music_service_fails_our_own_beat_stands_in_and_they_are_told(studio, media, monkeypatch):
+    from vidosuper.studio.settings import Tier
+
+    monkeypatch.setattr(studio, "tier", lambda user: Tier(videos=None, max_seconds=600, max_recording=600, beats=3))
     calls: list = []
     _fake_composer(monkeypatch, calls, fail=True)
     friend = _friend(studio, "Ro")
@@ -1574,147 +1399,6 @@ def test_a_voice_video_gets_the_music_made_for_it_under_the_voice(studio, media,
 
 
 
-def test_a_film_uses_credits_by_its_length_shown_before_it_starts_and_given_back_if_never_finished(studio, media, monkeypatch):
-    from vidosuper.studio.service import ActionError
-
-    monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake", language="en"))
-    friend = _friend(studio, "Cy")
-    client, csrf = _signed_in(studio, "Cy")
-    me = lambda: studio.user(friend["id"])  # noqa: E731
-    assert studio.credits(me())["monthly"] == 3 and studio.credits(me())["total"] == 3
-    assert "3 credits" in client.get("/").text and 'id="cost-line"' in client.get("/new").text
-    assert studio.cost_of("montage", 30) == 1 and studio.cost_of("montage", 60.4) == 1 and studio.cost_of("montage", 61.5) == 2
-    assert studio.cost_of("voice", 100) == 3 and studio.cost_of("talk", 100, "labels") == 2 and studio.cost_of("montage", 600) == 10
-
-    def film(title):
-        r = client.post("/new", data={"csrf": csrf, "title": title, "shapes": "9:16", "length": 15, "intent": ""},
-                        follow_redirects=False)
-        pid = r.headers["location"].rsplit("/", 1)[1]
-        for name in ("a_stable.mp4", "c_pan.mp4"):
-            _upload(client, csrf, pid, media / "clips" / name, "clip")
-        return pid
-
-    pid = film("First")
-    assert "Uses 1 credit of your 3" in client.get(f"/p/{pid}").text  # before anything is used
-    client.post(f"/p/{pid}/start", data={"csrf": csrf})
-    assert studio.db.project(pid)["stage"] == "preparing" and studio.credits(me())["total"] == 2
-    _drain(studio)
-    client.post(f"/p/{pid}/back", data={"csrf": csrf, "to": "setup"})  # changed their mind: starting again is free
-    assert "Already counted" in client.get(f"/p/{pid}").text
-    client.post(f"/p/{pid}/start", data={"csrf": csrf})
-    assert studio.credits(me())["total"] == 2
-    _drain(studio)
-    client.post(f"/p/{pid}/delete", data={"csrf": csrf, "sure": "yes"})  # never finished: the credit comes back
-    assert studio.credits(me())["total"] == 3 and studio.credits(me())["monthly_left"] == 3
-    # the owner's numbers: none a month for beta, so a film can't start ...
-    owner = _owner(studio)
-    studio.set_pricing(1, 1, 0, 12)
-    pid = film("Second")
-    r = client.post(f"/p/{pid}/start", data={"csrf": csrf}, follow_redirects=True)
-    assert "uses 1 credit" in r.text and "you have 0" in r.text and studio.db.project(pid)["stage"] == "setup"
-    assert 'disabled' in re.search(r'<button[^>]*id="start-btn"[^>]*>', client.get(f"/p/{pid}").text).group(0)
-    # ... until they are given extra ones, which don't run out
-    admin = TestClient(create_app(studio))
-    admin.post("/login", data={"name": "owner", "password": "a long password 1"})
-    acsrf = _csrf(admin.get("/admin").text)
-    assert "Credits per minute of film" in admin.get("/admin").text
-    admin.post("/admin/user", data={"csrf": acsrf, "uid": friend["id"], "action": "credits", "credits": 2, "note": "for testing"})
-    assert studio.credits(me()) == {**studio.credits(me()), "monthly": 0, "extra": 2, "total": 2}
-    client.post(f"/p/{pid}/start", data={"csrf": csrf})
-    assert studio.db.project(pid)["stage"] == "preparing" and studio.credits(me())["extra"] == 1
-    history = client.get("/account").text
-    assert "for testing" in history and "+2" in history and "-1" in history
-    with pytest.raises(ActionError):
-        studio.grant_credits(me(), -5)  # only unused extra credits can be taken back
-    assert studio.credits(owner) is None  # the owner is never counted
-
-
-def test_credits_from_an_earlier_month_come_back_as_extra_ones(studio, monkeypatch):
-    from vidosuper.studio.service import Studio as S
-
-    friend = _friend(studio, "Em")
-    p = studio.create_project(friend, "Old", "9:16", 30, "")
-    monkeypatch.setattr(S, "month_key", staticmethod(lambda at=None: "2026-09"))
-    studio._pay_for(studio.db.project(p["id"]))
-    assert studio.credits(studio.user(friend["id"]))["monthly_left"] == 2
-    monkeypatch.setattr(S, "month_key", staticmethod(lambda at=None: "2026-10"))
-    assert studio.credits(studio.user(friend["id"]))["monthly_left"] == 3  # a new month, a new allowance
-    studio.delete_project(studio.db.project(p["id"]))
-    c = studio.credits(studio.user(friend["id"]))
-    assert c["monthly_left"] == 3 and c["extra"] == 1  # September's credit isn't lost
-
-
-def test_money_protection_caps_a_persons_day_pauses_everything_and_flags_accounts(studio, media, monkeypatch):
-    import time as _t
-
-    from vidosuper.studio.brain import Usage
-    from vidosuper.studio.service import ActionError
-    from vidosuper.studio.worker import spend_watch
-
-    friend = _friend(studio, "Mia")
-    owner = _owner(studio)
-    assert studio.money() == {"monthly_usd": 60.0, "video_usd": 6.0, "person_day_usd": 3.0}
-    with pytest.raises(ActionError):
-        studio.set_money(10, 20, 3)  # a video's cap above the month's
-    studio.set_money(100, 5, 2)
-    assert studio.money()["person_day_usd"] == 2.0
-    # a person's daily share: the step waits and carries on by itself, the page says when
-    p = studio.create_project(friend, "Busy", "9:16", 15, "")
-    job_id = studio.db.enqueue("pitch", p["id"], friend["id"])
-    studio.db.set_stage(p["id"], "pitching")
-    spend = studio._spender(p, friend["id"], job_id)
-    spend(Usage("pitch", "m", "api", usd=1.5))
-    job = studio.db.claim()
-
-    def costly(job, project, user):
-        studio._spender(project, user["id"], job["id"])(Usage("pitch", "m", "api", usd=0.8))
-
-    monkeypatch.setattr(studio, "_job_pitch", costly)
-    studio.run_job(job)
-    row = studio.db.one("SELECT * FROM jobs WHERE id=?", (job_id,))
-    p = studio.db.project(p["id"])
-    assert row["status"] == "queued" and row["after"] > _t.time() + 3600 and p["stage"] == "paused"
-    assert "carries on by itself" in p["note"] and studio.flags(studio.user(friend["id"]))
-    # the owner is never capped
-    o = studio.create_project(owner, "Mine", "9:16", 15, "")
-    studio._spender(o, owner["id"], 0)(Usage("pitch", "m", "api", usd=4.0))
-    # when it runs again, the video shows its step again
-    studio.db.run("UPDATE jobs SET after=NULL WHERE id=?", (job_id,))
-    studio.db.run("DELETE FROM spend WHERE user_id=?", (friend["id"],))
-    monkeypatch.setattr(studio, "_job_pitch", lambda job, project, user: None)
-    studio.run_job(studio.db.claim())
-    assert studio.db.project(p["id"])["stage"] == "pitching"
-    # the off switch: nothing new starts, people are told, the owner still can
-    studio.set_paused(True, "checking the bill")
-    with pytest.raises(ActionError, match="paused"):
-        studio._enqueue(studio.db.project(p["id"]), "sample")
-    queued = studio.db.one("SELECT * FROM jobs WHERE id=?", (studio.db.enqueue("learn", p["id"], friend["id"]),))
-    assert "paused for a moment" in studio.queued_note(queued)
-    studio._enqueue(studio.db.project(o["id"]), "learn")
-    studio.set_paused(False)
-    assert studio.paused() is None
-    # a jump in spending is told once
-    now = _t.time()
-    studio.db.run("INSERT INTO spend(at, user_id, task, model, backend, usd, billed) VALUES (?,?,?,?,?,?,1)",
-                  (now - 60, friend["id"], "pitch", "m", "api", 5.0))
-    assert "Spending jumped" in spend_watch(studio, now) and spend_watch(studio, now) == ""
-
-
-def test_the_admin_page_sets_the_caps_and_the_off_switch(studio):
-    _owner(studio)
-    admin = TestClient(create_app(studio))
-    admin.post("/login", data={"name": "owner", "password": "a long password 1"})
-    page = admin.get("/admin").text
-    assert "Money protection" in page and "Pause everything" in page
-    csrf = _csrf(page)
-    admin.post("/admin/money", data={"csrf": csrf, "monthly": 80, "video": 7, "person_day": 4})
-    assert studio.money() == {"monthly_usd": 80.0, "video_usd": 7.0, "person_day_usd": 4.0}
-    admin.post("/admin/pause", data={"csrf": csrf, "on": 1, "why": "test"})
-    assert studio.paused()["why"] == "test" and "Everything is paused" in admin.get("/admin").text
-    admin.post("/admin/pause", data={"csrf": csrf, "on": 0})
-    assert studio.paused() is None
-
-
 def test_a_persons_next_film_from_the_same_clips_reuses_their_clip_logs(studio, media, monkeypatch):
     from vidosuper.studio.brain.core import LocalBrain
     from vidosuper.studio.pipeline import Pipeline
@@ -1743,9 +1427,6 @@ def test_a_persons_next_film_from_the_same_clips_reuses_their_clip_logs(studio, 
         assert len(calls) == 2  # the second film logged nothing again
     logs = list((studio.s.users_dir / friend["id"] / "cliplog").glob("*.json"))
     assert len(logs) == 2
-    from vidosuper.studio.web.workerapi import manifest
-
-    assert any(f["path"].startswith("cliplog/") for f in manifest(studio.s.users_dir / friend["id"], pid))
 
 
 def test_the_test_bench_makes_scores_and_reports_its_videos_and_reuses_what_it_measured(tmp_path, media, monkeypatch):
@@ -1838,7 +1519,7 @@ def test_the_sample_comes_with_a_storyboard_and_a_rough_cut_and_changes_to_it_ma
     assert p["sample_tries"] == 0  # moving shots is free
 
 
-def test_what_cant_be_done_yet_is_said_plainly_counted_for_the_owner_and_told_when_ready(studio):
+def test_what_cant_be_done_yet_is_said_plainly_and_counted(studio):
     from vidosuper.studio import abilities
 
     friend = _friend(studio, "Gia")
@@ -1849,18 +1530,8 @@ def test_what_cant_be_done_yet_is_said_plainly_counted_for_the_owner_and_told_wh
     page = client.get(f"/p/{pid}").text
     assert "Not possible yet" in page and "song&#39;s words on screen" in page and "split screen" in page.lower()
     assert [g["ability"] for g in abilities.for_project(studio.db, studio.db.project(pid))] == ["lyrics", "split"]
-    client.post(f"/p/{pid}/gap", data={"csrf": csrf, "ability": "lyrics"})
-    assert "tell you when it can" in client.get(f"/p/{pid}").text
     assert not abilities.find("A calm walk, cut on the beat", "montage")
     assert not abilities.find("subtitles please", "talk")  # talking videos have captions
-    _owner(studio)
-    admin = TestClient(create_app(studio))
-    admin.post("/login", data={"name": "owner", "password": "a long password 1"})
-    page = admin.get("/admin").text
-    assert "Asked for, not possible yet" in page and "ready: tell them" in page
-    studio.s.mail_outbox = True
-    assert studio.tell_gap("lyrics") in (0, 1)
-    assert studio.db.one("SELECT told FROM gaps WHERE ability='lyrics'")["told"]
     assert studio.export(studio.user(friend["id"]))["asked_for_not_possible_yet"][0]["ability"] == "lyrics"
 
 
@@ -1886,11 +1557,10 @@ def test_clips_from_earlier_films_can_be_added_without_uploading_again(studio, m
     dst = studio.s.users_dir / user / "projects" / pids[1] / "clips" / added[0]["file"]
     assert dst.exists() and dst.stat().st_size == src.stat().st_size
     assert "Use clips you uploaded before" not in client.get(f"/p/{pids[1]}").text  # already in: not offered again
-    # someone else can't take it
-    _friend(studio, "Bo")
-    other, csrf2 = _signed_in(studio, "Bo")
-    r = other.post("/new", data={"csrf": csrf2, "title": "Mine", "shapes": "9:16", "length": 15, "intent": ""},
-                   follow_redirects=False)
-    theirs = r.headers["location"].rsplit("/", 1)[1]
-    other.post(f"/p/{theirs}/clips/reuse", data={"csrf": csrf2, "clip": first["id"]})
-    assert not studio.db.all("SELECT * FROM clips WHERE project_id=?", (theirs,))
+    # never someone else's
+    bo = person(studio.db, "Bo", "friend")
+    theirs = studio.create_project(bo, "Theirs", "9:16", 15, "")
+    studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, created) VALUES "
+                  "('cbo', ?, 'bo.mp4', 'cbo.mp4', 1, 5.0, 0)", (theirs["id"],))
+    client.post(f"/p/{pids[1]}/clips/reuse", data={"csrf": csrf, "clip": "cbo"})
+    assert [c["id"] for c in studio.db.all("SELECT * FROM clips WHERE project_id=?", (pids[1],))] == [added[0]["id"]]

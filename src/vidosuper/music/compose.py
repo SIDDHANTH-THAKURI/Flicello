@@ -58,6 +58,9 @@ def compose(plan: dict, out_path: Path, *, model: str = DEFAULT_MODEL, output_fo
             detail = exc.read().decode("utf-8", errors="replace")[:400]
             if fmt != "mp3_44100_128" and exc.code in (400, 403, 422) and "format" in detail.lower():
                 continue  # this plan can't have that format; take the standard one
+            from ..local import health
+
+            health.failed("elevenlabs", f"{exc.code} {detail}")
             raise RuntimeError(f"ElevenLabs Music said HTTP {exc.code}: {detail}") from exc
     out_path.with_suffix(".plan.json").write_text(json.dumps({"model": model, "plan": plan, "song_id": song_id}, indent=1),
                                                   encoding="utf-8")

@@ -56,7 +56,7 @@
       <small class="muted">up to {{ lengths[-1]|span }}</small>
     </div>
     {% if p.song_seconds %}<p class="help">Your song is {{ p.song_seconds|int }} s long; a longer film needs a longer song (or it can be extended below).</p>{% endif %}
-    <p class="help">Longer films take longer to make{% if credits %} and use more credits{% endif %}.</p>
+    <p class="help">Longer films take longer to make.</p>
     </fieldset>
     {% endif %}
     <button class="btn" type="submit">Save</button>
@@ -170,9 +170,6 @@
       {% for g in gaps %}
       <div class="gap-row">
         <p class="lead-s"><b>{{ g.name|capitalize }}</b>: Flicello can't do that yet, so this film won't have it. Instead: {{ g.closest }}.</p>
-        {% if g.notify %}<p class="help">✓ We'll tell you when it can.</p>{% else %}
-        <form method="post" action="/p/{{ p.id }}/gap"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="ability" value="{{ g.ability }}">
-          <button class="link" type="submit">Tell me when it can</button></form>{% endif %}
       </div>
       {% endfor %}
     </section>
@@ -256,21 +253,12 @@
       {% endif %}
     </section>
     {% endif %}
-    {% set need = (cost - (p.credits or 0)) if cost is not none else 0 %}
-    {% set short = credits and need > credits.total %}
-    <form method="post" action="/p/{{ p.id }}/start" class="panel start rise d4" data-confirm="Start making this film? {% if p.kind == 'montage' %}It watches your clips and works out the story{% else %}It listens and works out what to show{% endif %}{% if total_eta %}, {{ total_eta|eta }} to the finished film{% endif %}{% if credits and need > 0 %}, and it uses {{ need }} credit{{ '' if need == 1 else 's' }}{% endif %}. You can still change things after it." data-confirm-yes="Start">
+    <form method="post" action="/p/{{ p.id }}/start" class="panel start rise d4" data-confirm="Start making this film? {% if p.kind == 'montage' %}It watches your clips and works out the story{% else %}It listens and works out what to show{% endif %}{% if total_eta %}, {{ total_eta|eta }} to the finished film{% endif %}. You can still change things after it." data-confirm-yes="Start">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="btn-sun wide" type="submit" id="start-btn" {% if (p.kind == 'voice' and not p.song) or (p.kind != 'voice' and not clips) or short %}disabled{% endif %}>
+      <button class="btn-sun wide" type="submit" id="start-btn" {% if (p.kind == 'voice' and not p.song) or (p.kind != 'voice' and not clips) %}disabled{% endif %}>
         <span>{% if p.kind == 'voice' %}Make my animation{% elif p.kind == 'talk' %}Add my motion graphics{% else %}Start: watch my clips{% endif %}</span></button>
       {% if p.kind == 'voice' and not p.song %}<p class="cost-note">Add your recording first, then you can start.</p>
       {% elif p.kind != 'voice' and not clips %}<p class="cost-note">Add {{ 'your video' if p.kind == 'talk' else 'at least one clip' }} first, then you can start.</p>{% endif %}
-      {% if credits and cost is not none %}
-      <p class="cost-note{{ ' short' if short }}">{% if short %}This film uses {{ cost }} credit{{ '' if cost == 1 else 's' }}{% if p.credits %} ({{ need }} more than it has used){% endif %} and you have {{ credits.total }}. {% if p.kind == 'montage' %}A shorter length uses fewer{% else %}A shorter recording uses fewer{% endif %}{% if credits.monthly %}; more come on {{ credits.resets }}{% endif %}.
-      {% elif need <= 0 %}Already counted: no more credits needed.
-      {% else %}Uses {{ need }} credit{{ '' if need == 1 else 's' }}{% if p.credits %} more{% endif %} of your {{ credits.total }}.{% endif %}</p>
-      {% elif credits and p.kind != 'montage' %}
-      <p class="cost-note">Uses credits by the length of your {{ 'recording' if p.kind == 'voice' else 'video' }}: shown once it's added.</p>
-      {% endif %}
       <p class="eta">Takes {{ total_eta|eta }} in all (longer films take longer). You can close the page meanwhile.</p>
     </form>
   </aside>
@@ -709,9 +697,10 @@
 </section>
 {% endif %}
 {% if p.stage == 'done' and p.kind == 'montage' %}
-<section class="panel timeline-card rise d2" id="timeline" data-timeline="{{ p.id }}" data-which="{{ 'draft' if draft else wv }}" data-csrf="{{ csrf }}" data-stills="/m/{{ p.id }}/stills/">
-  <div class="draft-head"><h2>Timeline</h2><span class="v-tag">drag a shot to move it &middot; drag its edge to change its length &middot; tap for more</span></div>
-  <div class="tl-body" aria-live="polite">Loading the timeline&hellip;</div>
+<section class="panel timeline-card rise d2" id="timeline">
+  <div class="draft-head"><h2>Timeline</h2><span class="v-tag">trim, split and move shots &middot; speed, framing and sound &middot; graphics &middot; the music</span></div>
+  <p class="help">Every cut by hand, on {{ 'your draft' if draft else 'version ' ~ wv }}: each change plays at once, and undo takes it back.</p>
+  <a class="btn-sun" href="/p/{{ p.id }}/edit"><span>Open the editor</span></a>
 </section>
 {% endif %}
 <div class="screens rise d2">

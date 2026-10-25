@@ -964,6 +964,30 @@ def checkin(studio, job: dict, project: dict) -> None:
         post(studio.db, p, "editor", "checkin", body)
 
 
+def carry_on(studio, project: dict, kind: str) -> None:
+    """When they told Cello to build it (and pick for them), each step leads into the next on its own: what was
+    understood is taken as right, the strongest idea is picked, the sample is made into the film. They can step in
+    at any time; a step they take themselves, or a failure, ends it."""
+    if project is None:
+        return
+    info = studio._info(project)
+    if not info.get("autopilot"):
+        return
+    user = studio.user(project["user_id"])
+    stage = project["stage"]
+    nxt = {("prepare", "understood"): ("confirm_understood", {}), ("pitch", "choose"): ("pick", {"pitch": 1}),
+           ("sample", "review"): ("sample_ok", {})}.get((kind, stage))
+    if kind in ("render", "revise") or stage in ("done", "failed", "paused") or nxt is None:
+        studio._set_info(project, autopilot=None)
+        return
+    try:
+        run_action(studio, user, project, nxt[0], nxt[1])
+        studio.db.event(project["id"], f"Cello carried on: {nxt[0]}", "info")
+    except Exception:  # noqa: BLE001 - it stops and says so; they carry on from the page or by voice
+        log.warning("autopilot could not %s for %s", nxt[0], project["id"], exc_info=True)
+        studio._set_info(project, autopilot=None)
+
+
 def trouble(studio, project: dict, text: str) -> None:
     """A step that didn't work, said in the conversation too (the page shows it as well)."""
     try:

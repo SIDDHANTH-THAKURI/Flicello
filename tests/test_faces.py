@@ -117,14 +117,11 @@ def studio_film(tmp_path, media, monkeypatch):
     """A friend's finished film (version 1, made with the no-AI brain from synthetic clips), signed in."""
     import re
 
-    from fastapi.testclient import TestClient
 
     from vidosuper.perceive import prep as prep_module
     from vidosuper.perceive.transcribe import Transcript
-    from vidosuper.studio import accounts
     from vidosuper.studio.service import Studio
     from vidosuper.studio.settings import load_settings
-    from vidosuper.studio.web.app import create_app
 
     monkeypatch.delenv("VIDO_STUDIO_BRAIN", raising=False)
     monkeypatch.setattr(prep_module, "transcribe", lambda cid, wav, model, root: Transcript(clip_id=cid, model="fake",
@@ -134,10 +131,9 @@ def studio_film(tmp_path, media, monkeypatch):
     s.limits.min_free_gb = 0.0
     studio = Studio(s)
     studio.soon = lambda fn: fn()
-    friend = accounts.register(studio.db, accounts.create_invite(studio.db, s, "Ana"), "Ana", "a long password 2")
-    client = TestClient(create_app(studio))
-    client.post("/login", data={"name": "Ana", "password": "a long password 2"})
-    csrf = re.search(r'name="csrf" content="([^"]+)"', client.get("/", follow_redirects=True).text).group(1)
+    from conftest import local_client
+
+    client, friend, csrf = local_client(studio)
     client.post("/welcome", data={"csrf": csrf, "pace": "fast", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Beach", "shapes": "16:9", "length": 15, "intent": "fun"},
                     follow_redirects=False)

@@ -42,6 +42,9 @@ def frames_per_second(seconds: float) -> float:
     return 2.0 if seconds <= 120 else 1.0 if seconds <= 600 else 0.5
 
 
+DRAW_MODEL = "gemini-flash-latest"  # things drawn for a film (motion/things.py)
+
+
 class GeminiWatcher:
     kind = "gemini"
 
@@ -137,6 +140,64 @@ class GeminiWatcher:
         if not b.found or b.xmax <= b.xmin or b.ymax <= b.ymin:
             return None
         return ((b.xmin + b.xmax) / 2000, (b.ymin + b.ymax) / 2000, (b.xmax - b.xmin) / 1000, (b.ymax - b.ymin) / 1000)
+
+    def draw(self, what: str) -> str:
+        """`what` drawn as an SVG, like a premium sticker: shapes and gradients only (motion/things.clean_svg keeps
+        it to that), lit from the top left, on a 100 x 100 box."""
+        from google.genai import types
+
+        t0 = time.monotonic()
+        resp = self.client.models.generate_content(  # the fast model without thinking: 15 s, as good a drawing as 90 s
+            model=DRAW_MODEL, config=types.GenerateContentConfig(
+                temperature=0.4, thinking_config=types.ThinkingConfig(thinking_budget=0)), contents=[
+                f"Draw {what} as one bold, clean SVG illustration, like a premium animated sticker: viewBox=\"0 0 100 "
+                "100\", the object centred and filling most of the box, no background, no text. Use only svg, g, path, "
+                "circle, ellipse, rect, polygon, defs, linearGradient, radialGradient and stop. Shade it: 2 to 4 tones "
+                "with light from the top left, a soft highlight, a slightly darker outline. Recognisable at a glance at "
+                "small size. Reply with the SVG only."])
+        u = getattr(resp, "usage_metadata", None)
+        self.spend(Usage.priced("draw", DRAW_MODEL, "gemini", int(getattr(u, "prompt_token_count", 0) or 0),
+                                int((getattr(u, "candidates_token_count", 0) or 0) + (getattr(u, "thoughts_token_count", 0) or 0)),
+                                0, 0, time.monotonic() - t0))
+        return resp.text or ""
+
+    def find_moments(self, video: Path, what: str) -> list[dict]:
+        """Where in a video `what` happens ('my eyes are closed', 'I walk'): [{start, end, seen}] in its seconds,
+        watched with its sound."""
+        from google.genai import types
+        from pydantic import BaseModel
+
+        class Moment(BaseModel):
+            start: float
+            end: float
+            seen: str  # what is there, in a few words
+
+        class Found(BaseModel):
+            moments: list[Moment]
+
+        f = self._upload(video)
+        try:
+            config = types.GenerateContentConfig(response_mime_type="application/json", response_schema=Found)
+            t0 = time.monotonic()
+            resp = self.client.models.generate_content(model=self.model, config=config, contents=[
+                types.Part(file_data=types.FileData(file_uri=f.uri, mime_type="video/mp4")),
+                f"Watch this whole video with its sound. Find every stretch where this happens: {what}. For each, its "
+                "start and end in seconds from the start of the video (tight, to a tenth of a second) and what you see "
+                "in a few words. Only real matches; an empty list if it never happens."])
+            u = getattr(resp, "usage_metadata", None)
+            self.spend(Usage.priced("find", self.model, "gemini", int(getattr(u, "prompt_token_count", 0) or 0),
+                                    int((getattr(u, "candidates_token_count", 0) or 0)
+                                        + (getattr(u, "thoughts_token_count", 0) or 0)), 0, 0, time.monotonic() - t0))
+            found = Found.model_validate_json(resp.text or "")
+            return [{"start": round(max(0.0, m.start), 2), "end": round(max(m.start, m.end), 2), "seen": m.seen[:120]}
+                    for m in found.moments][:20]
+        except ValueError:
+            return []
+        finally:
+            try:
+                self.client.files.delete(name=f.name)
+            except Exception:  # noqa: BLE001 - it expires on its own
+                pass
 
     def review(self, video: Path, platform: str = "Instagram Reels and TikTok") -> dict | None:
         """A viewer's honest look at a finished film: would it stop the scroll, where would people leave, what is the

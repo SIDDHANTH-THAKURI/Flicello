@@ -24,7 +24,7 @@ const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart
 const dbToGain = (db) => clamp(10 ** ((db || 0) / 20), 0, 1);
 
 // The motion graphics: the very blocks the render uses (vidosuper/motion/blocks), loaded once per page.
-const BLOCKS = ['title', 'captions', 'lowerthird', 'transition', 'kinetic', 'callout', 'route', 'accent', 'logo'];
+const BLOCKS = ['title', 'captions', 'lowerthird', 'transition', 'kinetic', 'callout', 'route', 'accent', 'logo', 'thing'];
 let motionReady = null;
 function loadMotion() {
   if (motionReady) return motionReady;
@@ -64,8 +64,34 @@ function musicAt(m, t) {
   for (const j of m.jumps || []) if (t >= j.at) pos = j.to + (t - j.at);
   return pos;
 }
+// a shot's framing keyframes at `dt` seconds into it: [zoom, x, y], eased (the render's half-cosine), held at the ends
+export function keyedAt(keys, dt) {
+  if (!keys || !keys.length) return null;
+  if (dt <= keys[0][0]) return keys[0].slice(1, 4);
+  for (let k = 1; k < keys.length; k += 1) {
+    const a = keys[k - 1];
+    const b = keys[k];
+    if (dt <= b[0]) {
+      const e = 0.5 - 0.5 * Math.cos(Math.PI * ((dt - a[0]) / Math.max(1e-3, b[0] - a[0])));
+      return [1, 2, 3].map((i) => a[i] + (b[i] - a[i]) * e);
+    }
+  }
+  return keys[keys.length - 1].slice(1, 4);
+}
 
-class Player {
+// the music's level points (dB), straight lines between them, the first and last held (as the render mixes them)
+function levelAt(points, t) {
+  if (!points || !points.length) return 0;
+  if (t <= points[0].t) return points[0].db;
+  for (let k = 1; k < points.length; k += 1) {
+    const a = points[k - 1];
+    const b = points[k];
+    if (t <= b.t) return a.db + ((b.db - a.db) * (t - a.t)) / Math.max(1e-6, b.t - a.t);
+  }
+  return points[points.length - 1].db;
+}
+
+export class Player {
   constructor(root, tl) {
     this.root = root;
     this.tl = tl;
@@ -85,6 +111,16 @@ class Player {
       v.setAttribute('playsinline', '');
       return { box, v, i: -1 };
     });
+    if (tl.over && tl.over.length) { // shots laid over the picture: over the film's own, under its graphics
+      const box = el('div', 'pv-layer pv-over', stage);
+      box.style.zIndex = '3';
+      box.style.opacity = '0';
+      const v = el('video', '', box);
+      v.muted = true; // the film's own sound goes on under it
+      v.playsInline = true;
+      v.preload = 'auto';
+      this.overLayer = { box, v, i: -1 };
+    }
     this.flash = el('div', 'pv-flash', stage);
     this.fade = el('div', 'pv-fade', stage);
     this.texts = el('div', 'pv-texts', stage);
@@ -120,7 +156,17 @@ class Player {
     this.resize = new ResizeObserver(() => this.draw());
     this.resize.observe(stage);
     for (const L of this.layers) L.v.addEventListener('loadedmetadata', () => this.draw());
+    this.onTick = null; // the editor's playhead follows the clock
+    this.duck = 1; // the music under a shot's own voice, smoothed (the render's ducking, approximately)
     this.seek(0);
+  }
+
+  // gone: everything it plays stops (the editor swaps in the next draft's player)
+  destroy() {
+    this.pause();
+    this.resize.disconnect();
+    for (const L of this.layers) { L.v.removeAttribute('src'); L.v.load(); }
+    if (this.music) { this.music.pause(); this.music.removeAttribute('src'); }
   }
 
   // each graphic on a stage of the film's own size in a shadow root of its own (its styles stay its own), scaled
@@ -215,6 +261,7 @@ class Player {
     cancelAnimationFrame(this.raf);
     this.root.classList.remove('playing');
     for (const L of this.layers) L.v.pause();
+    if (this.overLayer) this.overLayer.v.pause();
     if (this.music) this.music.pause();
   }
 
@@ -248,8 +295,41 @@ class Player {
       const m = this.tl.music;
       const fin = m.fade_in ? clamp(this.t / m.fade_in, 0, 1) : 1;
       const fout = m.fade_out ? clamp((this.tl.duration - this.t) / m.fade_out, 0, 1) : 1;
-      this.music.volume = dbToGain(m.gain) * fin * fout;
+      const voice = !shot.mute && this.tl.clip_sound && m.duck_db; // a shot playing its own sound: the music dips
+      const dip = voice ? 10 ** (m.duck_db / 20) : 1;
+      this.duck += (dip - this.duck) * (dip < this.duck ? 0.25 : 0.08);
+      this.music.volume = clamp(dbToGain(m.gain + levelAt(m.dips, this.t)) * fin * fout * this.duck, 0, 1);
     }
+  }
+
+  // what is laid over the picture at `t` (B-roll): its clip, framed like a shot, in step with the clock
+  overAt(t) { return (this.tl.over || []).findIndex((o) => t >= o.start && t < o.end); }
+
+  drawOver(t) {
+    const L = this.overLayer;
+    if (!L) return;
+    const k = this.overAt(t);
+    if (k < 0) {
+      L.box.style.opacity = '0';
+      if (!L.v.paused) L.v.pause();
+      return;
+    }
+    const o = this.tl.over[k];
+    const like = { in: o.in, start: o.start, end: o.end, moving: o.end - o.start, steps: [[0, o.rate || 1]], zoom: o.zoom,
+      zc: o.zc, fc: o.fc, framing: 'auto', push: 0, fx: [], flip: false, keys: null, look: null };
+    if (L.i !== k) {
+      L.i = k;
+      if (o.src && !L.v.src.endsWith(o.src)) L.v.src = o.src;
+      L.v.addEventListener('loadedmetadata', () => this.draw(), { once: true });
+    }
+    const want = srcAt(like, t - o.start);
+    if (L.v.readyState >= 1 && (Math.abs(L.v.currentTime - want) > (this.playing ? DRIFT : 0.02))) {
+      try { L.v.currentTime = want; } catch { /* not ready */ }
+    }
+    L.v.playbackRate = clamp(o.rate || 1, 0.0625, 16);
+    if (this.playing && L.v.paused) L.v.play().catch(() => {});
+    if (!this.playing && !L.v.paused) L.v.pause();
+    this.place(L, like, t - o.start, 1);
   }
 
   // place one layer's picture: cover the frame around the shot's centre, with its zoom, push, flip and hits
@@ -290,9 +370,19 @@ class Player {
       ox += Math.sin(performance.now() / 23) * shake;
       oy += Math.cos(performance.now() / 29) * shake * 0.6;
     }
+    let sc = s;
+    const key = keyedAt(shot.keys, dt);
+    if (key) { // keyframes: a window of the framed picture, zoomed to fill the frame (as the render crops it)
+      const [kz, kx, ky] = key;
+      const left = clamp(kx * W - W / (2 * kz), 0, W - W / kz);
+      const top = clamp(ky * H - H / (2 * kz), 0, H - H / kz);
+      ox = (ox - left) * kz;
+      oy = (oy - top) * kz;
+      sc = s * kz;
+    }
     v.style.width = `${vw}px`;
     v.style.height = `${vh}px`;
-    v.style.transform = shot.flip ? `translate(${ox + vw * s}px, ${oy}px) scale(${-s}, ${s})` : `translate(${ox}px, ${oy}px) scale(${s})`;
+    v.style.transform = shot.flip ? `translate(${ox + vw * sc}px, ${oy}px) scale(${-sc}, ${sc})` : `translate(${ox}px, ${oy}px) scale(${sc})`;
     v.style.filter = shot.look ? LOOKS[shot.look] || '' : '';
   }
 
@@ -361,7 +451,9 @@ class Player {
       m.stage.style.transform = `scale(${k})`;
       m.M.seek(t - m.g.start);
     }
+    this.drawOver(t);
     this.badge.textContent = `Shot ${shot.n}`;
+    if (this.onTick) this.onTick(t, this.playing);
     this.scrub.value = String(t);
     this.time.textContent = `${mmss(t)} / ${mmss(tl.duration)}`;
     this.btn.textContent = this.playing ? 'Pause' : 'Play';

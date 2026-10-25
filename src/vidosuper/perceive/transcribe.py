@@ -46,13 +46,26 @@ class Transcript(BaseModel):
                 for u in self.utterances if u.confident or not only_confident]
 
 
+def _device() -> tuple[str, str]:
+    """Whisper on an NVIDIA GPU in half precision when there is one (CTranslate2 runs on CUDA only), else the CPU."""
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda", "float16"
+    except Exception:  # noqa: BLE001 - no CUDA build or driver: the CPU
+        pass
+    return "cpu", "int8"
+
+
 def _model(name: str, download_root: Path):
     with _MODEL_LOCK:
         if name not in _MODELS:
             from faster_whisper import WhisperModel
 
             _MODELS.clear()  # one at a time: the long-running renderer would otherwise keep every size in memory
-            _MODELS[name] =WhisperModel(name, device="cpu", compute_type="int8", download_root=str(download_root))
+            device, compute = _device()
+            _MODELS[name] = WhisperModel(name, device=device, compute_type=compute, download_root=str(download_root))
         return _MODELS[name]
 
 

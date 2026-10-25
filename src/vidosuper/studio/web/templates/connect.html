@@ -1,0 +1,90 @@
+{% extends "shell.html" %}
+{% set active = 'connect' %}
+{% block title %}Connect · {{ app_name }}{% endblock %}
+{% block main_class %}page narrow{% endblock %}
+{% block content %}
+{% set m = rep.machine %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow-s rise">Connect</p>
+    <h1 class="page-title rise d1">Your machine, <em class="sun-text">your Claude.</em></h1>
+    <p class="page-sub rise d2">Flicello runs here, on this computer, with your own Claude Code plan and your own keys. This page shows everything it uses and what's missing.</p>
+  </div>
+</header>
+
+<section class="panel rise d2 connect-machine{{ '' if m.ready else ' warn' }}">
+  <h2>This computer</h2>
+  <div class="rows">
+    <div><span class="k">Memory</span><span class="v">{{ m.ram_gb }} GB ({{ m.free_ram_gb }} GB free now)</span></div>
+    <div><span class="k">Graphics</span><span class="v">{% for g in m.gpus %}{{ g.name }}{% if g.vram_gb %} · {{ g.vram_gb }} GB{% endif %}{% if not loop.last %}, {% endif %}{% else %}none found{% endfor %}</span></div>
+    <div><span class="k">CPU threads</span><span class="v">{{ m.cores }}</span></div>
+    <div><span class="k">Free disk</span><span class="v">{{ m.disk_free_gb }} GB</span></div>
+  </div>
+  {% if not m.ready %}
+  <p class="connect-note">Flicello is built for high-end machines ({{ m.built_for }}) and never lowers its quality to fit a smaller one. This computer has {{ m.short|join('; ') }}: it will work, but designed scenes, clean cut-outs and renders will be slow, and heavy jobs may run out of memory.</p>
+  {% else %}
+  <p class="lead-s">Built for this. Everything runs at full quality.</p>
+  {% endif %}
+</section>
+
+<section class="panel rise d2" id="setup">
+  <h2>Set up with Claude Code</h2>
+  <p class="lead-s">Paste this into Claude Code (in any terminal: run <code>claude</code>). It checks this machine, installs what's missing and tells you what it did. It never touches your keys: add those below.</p>
+  <pre class="connect-prompt" data-connect-prompt>{{ prompt }}</pre>
+  <button type="button" class="btn-sun" data-connect-copy><span>Copy the prompt</span></button>
+</section>
+
+{% set names = {'brain': 'The brain', 'keys': 'Your keys', 'tools': 'Tools', 'models': 'AI models'} %}
+{% for group in ('brain', 'keys', 'tools', 'models') %}
+<section class="panel rise d3" id="{{ group }}">
+  <h2>{{ names[group] }}</h2>
+  {% if group == 'brain' %}
+  <p class="lead-s">What thinks for Flicello: designing scenes, planning edits, writing cartoons, and Cello's thinking.</p>
+  {% elif group == 'keys' %}
+  <p class="lead-s">Kept in this computer's keychain only, never in the repository, and sent only to the service each one belongs to.</p>
+  {% endif %}
+  <ul class="connect-list">
+    {% for i in groups.get(group, []) %}
+    <li class="connect-item is-{{ i.status|replace(' ', '-') }}" data-connect-item="{{ i.id }}">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="what">
+        <b>{{ i.label }}</b>{% if i.does %}<small>{{ i.does }}</small>{% endif %}
+        <span class="state">{{ i.status }}{% if i.detail %} · {{ i.detail }}{% endif %}</span>
+        {% if i.status != 'ok' and i.fix %}<span class="fix">{{ i.fix }}</span>{% endif %}
+      </div>
+      {% if group == 'keys' %}
+      <form class="connect-key" data-connect-key="{{ i.key }}">
+        <input type="password" name="value" autocomplete="off" placeholder="{{ 'Replace the key' if i.status == 'ok' else 'Paste your key' }}" aria-label="{{ i.label }}">
+        <button class="btn" type="submit">Save</button>
+        {% if i.status == 'ok' %}<button class="link" type="button" data-connect-test="{{ {'GEMINI_API_KEY': 'gemini', 'ELEVENLABS_API_KEY': 'elevenlabs', 'ANTHROPIC_API_KEY': 'anthropic'}.get(i.key, '') }}">Test</button>{% endif %}
+        <a class="link" href="{{ i.get }}" target="_blank" rel="noopener">Get one</a>
+        <output class="connect-out"></output>
+      </form>
+      {% elif i.id == 'claude' %}
+      <div class="connect-brain">
+        <label><input type="radio" name="brain" value="claude_code" {{ 'checked' if brain == 'claude_code' }} data-connect-brain> Your Claude Code plan</label>
+        <label><input type="radio" name="brain" value="api" {{ 'checked' if brain == 'api' }} data-connect-brain> The Anthropic API (pay per use)</label>
+        <output class="connect-out"></output>
+      </div>
+      {% elif i.id == 'blender' %}
+      <form class="connect-key" data-connect-blender>
+        <input name="value" value="{{ blender }}" placeholder="Path to blender{{ '.exe' if 'Windows' in m.system }}" aria-label="Blender's path">
+        <button class="btn" type="submit">Connect</button>
+        <output class="connect-out"></output>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
+
+{% if rep.problems %}
+<section class="panel rise d3 connect-problems">
+  <h2>Problems while working</h2>
+  <ul class="connect-list">{% for p in rep.problems %}
+    <li class="connect-item is-failing"><span class="dot"></span><div class="what"><b>{{ p.service }}</b><span class="state">{{ p.means }} · {{ p.at|ago }}</span><span class="fix">{{ p.todo }}</span></div></li>
+  {% endfor %}</ul>
+</section>
+{% endif %}
+{% endblock %}

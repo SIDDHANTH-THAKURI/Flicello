@@ -177,11 +177,7 @@ def _studio(home: Path, brain: str, spend: bool):
 def _owner(studio) -> dict:
     from . import accounts
 
-    row = studio.db.one("SELECT * FROM users WHERE role='owner'")
-    if row:
-        return row
-    token = accounts.create_invite(studio.db, studio.s, "", "owner")
-    return accounts.register(studio.db, token, "bench", "the test bench owner " + os.urandom(8).hex())
+    return accounts.owner(studio.db)
 
 
 def _drain(studio, limit: int = 40) -> None:

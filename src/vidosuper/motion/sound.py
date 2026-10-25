@@ -45,4 +45,16 @@ def graphic_sounds(edl: EDL) -> list[SoundLayer]:
             out.append(_fx("shutter", g.start + 0.05, -14.0))
         elif g.kind == "lowerthird":
             out.append(_fx("tick", g.start + 0.2, -18.0))
+        elif g.kind == "thing":  # every landing, pop and burst on the frame it happens, softer as it dies down
+            from .place import shape
+            from .things import paths
+
+            kind = shape(edl.meta.width, edl.meta.height)
+            size = g.size or (0.07 if kind == "tall" else 0.1)
+            anchor = tuple(g.points[0]) if g.points else (0.5, 0.3)
+            _, hits = paths(g.style or "pop", anchor, g.end - g.start, size, 0.9 if kind == "tall" else 0.93, g.count,
+                            g.bounces, seed=int(max(0.0, g.start) * 1000) % 9973)
+            for t, strength, what in hits[:24]:
+                name = {"bounce": "pop", "burst": "impact", "whoosh": "whoosh", "tick": "tick"}.get(what, "pop")
+                out.append(_fx(name, g.start + t - (0.02 if name == "pop" else 0.0), -9.0 - 12.0 * (1 - strength)))
     return out

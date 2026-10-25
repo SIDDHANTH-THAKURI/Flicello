@@ -1,6 +1,6 @@
 """The worker: takes jobs off the queue one at a time and keeps the studio healthy.
 
-Every few seconds it beats a heartbeat (the admin page shows how long ago), and every few minutes it looks
+Every few seconds it beats a heartbeat (`vido studio status` shows how long ago), and every few minutes it looks
 after the house: jobs stuck "running" after a crash go back in the queue, abandoned uploads are swept,
 projects past the retention time are deleted with their footage, and low disk or a nearly spent AI budget
 raises an alert.
@@ -14,18 +14,13 @@ import time
 
 from .alerts import alert
 from .pipeline import remove_project_files
-from .service import JOB_STAGE, Studio
+from .service import Studio
 from .storage import free_gb, sweep_uploads, workdir
 
 log = logging.getLogger("vidosuper.studio")
 STALL_SECONDS = 15 * 60  # a running step whose progress has not moved for this long may be stuck: the owner is told
 STUCK_SECONDS = 3600  # ... and after this long it is stopped
 LONGEST_SECONDS = 12 * 3600  # however well it moves, nothing runs longer than this
-RENDERER_GONE = 150  # a renderer lane that has not checked in for this long is gone (it checks in every 20 s)
-STALL_RETRY = 25 * 60  # a step on a renderer that has not moved for this long is taken back and started again
-GIVE_UP_TRIES = 3  # ... and after this many tries the video fails with a plain message (and Try again)
-WATCH_EVERY = 60.0
-WAKE_EVERY = 10.0  # how often waiting steps are checked for a cloud renderer
 
 
 def recover(studio: Studio) -> int:
@@ -34,47 +29,6 @@ def recover(studio: Studio) -> int:
     for row in rows:
         studio.db.requeue(row["id"])
     return len(rows)
-
-
-def watchdog(studio: Studio) -> list[str]:
-    """Nobody waits on a job that is not really running. With remote renderers, every minute: a job whose renderer
-    lane stopped checking in goes back in the queue (the page says the renderer is offline, and it starts by itself
-    when it's back); a job that has not moved for STALL_RETRY is taken back and started again (the renderer drops it,
-    see remote.py); after GIVE_UP_TRIES the video fails with words a person understands, and the owner is told.
-    Returns what it did (for the log and tests)."""
-    db, s = studio.db, studio.s
-    if s.jobs != "remote":
-        return []  # this process runs the jobs itself: maintain() stops what hangs
-    now = time.time()
-    beats = {r["name"]: r["at"] for r in db.all("SELECT name, at FROM heartbeat")}
-    did: list[str] = []
-    for job in db.all("SELECT * FROM jobs WHERE status='running'"):
-        lane = job["worker"] or "renderer"
-        gone = now - beats.get(lane, 0.0) > RENDERER_GONE
-        still = now - (job["moved"] or job["started"] or now)
-        if not gone and still <= STALL_RETRY:
-            continue
-        if job["attempts"] >= GIVE_UP_TRIES:
-            db.job_done(job["id"], "failed", "taken back too many times")
-            db.step(job["id"], "This step kept getting stuck, so it stopped.")
-            if job["project_id"] and job["kind"] in JOB_STAGE:
-                db.set_stage(job["project_id"], "failed", error=(
-                    "This step got stuck several times, so we stopped it. The owner has been told. You can try again, "
-                    "or report the problem below."))
-            alert(db, s, "stuck", f"A {job['kind']} step was taken back {job['attempts']} times and has failed.")
-            did.append(f"failed {job['id']}")
-            continue
-        if gone:
-            why = "The renderer went offline during this step. It starts again by itself as soon as it's back."
-        else:
-            why = f"This step stopped moving for {still / 60:.0f} minutes, so it's starting again."
-            alert(db, s, "stuck", f"A {job['kind']} step had not moved for {still / 60:.0f} minutes "
-                                  f"({job['message'] or 'starting'}): started again.", "warning")
-        db.take_back(job["id"], why)
-        if job["project_id"]:
-            db.event(job["project_id"], f"watchdog: {why}", "warning", job["id"])
-        did.append(f"took back {job['id']}")
-    return did
 
 
 def watch_stages(studio: Studio) -> None:
@@ -139,14 +93,6 @@ def spend_watch(studio: Studio, now: float | None = None) -> str:
 def maintain(studio: Studio) -> None:
     db, s = studio.db, studio.s
     now = time.time()
-    try:
-        from .analytics import purge
-
-        purge(db)
-        db.run("DELETE FROM audit WHERE at < ?", (now - 180 * 86400,))  # security log: 180 days
-        db.run("DELETE FROM login_codes WHERE created < ?", (now - 86400,))
-    except Exception:  # noqa: BLE001 - housekeeping never stops the worker
-        pass
     for job in db.all("SELECT id, project_id, started FROM jobs WHERE status='running' AND (COALESCE(moved, started) < ? "
                       "OR started < ?)", (now - STUCK_SECONDS, now - LONGEST_SECONDS)):
         why = "ran for more than 12 hours" if job["started"] < now - LONGEST_SECONDS else "made no progress for an hour"
@@ -155,7 +101,6 @@ def maintain(studio: Studio) -> None:
             db.set_stage(job["project_id"], "failed", error="This step took far too long. The owner has been told.")
         alert(db, s, "stuck", f"A job {why} and was stopped.")
     sweep_uploads(db, s)
-    db.run("DELETE FROM heartbeat WHERE name LIKE 'modal-%' AND at < ?", (now - 86400,))  # cloud renderers come and go
     # what was asked for stays counted, but the request's words go when the film would have
     db.run("UPDATE gaps SET words='', project_id=NULL WHERE at < ? AND words != ''", (now - s.limits.retention_days * 86400,))
     cutoff = now - s.limits.retention_days * 86400
@@ -193,23 +138,13 @@ class Worker:
         self.studio = studio
         self.name = name
         self.stop = threading.Event()
-        if studio.s.jobs == "local":  # steps run in this process: a stopped step ends at its next progress update
-            studio.db.stop_local = True
+        studio.db.stop_local = True  # steps run in this process: a stopped step ends at its next progress update
         self._last_maintenance = 0.0
-        self._last_watch = 0.0
-        self._last_wake = 0.0
 
     def tick(self) -> bool:
         """One round: heartbeat, maintenance when due, and at most one job. True if a job ran."""
         db, s = self.studio.db, self.studio.s
         db.heartbeat(self.name, {"at": time.time()})
-        if time.time() - self._last_watch > WATCH_EVERY:
-            self._last_watch = time.time()
-            try:
-                for what in watchdog(self.studio):
-                    log.warning("watchdog: %s", what)
-            except Exception:  # noqa: BLE001
-                log.exception("watchdog failed")
         if time.time() - self._last_maintenance > 300:
             self._last_maintenance = time.time()
             try:
@@ -218,19 +153,10 @@ class Worker:
             except Exception as exc:  # noqa: BLE001 - housekeeping must never stop the queue
                 log.exception("maintenance failed")
                 alert(db, s, "maintenance", f"Housekeeping failed: {exc}", "warning")
-        if s.jobs == "remote":
-            if time.time() - self._last_wake > WAKE_EVERY:  # work the PC isn't taking: a cloud renderer (cloud.py)
-                self._last_wake = time.time()
-                from .cloud import wake
-
-                did = wake(self.studio)
-                if did:
-                    log.info("cloud: %s", did)
-            return False  # remote workers claim the jobs (see remote.py); this one only keeps house
         if free_gb(s) < s.limits.min_free_gb * 0.5:
             return False  # nearly out of disk: renders would fail half-way; wait (the alert is out)
         if self.studio.paused():
-            return False  # the owner's off switch
+            return False  # the off switch
         job = db.claim()
         if job is None:
             return False
@@ -241,8 +167,7 @@ class Worker:
         return True
 
     def run(self) -> None:
-        # a remote worker may still be running its job while this process restarts: it recovers its own on start
-        recovered = recover(self.studio) if self.studio.s.jobs == "local" else 0
+        recovered = recover(self.studio)
         if recovered:
             log.warning("put %d interrupted job(s) back in the queue", recovered)
         while not self.stop.is_set():

@@ -4,7 +4,6 @@ import { toast } from './ui.js';
 import { ask } from './asks.js';
 import { editor } from './editor.js';
 import { previews, stylePreviews } from './player.js';
-import { timeline } from './timeline.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -524,7 +523,6 @@ export function studio() {
   editor();
   previews();
   stylePreviews();
-  timeline();
   shotNumbers();
   shotChanges();
   swatches();
@@ -564,4 +562,50 @@ export function studio() {
   if (localStorage.getItem('cello-on') === '1' && !window.location.pathname.startsWith('/r/')) {
     window.location.replace(link.href); // Cello was on: it stays with them
   }
+}());
+
+// Connect (local Flicello): the setup prompt copied, keys kept on this machine and tested, the brain chosen, Blender
+(function connectPage() {
+  const copy = $('[data-connect-copy]');
+  if (!copy) return;
+  copy.addEventListener('click', async () => {
+    const text = ($('[data-connect-prompt]') || {}).textContent || '';
+    try { await navigator.clipboard.writeText(text); copy.querySelector('span').textContent = 'Copied: paste it into Claude Code'; }
+    catch { copy.querySelector('span').textContent = 'Select the prompt and copy it'; }
+  });
+  const said = (form, ok, text) => {
+    const out = form.querySelector('.connect-out');
+    if (out) { out.textContent = text; out.className = `connect-out ${ok ? 'good' : 'bad'}`; }
+  };
+  $$('[data-connect-key]').forEach((form) => form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const value = form.value.value;
+    said(form, true, value ? 'Saving and testing…' : 'Forgetting it…');
+    try {
+      const r = await api('POST', '/api/connect/key', { name: form.dataset.connectKey, value });
+      said(form, r.ok, `${r.ok ? 'Works' : 'Saved, but'}: ${r.detail}`);
+      form.value.value = '';
+      if (r.ok) setTimeout(() => window.location.reload(), 1600);
+    } catch (err) { said(form, false, err.message); }
+  }));
+  $$('[data-connect-test]').forEach((btn) => btn.addEventListener('click', async () => {
+    const form = btn.closest('form');
+    said(form, true, 'Testing…');
+    try { const r = await api('POST', '/api/connect/test', { service: btn.dataset.connectTest }); said(form, r.ok, r.detail); }
+    catch (err) { said(form, false, err.message); }
+  }));
+  $$('[data-connect-brain]').forEach((radio) => radio.addEventListener('change', async () => {
+    const box = radio.closest('.connect-brain');
+    try { const r = await api('POST', '/api/connect/settings', { brain: radio.value }); said(box, true, r.detail); }
+    catch (err) { said(box, false, err.message); }
+  }));
+  const blender = $('[data-connect-blender]');
+  if (blender) blender.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api('POST', '/api/connect/settings', { blender: blender.value.value });
+      said(blender, true, r.detail);
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (err) { said(blender, false, err.message); }
+  });
 }());

@@ -264,6 +264,9 @@ class Segment(BaseModel):
         "rushes in, then sinks into slow motion. Ramped shots play without their own sound."))
     push: float = Field(0.0, ge=-0.4, le=0.4, description=(
         "Animated zoom over the shot: 0.15 pushes in 15% (eased), -0.15 starts 15% tight and pulls out."))
+    keys: list[list[float]] = Field(default_factory=list, description=(
+        "Keyframed framing over the shot, eased between keys and held before the first and after the last: "
+        "[seconds into the shot, zoom (1-3), x, y (the point of the framed picture at the centre, 0-1)]."))
     fx: list[Fx] = Field(default_factory=list, description="Hits inside the shot: flash, shake, pulse.")
     stabilize: bool = Field(False, description="Smooth handheld wobble (crops in slightly).")
     frame_center: tuple[float, float] = Field((0.5, 0.5), description=(
@@ -300,6 +303,8 @@ class MusicSpec(BaseModel):
     jumps: list[MusicJump] = Field(default_factory=list, description="Music edits: skip ahead/back in the track.")
     grid_shift: float = Field(0.0, description=(
         "Seconds added to the analysed beat grid when it sits on the off-beat (set by the editor who heard it)."))
+    duck_db: float | None = Field(None, description=(
+        "How far the music dips while a shot's own voice plays, dB (empty: the render's usual depth)."))
 
 
 class SoundLayer(BaseModel):
@@ -335,7 +340,8 @@ class MotionGraphic(BaseModel):
     """A motion graphic over the finished picture, on the film's timeline, made by the motion engine
     (vidosuper.motion: the measured professional moves, rendered frame by frame with transparency)."""
 
-    kind: Literal["title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent", "logo"]
+    kind: Literal["title", "captions", "lowerthird", "transition", "kinetic", "callout", "route", "accent", "logo",
+                  "thing"]
     start: float = Field(..., ge=0.0, description="Film seconds it comes in.")
     end: float = Field(..., description="Film seconds it's gone.")
     text: str = Field("", description="title: the headline ('\\n' between lines); lowerthird: the name.")
@@ -357,6 +363,14 @@ class MotionGraphic(BaseModel):
     behind: bool = Field(False, description="title: behind the person in the shot (they stand in front of it).")
     font: str = Field("", description="display, serif or mono (empty: display): a brand's type.")
     image: str = Field("", description="logo: the picture, as a data URI (a brand's logo).")
+    shape: str = Field("", description="thing: the drawn object (motion/things.LIBRARY), empty when `svg` draws it.")
+    svg: str = Field("", description="thing: a drawing made for it (shapes and gradients only).")
+    size: float | None = Field(None, description="thing: its size, a share of the frame's height.")
+    count: int = Field(0, description="thing: how many (rain, burst, a few dropping).")
+    bounces: int = Field(0, description="thing: how many times it bounces (0: as physics has it).")
+    scale: float = Field(1.0, ge=0.3, le=3.0, description=(
+        "title / captions / lowerthird / kinetic / callout: how big against the usual (1 = the usual)."))
+    ref: int | None = Field(None, description="Leave empty (the film plan's graphic it was made from, by its index).")
 
 
 class EditMeta(BaseModel):
@@ -375,6 +389,19 @@ class EditMeta(BaseModel):
         "faded, punchy, mono."))
     stabilize: bool = Field(False, description="Smooth handheld wobble in every shot.")
     letterbox: float | None = Field(None, description="Cinematic bars to this aspect ratio, e.g. 2.39 (None = off).")
+    speech: bool = Field(False, description="A talking film: cut on its words, its voices kept (set by the tool).")
+
+
+class Overlay(BaseModel):
+    """A shot laid over the picture for a stretch (B-roll, a cutaway): its picture covers the film's, under the motion
+    graphics; the film's own sound goes on."""
+    clip_id: str
+    at: float = Field(..., ge=0.0, description="Film seconds it comes in.")
+    until: float = Field(..., description="Film seconds it goes.")
+    src_in: float = Field(..., ge=0.0, description="Clip seconds it starts at.")
+    speed: float = Field(1.0, ge=0.25, le=4.0)
+    frame_center: tuple[float, float] = Field((0.5, 0.5), description="Where the crop sits in its clip (fractions).")
+    zoom: float = Field(1.0, ge=1.0, le=2.5)
 
 
 class EDL(BaseModel):
@@ -386,6 +413,7 @@ class EDL(BaseModel):
     sounds: list[SoundLayer] = Field(default_factory=list)
     texts: list[TextOverlay] = Field(default_factory=list)
     motion: list[MotionGraphic] = Field(default_factory=list, description="Motion graphics over the film.")
+    over: list[Overlay] = Field(default_factory=list, description="Shots laid over the picture (B-roll, cutaways).")
     notes: str = ""
 
 

@@ -165,6 +165,31 @@ def motion_layers(edl: EDL, project: Project, timeline, width: int, height: int,
     return made, still, notes
 
 
+def over_layers(edl: EDL, clips: dict, fps: int, width: int, height: int, quality: str, cfg: Config,
+                project: Project, look: str) -> list[tuple]:
+    """The shots laid over the picture (B-roll), rendered like the film's own shots (framed, graded, cached) and laid
+    on before the motion graphics, which stay on top: (start, end, video) each."""
+    from ..edit.timeline import TimelineItem
+    from ..schemas import Segment, SegmentAudio
+    from .segments import render_segment
+
+    out = []
+    for k, o in enumerate(edl.over):
+        clip = clips.get(o.clip_id)
+        seconds = o.until - o.at
+        if clip is None or seconds < 0.2:
+            continue
+        seg = Segment(id=f"over{k + 1:02d}", clip_id=o.clip_id, src_in=o.src_in,
+                      src_out=min(clip.duration, o.src_in + seconds * o.speed), speed=o.speed,
+                      frame_center=o.frame_center, zoom=o.zoom, audio=SegmentAudio(mode="mute"))
+        frames = max(1, round(seconds * fps))
+        item = TimelineItem(index=10_000 + k, seg=seg, clip=clip, frames=frames, start=0, trans_frames=0,
+                            moving_frames=frames)
+        made = render_segment(item, width, height, fps, quality, cfg, project.segments / quality, look)
+        out.append((round(o.at, 6), round(o.until, 6), made.video))
+    return out
+
+
 def draft_canvas(width: int, height: int, short_side: int) -> tuple[int, int]:
     scale = short_side / min(width, height)
     return max(2, round(width * scale / 2) * 2), max(2, round(height * scale / 2) * 2)
@@ -200,6 +225,7 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
                             look_name=meta.look, item_looks=adaptive_looks(timeline, project, meta.look),
                             stabilize=meta.stabilize)
     graphics, still, motion_notes = motion_layers(edl, project, timeline, width, height, faces, shots, work)
+    graphics = [*over_layers(edl, clips, timeline.fps, width, height, quality, cfg, project, meta.look), *graphics]
     texts = [(t, render_text_png(t, width, height, work / f"text_{k}.png")) for k, t in enumerate([*edl.texts, *still])]
     video_only = assemble_video(timeline, shots, meta, quality, cfg, work / "picture.mp4", work,
                                 texts=texts, size=(width, height),
@@ -208,8 +234,8 @@ def render_edl(edl: EDL, project: Project, cfg: Config, *, quality: str = "draft
 
     music_wav = decode_music(edl.music.path, project.music) if edl.music and edl.music.path else None
     layers = [(layer, resolve_sound(layer.source, clips, project)) for layer in edl.sounds]
-    mix = mix_timeline(timeline, shots, meta, edl.music if music_wav else None, music_wav,
-                       cfg.render.music_duck_db, layers=layers)
+    duck = edl.music.duck_db if edl.music and edl.music.duck_db is not None else cfg.render.music_duck_db
+    mix = mix_timeline(timeline, shots, meta, edl.music if music_wav else None, music_wav, duck, layers=layers)
     mix, measured, gain_db = normalize(mix, meta.loudness_lufs, meta.true_peak_db)
     if tail is not None:  # the outro's sound has its own level; it just follows the film
         tail_audio = np.zeros((frames_to_samples(tail.frames, timeline.fps), 2), np.float32)

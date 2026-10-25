@@ -55,6 +55,7 @@ class StoryContext:
     no_people: bool = False  # they said no faces / no people: nobody clearly in view, in any shot
     no_repeats: bool = False  # they said no duplicates: one place is shown in one stretch of the film only
     hold_ok: bool = False  # they asked for holds of their own length: the pacing limits give way
+    speech: bool = False  # a talking film: cut on its words (speech_cut); a cut lands on a beat where a pause allows
 
     def reuse_if_asked(self, *texts: str) -> None:
         if any(REUSE_WORDS.search(t or "") for t in texts):
@@ -364,6 +365,8 @@ def _speed(kind: str, fps: float) -> float:
 def source_need(shot: PlanShot, period: float, fps: float) -> float:
     """Seconds of source footage a shot plays (roughly, as the template builder will compute it)."""
     seconds = shot.beats * period
+    if shot.speed is not None and shot.kind != "stutter":  # set by hand on the timeline
+        return seconds * min(4.0, max(0.25, shot.speed))
     if shot.kind == "stutter":
         return seconds + 0.12 * max(0, shot.count - 1) + 0.4
     if shot.kind == "ramp":
@@ -584,13 +587,13 @@ def check_plan(plan: DesignPlan, ctx: StoryContext, taste: bool = True) -> list[
             problems.append(f"pool '{m.key}': {m.clip} {m.start}-{m.end} is a scene they never want "
                             f"({banned[0].get('what') or 'removed before'}): use another moment")
         logged = max((min(x["end"], m.end) - max(x["start"], m.start) for x in f.moments), default=0.0)
-        if logged < 0.5 * (m.end - m.start):
+        if logged < 0.5 * (m.end - m.start) and not getattr(ctx, "speech", False):  # a talk is cut on its words
             problems.append(f"pool '{m.key}': {m.clip} {m.start}-{m.end} is not inside a logged moment of that clip")
     missing = sorted({s.key for s in plan.plan} - set(pool))
     if missing:
         problems.append(f"the plan uses keys that are not in the pool: {', '.join(missing)}")
     total = plan_beats(plan)
-    if abs(total - beats.target) > 1e-6:
+    if abs(total - beats.target) > 1e-6 and not getattr(ctx, "speech", False):  # a talk is as long as what is said
         problems.append(f"the plan adds up to {total:g} beats; it must be exactly {beats.target} "
                         f"(add or remove {beats.target - total:+g} beats)")
     pos = 0.0
@@ -625,7 +628,7 @@ def check_plan(plan: DesignPlan, ctx: StoryContext, taste: bool = True) -> list[
         problems += repeats
     if ctx.sync and plan.plan:
         problems += _sync_problems(plan, beats, hold_ok=getattr(ctx, "hold_ok", False))
-    if plan.plan and not getattr(ctx, "hold_ok", False):  # pacing a short video needs: a quick hook and no stalls
+    if plan.plan and not getattr(ctx, "hold_ok", False) and not getattr(ctx, "speech", False):  # a quick hook, no stalls
         first = plan.plan[0].beats * (plan.plan[0].count if plan.plan[0].kind == "stutter" else 1) * beats.period
         if first > 4.5:
             problems.append(f"the first shot lasts {first:.1f}s: the hook must land within ~2 s and the first shot "
@@ -728,6 +731,8 @@ def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: boo
         if kind == "ramp" and f.fps < SLOWMO_FPS:  # a ramp into 0.4x needs real slow-motion frames
             kind = "cut"
         speed = 1.0 if kind in ("hold", "hit") and f.fps < SLOWMO_FPS else None
+        if s.speed is not None:  # set by hand on the timeline
+            speed = min(4.0, max(0.25, s.speed))
         tr = None if s.transition == "cut" else (s.transition, round(max(0.25, s.transition_beats) * ctx.beats.period, 3))
         frame = (min(1.0, max(0.0, s.frame_x)), 0.5) if vertical and s.frame_x is not None else None
         # an action moment's peak lands on a beat: the one the plan names, else the shot's second beat
@@ -748,7 +753,8 @@ def to_design(plan: DesignPlan, ctx: StoryContext, song_path: str, vertical: boo
             zoom, center = reuse_framing(reuses, action=m.peak is not None)
         shots.append(Shot(kind=kind, beats=s.beats, key=s.key, count=s.count if kind == "stutter" else 1, speed=speed,
                           transition=tr, frame=frame, peak_beat=peak_beat, zoom=zoom, zoom_center=center,
-                          flip=bool(s.flip), crack_db=s.crack_db, src_in=s.src_in))
+                          flip=bool(s.flip), crack_db=s.crack_db, src_in=s.src_in,
+                          push=None if s.push is None else min(0.4, max(-0.4, s.push))))
     def hero_of(m: PoolMoment) -> float | None:
         """Where the analyst said its subject is best in frame, if inside the window."""
         f = ctx.facts.get(m.clip)

@@ -1,8 +1,8 @@
 """The studio's web app: pages for people, a small JSON API for uploads and progress, media for videos.
 
 Security in one place:
-- every page and API call needs a signed-in session (HttpOnly, SameSite=Strict cookie), except /login,
-  /join/<invite> and /healthz; the owner's admin pages also check the role;
+- it answers only on this computer: any other host name is refused (no other site reaches it through DNS
+  rebinding), and the one person of this machine is signed in by itself (HttpOnly, SameSite=Strict cookie);
 - every state change is a POST/PUT/DELETE carrying the session's CSRF token (form field or X-CSRF header);
 - every project, upload and file is looked up by id *and* owner; files are served only from the project's
   own folders by plain names (no paths from the client);
@@ -12,12 +12,13 @@ Security in one place:
 
 from __future__ import annotations
 
-import ipaddress
+import asyncio
 import json
 import mimetypes
 import re
 import secrets
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -29,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .. import accounts, analytics, auth
+from .. import accounts
 from ..brain.context import read_note
 from ..profiles import QUESTIONS
 from ..service import BUSY, FEEDBACK_TAGS, LENGTHS, STAGES, ActionError, Studio, uses_looks
@@ -38,7 +39,8 @@ from ..storage import UploadError, finish_upload, safe_child, start_upload, work
 HERE = Path(__file__).parent
 COOKIE = "vs_session"
 mimetypes.add_type("application/manifest+json", ".webmanifest")
-DEVICE = "vs_device"  # a browser the person has signed in from before (login throttling)
+
+
 def note_read(p: dict) -> list[str]:
     """'How I read your note': what was taken from their words, so a miss is visible before anything starts."""
     lines = read_note(p["intent"], p["pace"]) if p["intent"] else []
@@ -62,15 +64,6 @@ def eta_text(seconds) -> str:
 
 
 DIST = HERE / "static" / "dist"
-PUBLIC_PAGES = {"/", "/tour", "/signin", "/legal"}  # the public face: always readable by search and Google's brand check
-
-
-def indexable(request: Request, public_signup: bool) -> bool:
-    """Only signed-out views of the public face (and /signup while anyone can join) may be indexed."""
-    if getattr(request.state, "uid", None):
-        return False
-    path = request.url.path
-    return path in PUBLIC_PAGES or path.startswith("/legal/") or (path == "/signup" and public_signup)
 _MANIFEST: dict = {"mtime": None, "data": {}}
 
 
@@ -118,11 +111,28 @@ from .. import abilities  # noqa: E402 - what people ask for that can't be done 
 
 def create_app(studio: Studio) -> FastAPI:
     s = studio.s
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(_app):
+        # on Windows a browser that drops a connection (a video seeking cancels its range request) makes asyncio log a
+        # ConnectionResetError from its Proactor transport: nothing is wrong, so it isn't logged (anything else is)
+        loop = asyncio.get_running_loop()
+        before = loop.get_exception_handler()
+
+        def quiet(lp, context):
+            if isinstance(context.get("exception"), ConnectionResetError):
+                return
+            if before is not None:
+                before(lp, context)
+            else:
+                lp.default_exception_handler(context)
+
+        loop.set_exception_handler(quiet)
+        yield
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     templates.env.globals.update(STAGES=STAGES, BUSY=BUSY, QUESTIONS=QUESTIONS, TAGS=FEEDBACK_TAGS, LENGTHS=LENGTHS,
-                                 app_name=s.name, vite=vite_tags,
-                                 is_public=lambda request: indexable(request, s.public_signup))
+                                 app_name=s.name, vite=vite_tags)
     templates.env.filters["fromjson"] = json.loads
     templates.env.filters["ago"] = _ago
     templates.env.filters["mmss"] = lambda x: f"{int(x or 0) // 60}:{int(x or 0) % 60:02d}"
@@ -137,25 +147,37 @@ def create_app(studio: Studio) -> FastAPI:
     templates.env.globals["IMPROVISE"] = IMPROVISE
     templates.env.filters["noids"] = lambda t: MOMENT_ID.sub("", str(t or "")).strip()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
-    analytics.ensure(studio.db)
+    from ...local import health as local_health
+
+    local_health.HOME[:] = [s.home]  # services failing while working: remembered here, said by Connect and Cello
+    from ...local import keys as local_keys  # their keys from this machine's keychain, their Blender if they set one
+
+    local_keys.load(s.home)
+    if s.blender_path:
+        import os as _os
+
+        _os.environ.setdefault("BLENDER_PATH", s.blender_path)
+    templates.env.globals["local"] = True
+    if studio.work.recovered:  # Cello's hands (work/sessions.py): what a restart cut short is said, not left hanging
+        __import__("logging").getLogger("vidosuper.studio").info("work cut short by the restart: %d", studio.work.recovered)
 
     # ------------------------------------------------------------------ plumbing
+    LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
     @app.middleware("http")
     async def headers(request: Request, call_next):
+        if (request.url.hostname or "") not in LOCAL_HOSTS:  # only this computer (and no DNS rebinding)
+            return PlainTextResponse("Flicello only answers on this computer: open http://127.0.0.1:"
+                                     f"{s.port}", status_code=403)
         response = await call_next(request)
-        if request.method == "GET" and response.status_code == 200 and \
-                "text/html" in response.headers.get("content-type", ""):
-            try:  # cookieless page-view count (see analytics.py); never in the way of the page
-                analytics.record(studio.db, path=request.url.path, ip=client_ip(request),
-                                 ua=request.headers.get("user-agent", ""), ref=request.headers.get("referer"),
-                                 host=request.url.hostname or "", utm=request.query_params.get("utm_source"),
-                                 user_id=getattr(request.state, "uid", None))
-            except Exception:  # noqa: BLE001
-                pass
+        fresh = getattr(request.state, "fresh", None)  # the one person, signed in by itself
+        if fresh:
+            response.set_cookie(COOKIE, fresh, max_age=s.session_days * 86400, httponly=True, samesite="strict",
+                                secure=False, path="/")
         renewed = getattr(request.state, "renew", None)
         if renewed and COOKIE not in response.headers.get("set-cookie", ""):
-            response.set_cookie(COOKIE, renewed, max_age=s.session_days * 86400, httponly=True, samesite="lax",
-                                secure=s.https, path="/")
+            response.set_cookie(COOKIE, renewed, max_age=s.session_days * 86400, httponly=True, samesite="strict",
+                                secure=False, path="/")
         response.headers["Content-Security-Policy"] = CSP
         response.headers["X-Frame-Options"] = "SAMEORIGIN"  # Cello's shell holds the app in a frame of our own
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -163,10 +185,7 @@ def create_app(studio: Studio) -> FastAPI:
         response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"  # talking to Cello
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
-        public = indexable(request, s.public_signup)
-        response.headers["X-Robots-Tag"] = "index, follow" if public else "noindex, nofollow, noarchive"
-        if s.https:
-            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
         if request.url.path.startswith(("/m/", "/api/")) or "text/html" in response.headers.get("content-type", ""):
             response.headers.setdefault("Cache-Control", "no-store")
         return response
@@ -192,59 +211,28 @@ def create_app(studio: Studio) -> FastAPI:
         return templates.TemplateResponse(request, "error.html", {"message": "Something went wrong on our side.",
                                                                   "user": None}, status_code=500)
 
-    proxy_net = ipaddress.ip_network(s.proxy_net) if s.proxy_net else None
-
-    def ours(peer: str) -> bool:
-        if peer in ("127.0.0.1", "::1"):
-            return True
-        try:
-            return proxy_net is not None and ipaddress.ip_address(peer) in proxy_net
-        except ValueError:
-            return False
-
-    def client_ip(request: Request) -> str:
-        """The caller's address. Only our own proxy (tailscale serve/funnel on loopback, or Caddy on the server's
-        proxy network) is believed about X-Forwarded-For (its last entry: the one the proxy itself added)."""
-        peer = request.client.host if request.client else "?"
-        if ours(peer):
-            forwarded = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()
-            try:
-                return str(ipaddress.ip_address(forwarded))
-            except ValueError:
-                return peer
-        return peer
-
     def current(request: Request) -> tuple[dict, dict] | None:
+        """The person of this machine: their session, else a new one when the page comes from this computer."""
         token = request.cookies.get(COOKIE)
         found = accounts.session_user(studio.db, token)
-        if found:
-            request.state.uid = found[0]["id"]
+        if found is None and (request.client.host if request.client else "") in ("127.0.0.1", "::1", "testclient"):
+            token = accounts.new_session(studio.db, s, accounts.owner(studio.db)["id"], "127.0.0.1")
+            request.state.fresh = token
+            found = accounts.session_user(studio.db, token)
         if found and accounts.renew(studio.db, s, found[1]):
             request.state.renew = token  # the middleware sends the cookie again with a fresh lifetime
         return found
 
-    def need_user(request: Request, api: bool = False, gate: bool = True) -> tuple[dict, dict]:
-        """The signed-in person; with `gate`, only one who may make videos (in the beta, someone still waiting for
-        approval is sent to the request page instead)."""
+    def need_user(request: Request, api: bool = False) -> tuple[dict, dict]:
+        """The person of this machine (see `current`)."""
         found = current(request)
         if found is None:
-            if api:
-                raise HTTPException(401, "Please sign in again.")
-            from urllib.parse import quote
-
-            path = request.url.path if request.method == "GET" else "/"
-            raise Redirect("/signin" + (f"?next={quote(path)}" if path not in ("/", "") else ""))
-        if gate and not auth.approved(found[0]):
-            if api:
-                raise HTTPException(403, "Your access is waiting for approval.")
-            raise Redirect("/access")
+            raise HTTPException(401 if api else 403, "Flicello opens only on this computer: http://127.0.0.1:"
+                                                     f"{s.port}")
         return found
 
     def need_owner(request: Request) -> tuple[dict, dict]:
-        user, sess = need_user(request)
-        if not studio.is_owner(user):
-            raise HTTPException(404, "Not found.")
-        return user, sess
+        return need_user(request)
 
     def check_csrf(sess: dict, token: str | None) -> None:
         if not token or not secrets.compare_digest(str(token), sess["csrf"]):
@@ -261,38 +249,9 @@ def create_app(studio: Studio) -> FastAPI:
 
         return RedirectResponse(url + (f"?msg={quote(msg)}" if msg else ""), status_code=303)
 
-    def set_cookie(resp: Response, token: str) -> None:
-        # Lax, not Strict: someone opening a Flicello link from email or a chat app arrives signed in. Every state
-        # change still needs the session's CSRF token, and anonymous forms are checked for our own origin.
-        resp.set_cookie(COOKIE, token, max_age=s.session_days * 86400, httponly=True, samesite="lax",
-                        secure=s.https, path="/")
-
-    def remember_device(request: Request, resp: Response, user_id: str) -> None:
-        """Mark this browser as one the person uses (see accounts.login), unless it already is."""
-        if accounts._known_device(studio.db, request.cookies.get(DEVICE), user_id):
-            return
-        resp.set_cookie(DEVICE, accounts.new_device(studio.db, user_id), max_age=365 * 86400, httponly=True,
-                        samesite="lax", secure=s.https, path="/")
-
-    from types import SimpleNamespace
-
-    from . import authweb, legalweb
-
-    helpers = SimpleNamespace(page=page, back=back, current=current, need_user=need_user, check_csrf=check_csrf,
-                              client_ip=client_ip, set_cookie=set_cookie, remember_device=remember_device,
-                              templates=templates)
-    authweb.mount(app, studio, helpers)
-    legalweb.mount(app, studio, helpers)
-    from . import workerapi
-
-    workerapi.mount(app, studio)
-
     @app.get("/robots.txt", response_class=PlainTextResponse)
     def robots():
-        private = ["/p/", "/m/", "/api/", "/admin", "/account", "/style", "/new", "/welcome", "/join", "/auth/"]
-        if not s.public_signup:
-            private.append("/signup")
-        return "User-agent: *\n" + "".join(f"Disallow: {x}\n" for x in private) + "Allow: /\n"
+        return "User-agent: *\nDisallow: /\n"  # a studio on someone's own computer: nothing to index
 
     # ------------------------------------------------------------------ health (no login, no details)
     @app.get("/healthz")
@@ -302,81 +261,8 @@ def create_app(studio: Studio) -> FastAPI:
         return JSONResponse({"ok": ok}, status_code=200 if ok else 503)
 
     # ------------------------------------------------------------------ sign in, invites
-    @app.get("/login", response_class=HTMLResponse)
-    def login_page(request: Request):
-        if current(request):
-            return back("/")
-        if request.query_params.get("legacy") != "1":
-            return back("/signin")
-        return page(request, "login.html", None, None)
-
-    @app.post("/login")
-    def login_post(request: Request, name: str = Form(""), password: str = Form("")):
-        try:
-            user, token = accounts.login(studio.db, s, name, password, client_ip(request), request.cookies.get(DEVICE))
-        except accounts.AccountError as exc:
-            return page(request, "login.html", None, None, error=str(exc), typed=name[:40])
-        resp = back("/")
-        set_cookie(resp, token)
-        remember_device(request, resp, user["id"])
-        return resp
-
-    @app.post("/logout")
-    def logout(request: Request, csrf: str = Form("")):
-        found = current(request)
-        if found:
-            check_csrf(found[1], csrf)
-            accounts.end_session(studio.db, request.cookies.get(COOKIE))
-        resp = back("/")
-        resp.delete_cookie(COOKIE, path="/")
-        return resp
-
-    @app.post("/join/{token}")
-    def join_post(request: Request, token: str, name: str = Form(""), password: str = Form(""),
-                  password2: str = Form(""), agree: str = Form("")):
-        invite = accounts.open_invite(studio.db, token)
-        if invite is None:
-            raise HTTPException(404, "This invite link has expired or was already used. Ask for a new one.")
-        error = None
-        if password != password2:
-            error = "The two passwords are different."
-        elif agree != "yes":
-            error = "Please read and tick the privacy note."
-        if error is None:
-            try:
-                user = accounts.register(studio.db, token, name, password)
-            except accounts.AccountError as exc:
-                error = str(exc)
-        if error:
-            return page(request, "invite.html", None, None, invite=invite, token=token, limits=s.limits, error=error,
-                        typed=name[:40], legacy_open=True, google=False, email_ok=False, next="/welcome")
-        resp = back("/welcome")
-        set_cookie(resp, accounts.new_session(studio.db, s, user["id"], client_ip(request)))
-        remember_device(request, resp, user["id"])
-        return resp
 
     # ------------------------------------------------------------------ the closed beta: asking for access
-    @app.get("/access", response_class=HTMLResponse)
-    def access_page(request: Request):
-        user, sess = need_user(request, gate=False)
-        if auth.approved(user):
-            return back("/")
-        return page(request, "access.html", user, sess, state=user.get("access") or "requested",
-                    note=user.get("request_note") or "")
-
-    @app.post("/access")
-    def access_post(request: Request, csrf: str = Form(""), note: str = Form("")):
-        user, sess = need_user(request, gate=False)
-        check_csrf(sess, csrf)
-        if auth.approved(user):
-            return back("/")
-        if (user.get("access") or "") == "declined":
-            return back("/access")
-        try:
-            studio.request_access(user, note)
-        except ActionError as exc:
-            return page(request, "access.html", user, sess, state="requested", note=note[:600], error=str(exc))
-        return back("/access", "Thanks! We'll email you when you're in.")
 
     @app.get("/welcome", response_class=HTMLResponse)
     def welcome(request: Request):
@@ -398,19 +284,9 @@ def create_app(studio: Studio) -> FastAPI:
         return back("/", "Thanks! Your style is saved; you can change it any time.")
 
     # ------------------------------------------------------------------ home and projects
-    def landing(request: Request) -> HTMLResponse:
-        site = f"{request.url.scheme}://{request.url.netloc}"
-        return templates.TemplateResponse(request, "landing.html", {"site_url": site, "year": time.gmtime().tm_year,
-                                                                    "beta": s.beta})
-
-    @app.get("/tour", response_class=HTMLResponse)
-    def tour(request: Request):
-        return landing(request)
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request):
-        if current(request) is None:
-            return landing(request)
         user, sess = need_user(request)
         if not user["onboarded"] and not studio.is_owner(user):
             raise Redirect("/welcome")
@@ -431,12 +307,11 @@ def create_app(studio: Studio) -> FastAPI:
                     if (work.root / rel).exists():
                         thumbs[p["id"]] = rel
                         break
-        return page(request, "home.html", user, sess, projects=projects, thumbs=thumbs, credits=studio.credits(user))
+        return page(request, "home.html", user, sess, projects=projects, thumbs=thumbs)
 
     def new_ctx(user: dict) -> dict:
         lengths = studio.lengths_for(user)
-        return {"lengths": lengths, "more_lengths": max(lengths) < max(LENGTHS), "credits": studio.credits(user),
-                "pricing": studio.pricing()}
+        return {"lengths": lengths, "more_lengths": max(lengths) < max(LENGTHS)}
 
     @app.get("/new", response_class=HTMLResponse)
     def new_page(request: Request):
@@ -568,7 +443,7 @@ def create_app(studio: Studio) -> FastAPI:
                     pitches=pitches, looks=uses_looks(p), look_shape=("9:16" if p["shapes"] != "16:9" else "16:9"),
                     backs=studio.back_targets(p), understood=studio.understanding(p), tier=studio.tier(user),
                     beats=studio.beats(p), beats_left=studio.beats_left(p), track_seconds=studio.track_seconds(p),
-                    can_compose=studio.can_compose(), cost=studio.film_cost(p), credits=studio.credits(user),
+                    can_compose=studio.can_compose(),
                     names=clip_names(p) if p["stage"] == "understood" else {},
                     lengths=studio.lengths_for(user),
                     eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
@@ -582,7 +457,7 @@ def create_app(studio: Studio) -> FastAPI:
                     review_links=[dict(r) for r in studio.db.all("SELECT token, version FROM review_links WHERE project_id=? "
                                                                  "AND revoked=0 ORDER BY version DESC", (pid,))],
                     review_notes=studio.review_notes(p) if p["stage"] in ("done", "confirm") else [],
-                    site_url=(s.site_url or "").rstrip("/"),
+                    site_url=f"http://127.0.0.1:{s.port}",
                     drafting=bool(job and job["kind"] == "draft"),
                     shot_times=json.dumps([[c["start"], c["n"]] for c in strip["cards"]]) if strip else "",
                     board=studio.board(p, samples[0]["plan_id"]) if samples and p["kind"] == "montage" else None,
@@ -709,17 +584,6 @@ def create_app(studio: Studio) -> FastAPI:
     @app.post("/p/{pid}/stop")
     def stop(request: Request, pid: str, csrf: str = Form("")):
         return act(request, csrf, pid, lambda u, p: studio.stop(p))
-
-    @app.post("/p/{pid}/gap")
-    def gap(request: Request, pid: str, csrf: str = Form(""), ability: str = Form("")):
-        return act(request, csrf, pid, lambda u, p: studio.want_gap(p, ability))
-
-    @app.post("/admin/gap")
-    def admin_gap(request: Request, csrf: str = Form(""), ability: str = Form("")):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        n = studio.tell_gap(ability)
-        return back("/admin#gaps", f"Told {n} {'person' if n == 1 else 'people'} it's ready.")
 
     @app.post("/p/{pid}/board")
     async def board_edit(request: Request, pid: str):
@@ -878,6 +742,86 @@ def create_app(studio: Studio) -> FastAPI:
     def review_done(request: Request, pid: str, note_id: int, csrf: str = Form("")):
         return act(request, csrf, pid, lambda u, p: studio.settle_note(p, note_id))
 
+    # ------------------------------------------------------------------ Connect: what this machine has (local)
+    @app.get("/connect", response_class=HTMLResponse)
+    def connect_page(request: Request):
+        """Everything Flicello uses on this machine, each ready or not, with what to do; the keys; the setup prompt
+        for Claude Code."""
+        user, sess = need_owner(request)
+        from ...local import checks, keys as local_keys, setup_prompt
+
+        rep = checks.report(s.home, s.models_dir)
+        groups = {}
+        for item in rep["items"]:
+            groups.setdefault(item["group"], []).append(item)
+        return page(request, "connect.html", user, sess, rep=rep, groups=groups, prompt=setup_prompt.prompt(s.port),
+                    brain=s.owner_brain, blender=s.blender_path, keys=local_keys.KEYS)
+
+    @app.get("/api/connect/report")
+    def connect_report(request: Request):
+        need_owner(request)
+        from ...local import checks
+
+        return JSONResponse(checks.report(s.home, s.models_dir))
+
+    @app.post("/api/connect/key")
+    async def connect_key(request: Request):
+        """Keep (or forget) one of their keys on this machine, then test it."""
+        user, sess = need_owner(request)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        from ...local import checks, keys as local_keys
+
+        name, value = str(body.get("name", "")), str(body.get("value", ""))
+        try:
+            where = local_keys.save(name, value, s.home)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "detail": str(exc)}, status_code=400)
+        service = {"GEMINI_API_KEY": "gemini", "ELEVENLABS_API_KEY": "elevenlabs",
+                   "ANTHROPIC_API_KEY": "anthropic"}.get(name)
+        result = await run_in_threadpool(checks.test, service) if (service and value) else {"ok": bool(value),
+                                                                                          "detail": "saved" if value else "forgotten"}
+        return JSONResponse({"where": where, **result})
+
+    @app.post("/api/connect/test")
+    async def connect_test(request: Request):
+        user, sess = need_owner(request)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        from ...local import checks
+
+        return JSONResponse(await run_in_threadpool(checks.test, str(body.get("service", ""))))
+
+    @app.post("/api/connect/settings")
+    async def connect_settings(request: Request):
+        """The brain (their Claude Code plan, or the Anthropic API) and Blender's path, kept in studio.yaml."""
+        user, sess = need_owner(request)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        import yaml
+
+        path = s.home / "studio.yaml"
+        data = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.exists() else {}
+        said = []
+        if body.get("brain") in ("claude_code", "api"):
+            data["owner_brain"] = s.owner_brain = body["brain"]
+            said.append("Your Claude Code plan thinks for Flicello" if body["brain"] == "claude_code"
+                        else "The Anthropic API thinks for Flicello (billed per use)")
+        if "blender" in body:
+            found = str(body.get("blender") or "").strip().strip('"')
+            if found and not Path(found).exists():
+                return JSONResponse({"ok": False, "detail": "There's no file there: check Blender's path."}, status_code=400)
+            data["blender_path"] = s.blender_path = found
+            import os as _os
+
+            if found:
+                _os.environ["BLENDER_PATH"] = found
+            else:
+                _os.environ.pop("BLENDER_PATH", None)
+            said.append("Blender connected" if found else "Blender disconnected")
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        return JSONResponse({"ok": True, "detail": "; ".join(said) or "Nothing changed."})
+
     # ------------------------------------------------------------------ Cello: the presence that edits with you
     @app.get("/cello", response_class=HTMLResponse)
     def cello_shell(request: Request, to: str = "/"):
@@ -904,17 +848,42 @@ def create_app(studio: Studio) -> FastAPI:
         except Exception as exc:  # noqa: BLE001 - said to the page plainly
             return JSONResponse({"detail": f"Cello can't speak right now: {' '.join(str(exc).split())[:160]}"}, status_code=503)
 
+    def agent(request: Request) -> tuple[dict, dict | None, dict] | None:
+        """The work agent (its session's token, from this computer only): (the person, its film, the token's entry)."""
+        found = studio.work.by_token(request.headers.get("x-flicello-agent"))
+        if found is None or (request.client.host if request.client else "") not in ("127.0.0.1", "::1"):
+            return None
+        user = studio.user(found["user_id"])
+        project = studio.db.project(found["project_id"]) if found["project_id"] else None
+        return user, project, found
+
+    def need_agent(request: Request) -> tuple[dict, dict | None, dict]:
+        got = agent(request)
+        if got is None:
+            raise HTTPException(401, "Not a running work session.")
+        return got
+
     @app.post("/api/cello/act")
     async def cello_act(request: Request):
-        """One of Cello's tools, run with the same checks as the page's buttons; its result is plain words for Cello."""
-        user, sess = need_user(request, api=True)
-        check_csrf(sess, request.headers.get("x-csrf"))
+        """One of Cello's tools, run with the same checks as the page's buttons; its result is plain words for Cello.
+        The work agent uses them too, with its session's token (its film is the session's)."""
+        hands = agent(request)
+        if hands is None:
+            user, sess = need_user(request, api=True)
+            check_csrf(sess, request.headers.get("x-csrf"))
+        else:
+            user, film, entry = hands
         body = await request.json()
         from ..cello import act
 
         try:
-            project = cello_film(user, body.get("pid"))
+            project = film if hands is not None else cello_film(user, body.get("pid"))
             out = await run_in_threadpool(act, studio, user, project, str(body.get("name", "")), body.get("args") or {})
+            go = (out.get("ui") or {}).get("go") or "" if isinstance(out, dict) else ""
+            if hands is not None and go.startswith("/p/"):  # the agent opened or started a film: it works on that now
+                entry["project_id"] = go.split("/")[2]
+            if hands is not None and isinstance(out, dict) and out.get("ui"):  # on their screen too, as it happens
+                studio.work.show(user["id"], out["ui"], project["id"] if project else None)
         except HTTPException:
             return JSONResponse({"result": "That film isn't theirs or doesn't exist."})
         except (ActionError, ValueError, KeyError) as exc:
@@ -925,13 +894,315 @@ def create_app(studio: Studio) -> FastAPI:
                                            "Try diagnose, or tell them plainly."})
         return JSONResponse(out)
 
+    @app.post("/api/cello/log")
+    async def cello_log(request: Request):
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        from ..cello import log_lines
+
+        pid = body.get("pid") if isinstance(body.get("pid"), str) and re.fullmatch(r"p[0-9a-f]{12}", body["pid"]) else None
+        kept = log_lines(studio, user, pid, body.get("lines") or [], studio.is_owner(user))
+        return JSONResponse({"kept": kept})
+
+    # ------------------------------------------------------------------ work: Cello's hands (work/)
+    @app.get("/api/work/tools")
+    def work_tools(request: Request):
+        need_agent(request)
+        from ..cello import BROWSER, TOOLS
+
+        return {"tools": [t for t in TOOLS if t["name"] not in BROWSER and t["name"] not in ("work", "answer")]}
+
+    @app.post("/api/work/progress")
+    async def work_progress(request: Request):
+        _, _, entry = need_agent(request)
+        body = await request.json()
+        studio.work.progress(entry["work"], str(body.get("text", "")))
+        return {"ok": True}
+
+    @app.post("/api/work/choice")
+    async def work_choice(request: Request):
+        _, project, _ = need_agent(request)
+        body = await request.json()
+        if project is None:
+            raise HTTPException(400, "No film is open.")
+        from ...work import asks
+
+        asks.choose(studio, project, str(body.get("what", "")), str(body.get("value", "")))
+        return {"ok": True}
+
+    @app.post("/api/work/open")
+    async def work_open(request: Request):
+        user, _, entry = need_agent(request)
+        body = await request.json()
+        want = " ".join(str(body.get("film", "")).split()).lower()
+        films = studio.projects(user)
+        hit = next((f for f in films if f["id"] == want), None) or next(
+            (f for f in films if f["title"].lower() == want), None) or next(
+            (f for f in films if want and want in f["title"].lower()), None)
+        if hit is None:
+            return {"opened": None, "films": [f["title"] for f in films[:12]]}
+        entry["project_id"] = hit["id"]
+        return {"opened": hit["title"], "id": hit["id"], "stage": hit["stage"]}
+
+    @app.post("/api/work/scene")
+    async def work_scene(request: Request):
+        user, project, entry = need_agent(request)
+        body = await request.json()
+        if project is None:
+            raise HTTPException(400, "No film is open.")
+        from ...work import scenes_in_film
+
+        try:
+            row = scenes_in_film.start(studio, user, project, str(body.get("what", "")), float(body.get("start")),
+                                       float(body.get("end")), str(body.get("style") or ""),
+                                       on_progress=lambda m: studio.work.progress(entry["work"], f"Scene: {m}"))
+        except (ValueError, TypeError, ActionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"task": row["id"], "note": "Designing takes a while (often 15 to 40 minutes): "
+                                           f"bash fl wait scene {row['id']}"}
+
+    @app.get("/api/work/scene/{wid}")
+    def work_scene_state(request: Request, wid: str):
+        hands = agent(request)
+        user = hands[0] if hands else need_user(request, api=True)[0]
+        row = studio.db.one("SELECT * FROM work WHERE id=? AND user_id=? AND kind='scene'", (wid, user["id"]))
+        if row is None:
+            raise HTTPException(404, "No such scene task.")
+        return {"done": row["status"] in ("done", "failed", "stopped"), "status": row["status"], "say": row["say"],
+                "progress": row["progress"]}
+
+    @app.post("/api/work/cartoon")
+    async def work_cartoon(request: Request):
+        user, project, entry = need_agent(request)
+        body = await request.json()
+        from ...work import cartoons_in_studio
+
+        voice = None
+        if body.get("voice"):  # their narration: a clip of the open film (its sound)
+            if project is None:
+                raise HTTPException(400, "Open the film whose clip is the narration first.")
+            want = str(body["voice"]).strip().lower()
+            row = next((c for c in studio.db.all("SELECT * FROM clips WHERE project_id=?", (project["id"],))
+                        if want in (c["id"].lower(), c["name"].lower())), None)
+            if row is None:
+                raise HTTPException(400, f"There's no clip '{body['voice']}' in this film.")
+            voice = workdir(s, project["user_id"], project["id"]).clips / row["file"]
+        try:
+            row = cartoons_in_studio.start(studio, user, str(body.get("story", "")), float(body.get("seconds") or 40),
+                                           str(body.get("shape") or "9:16"), str(body.get("style") or ""), voice,
+                                           on_progress=lambda m: studio.work.progress(entry["work"], f"Cartoon: {m}"))
+        except (ValueError, TypeError, ActionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        entry["project_id"] = row["film"]  # the agent works on the new film from here
+        return {"task": row["id"], "film": row["film"],
+                "note": f"A new film is being made as a cartoon (often 1 to 3 hours): bash fl wait cartoon {row['id']}"}
+
+    @app.get("/api/work/cartoon/{wid}")
+    def work_cartoon_state(request: Request, wid: str):
+        hands = agent(request)
+        user = hands[0] if hands else need_user(request, api=True)[0]
+        row = studio.db.one("SELECT * FROM work WHERE id=? AND user_id=? AND kind='cartoon'", (wid, user["id"]))
+        if row is None:
+            raise HTTPException(404, "No such cartoon task.")
+        return {"done": row["status"] in ("done", "failed", "stopped"), "status": row["status"], "say": row["say"],
+                "progress": row["progress"], "film": row["project_id"]}
+
+    @app.get("/api/work/plan")
+    def work_plan(request: Request):
+        user, project, _ = need_agent(request)
+        if project is None:
+            raise HTTPException(400, "No film is open.")
+        try:
+            return studio.plan_view(studio.db.project(project["id"]), user)
+        except ActionError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/work/plan")
+    async def work_plan_set(request: Request):
+        user, project, _ = need_agent(request)
+        if project is None:
+            raise HTTPException(400, "No film is open.")
+        body = await request.json()
+        try:
+            job = await run_in_threadpool(studio.plan_draft, user, studio.db.project(project["id"]),
+                                          body.get("plan") or {}, list(body.get("said") or []),
+                                          str(body.get("text") or ""))
+        except ActionError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        studio.work.show(user["id"], {"wait": "draft"}, project["id"])
+        return {"job": job, "note": "Checked: the draft is being laid out on their screen."}
+
+    @app.get("/api/work/frames")
+    def work_frames(request: Request, t: str = "", which: str = ""):
+        """Stills of what is on their screen at these film seconds (the draft as it plays, else the version they
+        work on; or a version by number), into the agent's folder for it to look at."""
+        user, project, _ = need_agent(request)
+        if project is None:
+            raise HTTPException(400, "No film is open.")
+        from ...work.frames import frames
+
+        p = studio.db.project(project["id"])
+        version = studio.work_version(p)
+        draft = studio.draft_of(p)
+        pick = which.strip() or ("draft" if draft and int(draft.get("base") or 0) == version else str(version))
+        try:
+            times = [float(x) for x in t.replace(" ", "").split(",") if x]
+        except ValueError as exc:
+            raise HTTPException(400, "Times are film seconds, like 1.5,4") from exc
+        if not times or (pick != "draft" and not pick.isdigit()):
+            raise HTTPException(400, "Say which film seconds (and a version number, or the draft).")
+        folder = studio.work.folder(p["id"], user["id"])
+        try:
+            made = frames(studio, p, pick, times, folder / "frames")
+        except (ValueError, ActionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"which": pick, "frames": [{"t": m["t"], "file": m["file"].relative_to(folder).as_posix()}
+                                          for m in made]}
+
+    @app.get("/api/work/job")
+    def work_job(request: Request):
+        _, project, _ = need_agent(request)
+        if project is None:
+            return {"done": True, "note": "no film open"}
+        job = studio.db.active_job(project["id"])
+        if job:
+            return {"done": False, "step": job["kind"], "progress": round(float(job.get("progress") or 0), 2),
+                    "message": job.get("message") or ""}
+        last = studio.db.one("SELECT kind, status, error FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
+                             (project["id"],))
+        return {"done": True, "last": dict(last) if last else None, "stage": studio.db.project(project["id"])["stage"]}
+
+    @app.get("/api/work/state")
+    def work_state(request: Request, pid: str = "", since: float = 0.0):
+        """For the panel beside Cello: what its hands are doing, the open question, what was done, their choices;
+        and what its hands did on the screen since `since` (a film opened, a draft on its way), for the shell to show
+        whether or not Cello's voice is on."""
+        user, _ = need_user(request, api=True)
+        project = cello_film(user, pid) if pid else None
+        from ...work import asks
+
+        rows = studio.db.all("SELECT * FROM work WHERE user_id=? AND project_id IS ? ORDER BY updated DESC LIMIT 12",
+                             (user["id"], project["id"] if project else None))
+        def view(r):
+            return {"id": r["id"], "kind": r["kind"], "status": r["status"], "request": r["request"],
+                    "progress": r["progress"], "say": r["say"], "question": r["question"],
+                    "options": json.loads(r["options"]) if r["options"] else [], "updated": r["updated"],
+                    "created": r["created"]}
+        return {"work": [view(r) for r in rows], "choices": asks.choices(studio, project), "now": time.time(),
+                "ui": studio.work.shown_since(user["id"], since) if since else [],
+                "busy": bool(project and studio.db.active_job(project["id"]))}
+
+    @app.post("/api/work/answer")
+    async def work_answer(request: Request):
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        try:
+            row = await run_in_threadpool(studio.work.answer, user, str(body.get("id", "")), str(body.get("text", "")))
+        except (ValueError, ActionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True, "status": row["status"], "say": row["say"]}
+
+    @app.post("/api/work/stop")
+    async def work_stop(request: Request):
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        try:
+            studio.work.stop(user, str(body.get("id", "")))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True}
+
     @app.get("/api/cello/events")
     def cello_events(request: Request, pid: str = "", since: float = 0.0):
         user, _ = need_user(request, api=True)
         from ..cello import events, now
 
+        from ..cello import service_events, work_events
+
         project = cello_film(user, pid) if pid else None
-        return JSONResponse({"now": now(), "events": events(studio, project, since) if project else []})
+        said = (events(studio, project, since) if project else []) + work_events(studio, user, project, since) + \
+            service_events(since)
+        return JSONResponse({"now": now(), "events": said})
+
+    # ------------------------------------------------------------------ the editor: the film on a timeline (editing.py)
+    @app.get("/p/{pid}/edit", response_class=HTMLResponse)
+    def edit_page(request: Request, pid: str):
+        user, sess = need_user(request)
+        p = owned(user, pid)
+        return page(request, "edit.html", user, sess, p=p)
+
+    def timeline_view(user: dict, pid: str) -> JSONResponse:
+        from ..editing import view
+
+        try:
+            return JSONResponse(view(studio, studio.db.project(pid), user))
+        except (ActionError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.get("/api/p/{pid}/editor")
+    async def editor_get(request: Request, pid: str):
+        user, _ = need_user(request, api=True)
+        owned(user, pid)
+        return await run_in_threadpool(timeline_view, user, pid)
+
+    @app.post("/api/p/{pid}/editor")
+    async def editor_post(request: Request, pid: str):
+        """Exact edits by hand (JSON: ops, said), made at once as the draft; answers with the editor's new view."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        p = owned(user, pid)
+        body = await request.json()
+        from pydantic import ValidationError
+
+        from ..editing import apply
+
+        try:
+            await run_in_threadpool(apply, studio, user, p, list(body.get("ops") or []), list(body.get("said") or []))
+        except (ActionError, ValueError, ValidationError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return await run_in_threadpool(timeline_view, user, pid)
+
+    @app.get("/api/p/{pid}/sprite/{clip_id}")
+    async def editor_sprite(request: Request, pid: str, clip_id: str):
+        """A clip's filmstrip sheet for the editor's tracks (made once, then kept)."""
+        user, _ = need_user(request, api=True)
+        p = owned(user, pid)
+        from ..editing import sprite
+
+        try:
+            path = await run_in_threadpool(sprite, studio, p, clip_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.post("/api/p/{pid}/editor/{what}")
+    async def editor_step(request: Request, pid: str, what: str):
+        """undo, redo, discard (back to the version) or make (render the draft as a version)."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        p = owned(user, pid)
+        try:
+            if what == "undo":
+                studio.draft_undo(p)
+            elif what == "redo":
+                studio.draft_redo(p)
+            elif what == "discard":
+                studio.discard_draft(p)
+            elif what == "make":
+                studio.make_draft(user, p)
+                return JSONResponse({"ok": True, "making": True})
+            elif what == "remake":  # a stretch of the made music written again (song seconds): a new version
+                body = await request.json()
+                studio.edit_music(user, p, float(body["start"]), float(body["end"]), str(body.get("want") or ""))
+                return JSONResponse({"ok": True, "making": True})
+            else:
+                raise HTTPException(404, "No such step.")
+        except (ActionError, KeyError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return await run_in_threadpool(timeline_view, user, pid)
 
     @app.get("/api/p/{pid}/timeline")
     def timeline_api(request: Request, pid: str, which: str = "draft"):
@@ -1003,24 +1274,6 @@ def create_app(studio: Studio) -> FastAPI:
         except ActionError as exc:
             return back(f"/p/{pid}", str(exc))
         return RedirectResponse(f"/p/{pid}?open=brief#brief", status_code=303)
-
-    @app.post("/p/{pid}/report")
-    def report(request: Request, pid: str, csrf: str = Form(""), note: str = Form("")):
-        user, sess = need_user(request)
-        check_csrf(sess, csrf)
-        p = owned(user, pid)
-        try:
-            studio.report_problem(user, p, note)
-        except ActionError as exc:
-            return back(f"/p/{pid}", str(exc))
-        return back(f"/p/{pid}", "Thanks, we've got it. We'll look into it and fix it.")
-
-    @app.post("/admin/report")
-    def admin_report(request: Request, csrf: str = Form(""), rid: int = Form(0)):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        studio.db.run("UPDATE reports SET resolved=? WHERE id=?", (time.time(), rid))
-        return back("/admin#reports", "Marked as sorted.")
 
     @app.post("/p/{pid}/retry")
     def retry(request: Request, pid: str, csrf: str = Form("")):
@@ -1106,9 +1359,17 @@ def create_app(studio: Studio) -> FastAPI:
         except Exception:  # noqa: BLE001 - no body: the declared size stands
             final = None
         try:
-            return await run_in_threadpool(finish_upload, studio.db, s, up, p, final)
+            done = await run_in_threadpool(finish_upload, studio.db, s, up, p, final)
         except UploadError as exc:
             raise HTTPException(400, str(exc)) from exc
+        if up["kind"] == "clip":  # its clips are in: Flicello asks the film's shape (once), its pick first
+            from ...work import asks
+
+            try:
+                asks.after_upload(studio, user, p)
+            except Exception:  # noqa: BLE001 - a question to help; the upload is done either way
+                __import__("logging").getLogger("vidosuper.studio").warning("shape question failed", exc_info=True)
+        return done
 
     @app.post("/api/uploads/{uid}/cancel")
     def upload_cancel(request: Request, uid: str):
@@ -1253,20 +1514,6 @@ def create_app(studio: Studio) -> FastAPI:
             profile.save()
         return back("/style", "Added.")
 
-    @app.post("/account/password")
-    def password(request: Request, csrf: str = Form(""), old: str = Form(""), new: str = Form(""), new2: str = Form("")):
-        user, sess = need_user(request)
-        check_csrf(sess, csrf)
-        if new != new2:
-            return back("/account", "The two new passwords are different.")
-        try:
-            accounts.change_password(studio.db, user["id"], old, new)
-        except accounts.AccountError as exc:
-            return back("/account", str(exc))
-        resp = back("/login?legacy=1", "Password changed. Sign in again.")
-        resp.delete_cookie(COOKIE, path="/")
-        return resp
-
     @app.post("/account/wipe")
     def wipe(request: Request, csrf: str = Form(""), sure: str = Form("")):
         user, sess = need_user(request)
@@ -1278,166 +1525,6 @@ def create_app(studio: Studio) -> FastAPI:
         except ActionError as exc:
             return back("/style", str(exc))
         return back("/", "Everything is deleted: your videos, clips and style.")
-
-    # ------------------------------------------------------------------ the owner's admin page
-    @app.get("/admin", response_class=HTMLResponse)
-    def admin(request: Request):
-        user, sess = need_owner(request)
-        return admin_page(request, user, sess)
-
-    def admin_page(request: Request, user: dict, sess: dict, new_link: str = "") -> HTMLResponse:
-        db = studio.db
-        users = db.all("SELECT u.*, (SELECT COUNT(*) FROM projects p WHERE p.user_id=u.id AND p.deleted=0) AS projects, "
-                       "(SELECT COUNT(DISTINCT r.project_id) FROM renders r JOIN projects p ON p.id=r.project_id "
-                       " WHERE p.user_id=u.id AND r.kind='final') AS films, "
-                       "(SELECT COUNT(*) FROM passkeys k WHERE k.user_id=u.id) AS passkeys, "
-                       "(SELECT COALESCE(SUM(usd),0) FROM spend sp WHERE sp.user_id=u.id AND sp.billed=1) AS usd "
-                       "FROM users u ORDER BY created DESC")
-        jobs = db.all("SELECT j.*, p.title, u.name FROM jobs j LEFT JOIN projects p ON p.id=j.project_id "
-                      "LEFT JOIN users u ON u.id=j.user_id ORDER BY j.id DESC LIMIT 40")
-        alerts = db.all("SELECT * FROM alerts ORDER BY id DESC LIMIT 30")
-        invites = db.all("SELECT * FROM invites WHERE used_by IS NULL AND expires > ? ORDER BY created DESC", (time.time(),))
-        spend = db.all("SELECT task, model, backend, COUNT(*) AS n, SUM(usd) AS usd, SUM(tin) AS tin, SUM(tout) AS tout, "
-                       "AVG(seconds) AS s FROM spend GROUP BY task, model, backend ORDER BY usd DESC")
-        audit = db.all("SELECT a.at, a.action, a.detail, COALESCE(u.display, u.name) AS who FROM audit a "
-                       "LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT 40")
-        consents = db.one("SELECT SUM(marketing) AS yes, COUNT(*) AS n FROM users WHERE role != 'owner'") or {}
-        reports = db.all("SELECT r.*, COALESCE(u.display, u.name) AS who, u.email, p.title FROM reports r "
-                         "LEFT JOIN users u ON u.id=r.user_id LEFT JOIN projects p ON p.id=r.project_id "
-                         "WHERE r.resolved IS NULL ORDER BY r.id DESC LIMIT 30")
-        requests = [u for u in users if (u.get("access") or "beta") == "requested" and u["role"] != "owner"]
-        requests.sort(key=lambda u: (not u.get("request_note"), -(u.get("requested") or u["created"])))
-        return page(request, "admin.html", user, sess, health=studio.health(), users=users, jobs=jobs, alerts=alerts,
-                    invites=invites, spend=spend, new_link=new_link,
-                    audit=audit, consents=consents, active="admin", public=s.public_signup, beta=s.beta,
-                    requests=requests, tiers=s.tiers, reports=reports, pricing=studio.pricing(),
-                    tier_credits=studio.tier_credits(),
-                    balances={u["id"]: studio.credits(u) for u in users if u["role"] != "owner"},
-                    money=studio.money(), flags={u["id"]: studio.flags(u) for u in users},
-                    gaps=abilities.summary(db),
-                    day_spend={u["id"]: studio.person_spend(u["id"]) for u in users})
-
-    @app.post("/admin/money")
-    def admin_money(request: Request, csrf: str = Form(""), monthly: float = Form(60.0), video: float = Form(6.0),
-                    person_day: float = Form(3.0)):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        try:
-            studio.set_money(monthly, video, person_day)
-        except ActionError as exc:
-            return back("/admin#money", str(exc))
-        return back("/admin#money", "Saved: the new caps count from the next AI call, music or cloud minute.")
-
-    @app.post("/admin/pause")
-    def admin_pause(request: Request, csrf: str = Form(""), on: int = Form(0), why: str = Form("")):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        studio.set_paused(bool(on), why)
-        return back("/admin#money", "Paused: nothing new starts; steps already running finish." if on else
-                    "Resumed: waiting steps start again.")
-
-    @app.post("/admin/cloud-test")
-    def admin_cloud_test(request: Request, csrf: str = Form("")):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        from ..cloud import request_test, wake
-
-        try:
-            request_test(studio)
-        except ActionError as exc:
-            return back("/admin#cloud", str(exc))
-        wake(studio)
-        return back("/admin#cloud", "A cloud renderer is starting to test itself: the result comes in Alerts in a "
-                                    "few minutes (the first test also fetches the speech models).")
-
-    @app.post("/admin/pricing")
-    def admin_pricing(request: Request, csrf: str = Form(""), per_minute: int = Form(1), looks: int = Form(1),
-                      beta: int = Form(3), special: int = Form(12)):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        try:
-            studio.set_pricing(per_minute, looks, beta, special)
-        except ActionError as exc:
-            return back("/admin#credits", str(exc))
-        return back("/admin#credits", "Saved: new films use the new numbers; films already started keep theirs.")
-
-    @app.get("/admin/api/metrics")
-    def admin_metrics(request: Request, days: int = 30):
-        need_owner(request)
-        days = max(7, min(180, days))
-        return JSONResponse(analytics.metrics(studio.db, days), headers={"Cache-Control": "no-store"})
-
-    @app.get("/admin/api/live")
-    def admin_live(request: Request):
-        need_owner(request)
-        return JSONResponse({**analytics.live(studio.db), "health": studio.health()}, headers={"Cache-Control": "no-store"})
-
-    @app.post("/admin/invite")
-    def admin_invite(request: Request, csrf: str = Form(""), label: str = Form("")):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        token = accounts.create_invite(studio.db, s, label, "friend")
-        # shown once in this response, never put in a URL (it would sit in the browser's history)
-        return admin_page(request, user, sess, new_link="/join/" + token)
-
-    @app.post("/admin/user")
-    def admin_user(request: Request, csrf: str = Form(""), uid: str = Form(""), action: str = Form(""),
-                   access: str = Form(""), credits: int = Form(0), note: str = Form("")):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        target = studio.user(uid)
-        if not target or target["role"] == "owner":
-            return back("/admin", "Not changed.")
-        if action == "access":
-            try:
-                studio.decide_access(target, access)
-            except ActionError as exc:
-                return back("/admin", str(exc))
-            who = target.get("display") or target["name"]
-            return back("/admin", {"beta": f"{who} is in.", "special": f"{who} is in, with special access.",
-                                   "declined": f"{who} was declined.", "requested": f"{who} is waiting again."}[access])
-        if action == "disable":
-            studio.db.run("UPDATE users SET disabled=1 WHERE id=?", (uid,))
-            studio.db.run("DELETE FROM sessions WHERE user_id=?", (uid,))
-        elif action == "enable":
-            studio.db.run("UPDATE users SET disabled=0 WHERE id=?", (uid,))
-        elif action == "credits":
-            try:
-                studio.grant_credits(target, credits, note)
-            except ActionError as exc:
-                return back("/admin", str(exc))
-            who = target.get("display") or target["name"]
-            return back("/admin", f"{who} got {credits} credits." if credits > 0 else f"Took {-credits} credits back from {who}.")
-        return back("/admin", "Saved.")
-
-    @app.post("/admin/job")
-    def admin_job(request: Request, csrf: str = Form(""), job: int = Form(0), action: str = Form("")):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        row = studio.db.one("SELECT * FROM jobs WHERE id=?", (job,))
-        if row and action == "retry" and row["status"] in ("failed", "waiting"):
-            studio.db.run("UPDATE jobs SET attempts=0 WHERE id=?", (job,))
-            studio.db.requeue(job)
-            if row["project_id"]:
-                from ..service import JOB_STAGE
-
-                studio.db.set_stage(row["project_id"], JOB_STAGE.get(row["kind"], "setup"))
-        elif row and action == "cancel" and row["status"] in ("queued", "waiting"):
-            studio.db.job_done(job, "cancelled")
-        return back("/admin", "Done.")
-
-    @app.post("/admin/alerts")
-    def admin_alerts(request: Request, csrf: str = Form("")):
-        user, sess = need_owner(request)
-        check_csrf(sess, csrf)
-        studio.db.run("UPDATE alerts SET seen=1")
-        return back("/admin")
-
-    @app.get("/admin/events/{pid}", response_class=HTMLResponse)
-    def admin_events(request: Request, pid: str):
-        user, sess = need_owner(request)
-        events = studio.db.all("SELECT * FROM events WHERE project_id=? ORDER BY id DESC LIMIT 200", (pid,))
-        return page(request, "events.html", user, sess, events=events, pid=pid)
 
     return app
 
