@@ -255,6 +255,22 @@ def live_config() -> dict:
             "context_window_compression": {"sliding_window": {}}}
 
 
+def voice_mode() -> str:
+    """Where Cello's voice comes from: "local" (this machine: Whisper, Claude on their plan, Kokoro; local/voice.py)
+    or "gemini" (Gemini Live with their key). VIDO_CELLO_VOICE_MODE chooses; by default this machine when it can."""
+    from ..local import voice
+
+    want = os.environ.get("VIDO_CELLO_VOICE_MODE", "auto").strip().lower()
+    if want in ("local", "gemini"):
+        return want
+    if voice.available():
+        return "local"
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return "gemini"
+    raise RuntimeError("Cello has no voice yet: download its voice on the Connect page (no key needed), or add a "
+                       "Gemini key there.")
+
+
 def token() -> dict:
     """A one-session voice token for the browser, locked to Cello's model, voice, instructions and tools."""
     from google import genai

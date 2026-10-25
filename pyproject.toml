@@ -54,6 +54,11 @@ paint = [  # the local painter (motion/painter.py): Qwen-Image-Edit-2509 on this
   "accelerate>=1.0",
   "huggingface-hub>=0.30",
 ]
+voice = [  # Cello's voice on this machine (local/voice.py). kokoro-onnx itself is installed with --no-deps by the
+  # launchers, so it doesn't replace the GPU build of onnxruntime; these are its other packages (GPL-3: espeak-ng)
+  "phonemizer>=3.3",
+  "espeakng-loader>=0.2",
+]
 nvidia = ["onnxruntime-gpu>=1.20"]  # the models on an NVIDIA GPU (CUDA 12): every cut-out frame on the GPU
 dev = ["pytest>=8.0", "httpx>=0.27"]
 

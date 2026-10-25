@@ -16,11 +16,12 @@ if not exist "%PY%" (
     exit /b 1
   )
 )
-"%PY%" -c "import vidosuper.studio.web.app, keyring" 2>nul
+"%PY%" -c "import vidosuper.studio.web.app, keyring, kokoro_onnx" 2>nul
 if errorlevel 1 (
   echo Installing Flicello's Python packages ...
   "%PY%" -m pip install --upgrade pip --quiet
-  "%PY%" -m pip install -e ".[ai,studio]"
+  "%PY%" -m pip install -e ".[ai,studio,voice]"
+  "%PY%" -m pip install --no-deps "kokoro-onnx>=0.4"
   if errorlevel 1 exit /b 1
 )
 

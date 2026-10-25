@@ -130,6 +130,10 @@ MODELS = (  # file under the models folder, what it does, where it comes from (a
     ("inpaint/lama.onnx", "removing an object from a shot", "huggingface.co/Carve/LaMa-ONNX (lama_fp32.onnx)"),
     ("upscale/real_esrgan_x4plus-onnx-float/real_esrgan_x4plus.onnx", "upscaling",
      "Qualcomm AI Hub / huggingface.co/qualcomm/Real-ESRGAN-x4plus (ONNX, float)"),
+    ("voice/kokoro-v1.0.onnx", "Cello's voice on this machine (Kokoro-82M: no voice service needed)",
+     "github.com/thewh1teagle/kokoro-onnx releases, model-files-v1.0 (kokoro-v1.0.onnx)"),
+    ("voice/voices-v1.0.bin", "the voices for Cello's voice",
+     "github.com/thewh1teagle/kokoro-onnx releases, model-files-v1.0 (voices-v1.0.bin)"),
 )
 
 

@@ -15,6 +15,8 @@ import vidosuper
 SRC = Path(vidosuper.__file__).parent
 # Imported directly, but guaranteed by a declared framework that exposes it as part of its own API.
 VIA = {"markupsafe": "jinja2", "starlette": "fastapi"}
+# Installed by the launchers on their own (`pip install --no-deps`): declared, it would pull in a second onnxruntime.
+LAUNCHED = {"kokoro_onnx"}
 
 
 def _canon(name: str) -> str:
@@ -40,7 +42,7 @@ def test_every_package_the_code_imports_is_declared():
                 continue
             for name in names:
                 top = name.split(".")[0]
-                if top in sys.stdlib_module_names or top == "vidosuper":
+                if top in sys.stdlib_module_names or top == "vidosuper" or top in LAUNCHED:
                     continue
                 if top in VIA and VIA[top] in declared:
                     continue

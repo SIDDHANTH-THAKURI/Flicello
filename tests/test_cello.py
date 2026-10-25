@@ -62,6 +62,7 @@ def test_the_shell_only_holds_flicellos_own_pages(studio):
 
 def test_no_voice_token_without_csrf_or_a_key(studio, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("VIDO_CELLO_VOICE_MODE", "gemini")  # Gemini Live's voice (this machine's has its own test)
     client, _, csrf = local_client(studio)
     assert client.post("/api/cello/token").status_code == 403
     r = client.post("/api/cello/token", headers={"X-CSRF": csrf})

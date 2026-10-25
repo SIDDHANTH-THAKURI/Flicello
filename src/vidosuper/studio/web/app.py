@@ -21,7 +21,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -97,7 +97,7 @@ def vite_tags(name: str) -> Markup:
 
 MOMENT_ID = re.compile(r"\(?\b[cC]\d{2,3}#\d+\b\)?:?\s*")  # catalog ids like c04#1 mean nothing to people
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; "
-       "style-src 'self'; font-src 'self'; connect-src 'self' wss://generativelanguage.googleapis.com; "
+       "style-src 'self'; font-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:* wss://generativelanguage.googleapis.com; "
        "frame-ancestors 'self'; base-uri 'none'; form-action 'self'; object-src 'none'")  # framed only by Cello's shell
 
 
@@ -841,12 +841,62 @@ def create_app(studio: Studio) -> FastAPI:
     def cello_token(request: Request):
         user, sess = need_user(request, api=True)
         check_csrf(sess, request.headers.get("x-csrf"))
-        from ..cello import token
+        from ..cello import token, voice_mode
 
         try:
+            if voice_mode() == "local":  # this machine's voice: a one-time ticket for the page's own line to it
+                ticket = secrets.token_urlsafe(24)
+                LIVE_TICKETS[ticket] = (user["id"], time.time() + 120)
+                return JSONResponse({"local": True, "url": f"/api/cello/live?ticket={ticket}"})
             return JSONResponse(token())
         except Exception as exc:  # noqa: BLE001 - said to the page plainly
             return JSONResponse({"detail": f"Cello can't speak right now: {' '.join(str(exc).split())[:160]}"}, status_code=503)
+
+    LIVE_TICKETS: dict[str, tuple[str, float]] = {}
+
+    @app.websocket("/api/cello/live")
+    async def cello_live(ws: WebSocket):
+        """Cello's voice on this machine (local/voice.py), speaking Gemini Live's messages to the page."""
+        ticket = LIVE_TICKETS.pop(ws.query_params.get("ticket", ""), None)
+        host = (ws.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
+        if ticket is None or ticket[1] < time.time() or host not in ("127.0.0.1", "localhost", "::1") or                 (ws.client.host if ws.client else "") not in ("127.0.0.1", "::1", "testclient"):
+            await ws.close(code=4403)
+            return
+        await ws.accept()
+        from ...local import voice
+
+        try:
+            live = voice.Live(f"http://127.0.0.1:{s.port}", ws.send_json, asyncio.get_running_loop())
+        except Exception as exc:  # noqa: BLE001 - the page says why and tries again later
+            await ws.close(code=1011, reason=f"Cello's voice couldn't start: {exc}"[:120])
+            return
+        try:
+            while True:
+                msg = await ws.receive_json()
+                if "setup" in msg:
+                    await ws.send_json({"setupComplete": {}})
+                rt = msg.get("realtimeInput") or {}
+                if (rt.get("audio") or {}).get("data"):
+                    live.audio(rt["audio"]["data"])
+                if rt.get("text"):
+                    await asyncio.to_thread(live.text, str(rt["text"]))
+                if msg.get("toolResponse"):
+                    live.answered(msg["toolResponse"].get("functionResponses") or [])
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            live.close()
+
+    @app.post("/api/cello/live/tool")
+    async def cello_live_tool(request: Request):
+        """A tool call from Cello's local mind (studio/cello_mcp.py), run by the page of its voice session."""
+        from ...local import voice
+
+        live = voice.SESSIONS.get(request.headers.get("x-cello-live", ""))
+        if live is None or (request.client.host if request.client else "") not in ("127.0.0.1", "::1", "testclient"):
+            raise HTTPException(401, "Not a running voice session.")
+        body = await request.json()
+        return JSONResponse(await live.tool(str(body.get("name", "")), body.get("args") or {}))
 
     def agent(request: Request) -> tuple[dict, dict | None, dict] | None:
         """The work agent (its session's token, from this computer only): (the person, its film, the token's entry)."""

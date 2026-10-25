@@ -359,11 +359,14 @@ async function connect() {
     setTimeout(() => { if (S.on) connect(); }, Math.min(30000, 2000 * 2 ** S.retry++));
     return;
   }
-  const ws = new WebSocket(`${WS}?access_token=${encodeURIComponent(tok.token)}`);
+  // this machine's own voice (Whisper, Claude on their plan, Kokoro) speaks the same messages as Gemini Live
+  const ws = tok.local ? new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${tok.url}`)
+    : new WebSocket(`${WS}?access_token=${encodeURIComponent(tok.token)}`);
+  ws.local = !!tok.local;
   S.ws = ws;
   ws.resumed = !!S.handle;
   ws.onopen = () => {
-    ws.send(JSON.stringify({ setup: S.handle ? { sessionResumption: { handle: S.handle } } : {} }));
+    ws.send(JSON.stringify({ setup: S.handle && !ws.local ? { sessionResumption: { handle: S.handle } } : {} }));
   };
   ws.onmessage = async (e) => {
     const msg = JSON.parse(typeof e.data === 'string' ? e.data : await e.data.text());

@@ -51,8 +51,8 @@ On the **Connect** page:
 1. Copy the setup prompt into Claude Code: it checks your machine and installs whatever is missing (models, tools),
    explaining each step. It never touches your keys.
 2. Add your keys. They stay in your computer's keychain, never in the repo, never sent anywhere but the service:
-   - **Gemini** (optional): Cello's live voice, watching your footage with its sound, and painting when this machine
-     can't paint itself ([get one](https://aistudio.google.com/apikey))
+   - **Gemini** (optional): watching your footage with its sound, and Cello's voice or painting when this machine
+     can't do them itself ([get one](https://aistudio.google.com/apikey))
    - **ElevenLabs**: music, sound effects, voices ([get one](https://elevenlabs.io/app/settings/api-keys))
    - optional: **Anthropic API** (instead of your Claude Code plan), **Higgsfield** (AI video generation),
      **Blender** (3D).
@@ -87,7 +87,9 @@ accounts. Flicello itself is free and open source; it never sends your footage o
 - **Exports**: captions (SRT), 4:5, square, ProRes, GIF, thumbnail, MP3, and project files for Final Cut (FCPXML),
   Premiere and Resolve (EDL).
 - **Cello**: talk to it (or type). It sees your screen, does things itself, speaks up when something finishes or
-  fails, and asks when something is unclear. It can be turned off.
+  fails, and asks when something is unclear. It can be turned off. Its voice runs on your machine: Whisper hears
+  you, Claude (on your plan) thinks with Cello's tools in hand, and Kokoro speaks, sentence by sentence as it
+  writes; speak over it and it stops. With a Gemini key and no local voice, Gemini Live is its voice instead.
 
 ## Under the hood
 

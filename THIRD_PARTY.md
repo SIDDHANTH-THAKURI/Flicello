@@ -15,6 +15,7 @@ machine by the setup prompt (the Connect page).
 | [LaMa](https://github.com/advimman/lama) | removing an object from a shot | Apache-2.0 |
 | [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) | upscaling | BSD-3-Clause |
 | [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) (optional) | painting on your own GPU | Apache-2.0 |
+| [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (ONNX files from [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)) | Cello's voice | Apache-2.0 (kokoro-onnx: MIT) |
 | [Whisper](https://github.com/openai/whisper) via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | speech to text | MIT |
 
 ## Engines and libraries
@@ -28,6 +29,7 @@ machine by the setup prompt (the Connect page).
 | [ONNX Runtime](https://onnxruntime.ai) | running the models on your GPU or CPU | MIT |
 | [PyTorch](https://pytorch.org), [Diffusers](https://github.com/huggingface/diffusers) (optional) | running the painter | BSD-3-Clause, Apache-2.0 |
 | [mediabunny](https://github.com/Vanilagy/mediabunny) | shrinking uploads in the browser | MPL-2.0 |
+| [phonemizer](https://github.com/bootphon/phonemizer) and [espeak-ng](https://github.com/espeak-ng/espeak-ng) (the `voice` extra) | turning Cello's words into sounds for Kokoro | GPL-3.0 (installed by you, not part of this repository: if you ship Flicello bundled with them, the GPL applies to that bundle) |
 | Fonts: Bricolage Grotesque, Instrument Serif, Geist Mono (and the fonts scenes use) | type | SIL Open Font License 1.1 |
 
 Python and JavaScript dependencies are listed in `pyproject.toml`, `frontend/package.json` and `motion/package.json`.
