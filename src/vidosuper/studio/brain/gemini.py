@@ -47,6 +47,7 @@ DRAW_MODEL = "gemini-flash-latest"  # things drawn for a film (motion/things.py)
 
 class GeminiWatcher:
     kind = "gemini"
+    watches_clips = True  # it logs every clip itself, picture and sound
 
     def __init__(self, model: str, spend: SpendFn, log_dir: Path | None = None, client=None):
         if client is None:

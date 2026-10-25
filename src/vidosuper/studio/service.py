@@ -2764,7 +2764,7 @@ class Studio:
             effects.upscale(video, start, end, out)
         else:
             if pipe.watcher is None or not hasattr(pipe.watcher, "find_box"):
-                raise ActionError("Finding things in shots needs the Gemini key (GEMINI_API_KEY).")
+                raise ActionError("Finding things in shots needs the AI (it is off for this film).")
             first = next(effects.frames(video, start, start + 0.1, 1280))
             ok, jpeg = cv2.imencode(".jpg", first[..., ::-1])
             box = pipe.watcher.find_box(jpeg.tobytes(), params["want"]) if ok else None
@@ -3355,7 +3355,7 @@ class Studio:
         watcher = make_watcher(brain_kind_for(self.s, self.is_owner(user)), self.s,
                                self._spender(project, user["id"], None), work.brain)
         if watcher is None or not hasattr(watcher, "find_moments"):
-            raise ActionError("Finding moments by what happens needs the Gemini watcher (GEMINI_API_KEY).")
+            raise ActionError("Finding moments by what happens needs the AI (it is off for this film).")
         found = watcher.find_moments(video, what)
         shots = []
         if project["kind"] == "montage":

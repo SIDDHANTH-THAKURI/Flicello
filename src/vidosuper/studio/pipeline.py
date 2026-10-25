@@ -166,7 +166,7 @@ class Pipeline:
             return None
         from .brain.context import prompt
 
-        who = f"gemini:{self.watcher.model}" if self.watcher is not None else models.analyst
+        who = f"gemini:{self.watcher.model}" if getattr(self.watcher, "watches_clips", False) else models.analyst
         return hashlib.sha1((prompt("analyst") + who).encode("utf-8")).hexdigest()[:10]
 
     def analyse(self, length: float = 30.0, pace: str = "balanced") -> dict:
@@ -177,7 +177,7 @@ class Pipeline:
         usable = [c for c in clips if c.usable]
         if not usable:
             raise UserError("None of the uploaded files could be read as video.")
-        if self.watcher is not None:  # the watcher watches the clips' light copies (with their sound)
+        if getattr(self.watcher, "watches_clips", False):  # it watches the clips' light copies (with their sound)
             self.progress(0.1, "Making quick previews of your clips")
             self.make_previews(project, usable)
         self.progress(0.15, "Measuring shake, light and motion")
@@ -203,7 +203,7 @@ class Pipeline:
         def watch(task: dict) -> None:
             clip = by_id[task["clip_id"]]
             analysis = None
-            if self.watcher is not None:  # picture and sound together; the contact sheets if it can't
+            if getattr(self.watcher, "watches_clips", False):  # picture and sound together; else the contact sheets
                 from . import preview
 
                 video = preview.copy_path(self.work.root, clip.clip_id)

@@ -51,8 +51,9 @@ On the **Connect** page:
 1. Copy the setup prompt into Claude Code: it checks your machine and installs whatever is missing (models, tools),
    explaining each step. It never touches your keys.
 2. Add your keys. They stay in your computer's keychain, never in the repo, never sent anywhere but the service:
-   - **Gemini** (optional): watching your footage with its sound, and Cello's voice or painting when this machine
-     can't do them itself ([get one](https://aistudio.google.com/apikey))
+   - **Gemini** (optional): watches your footage with its sound, and is Cello's voice or the painter when this
+     machine can't be. Without it, Claude watches from frames, words and sounds measured on your machine
+     ([get one](https://aistudio.google.com/apikey))
    - **ElevenLabs**: music, sound effects, voices ([get one](https://elevenlabs.io/app/settings/api-keys))
    - optional: **Anthropic API** (instead of your Claude Code plan), **Higgsfield** (AI video generation),
      **Blender** (3D).

@@ -25,18 +25,23 @@ def brain_kind_for(settings: StudioSettings, owner: bool) -> BrainKind:
 
 
 def make_watcher(kind: BrainKind, settings: StudioSettings, spend: SpendFn, log_dir: Path | None = None):
-    """Gemini watching each clip with its sound (brain/gemini.py), when there is a key and a model for it; None: the
-    contact-sheet analyst logs the clips (and always does without the AI)."""
+    """Gemini watching each clip with its sound (brain/gemini.py), when there is a key and a model for it; else
+    Claude watching a film from its frames, words and sounds measured here (brain/claude_watcher.py; the
+    contact-sheet analyst logs the clips). None without the AI."""
     import os
 
-    if kind == "local" or not settings.models.watcher or not os.environ.get("GEMINI_API_KEY"):
+    if kind == "local":
         return None
-    try:
-        from .gemini import GeminiWatcher
+    if settings.models.watcher and os.environ.get("GEMINI_API_KEY", "").strip():
+        try:
+            from .gemini import GeminiWatcher
 
-        return GeminiWatcher(settings.models.watcher, spend, log_dir)
-    except Exception:  # noqa: BLE001 - no SDK or no key: the analyst logs the clips, as before
-        return None
+            return GeminiWatcher(settings.models.watcher, spend, log_dir)
+        except Exception:  # noqa: BLE001 - no SDK: Claude watches instead
+            pass
+    from .claude_watcher import ClaudeWatcher
+
+    return ClaudeWatcher("api" if kind == "api" else "claude_code", spend, log_dir)
 
 
 def make_brain(kind: BrainKind, settings: StudioSettings, spend: SpendFn, log_dir: Path | None = None,

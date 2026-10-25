@@ -323,7 +323,8 @@ LAST: dict = {}  # the last raw reply and why it stopped, kept for the work fold
 VIA = os.environ.get("VIDO_SCENES_VIA", "claude_code")
 
 
-def _ask_claude_code(system: str, content: list[dict], task: str, timeout: float = 2400.0) -> str:
+def _ask_claude_code(system: str, content: list[dict], task: str, timeout: float = 2400.0,
+                     model: str = DESIGN_MODEL) -> str:
     """The same question through `claude -p` on the owner's plan: the pictures are written to files it reads, and a
     scene is written by it to a file (no reply-length limit), then read back."""
     import tempfile
@@ -345,7 +346,7 @@ def _ask_claude_code(system: str, content: list[dict], task: str, timeout: float
             f"answer (exactly what you would reply, including any ```html block) to the file {out} with the Write "
             "tool, and reply only DONE.")
         (folder / "system.md").write_text(system, encoding="utf-8")
-        cmd = [claude_exe(), "-p", "--output-format", "json", "--model", DESIGN_MODEL, "--system-prompt-file",
+        cmd = [claude_exe(), "-p", "--output-format", "json", "--model", model, "--system-prompt-file",
                str(folder / "system.md"), "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config",
                "--max-budget-usd", "25", "--tools", "Read,Write", "--allowedTools", "Read(./**)", "Write(./**)",
                "--add-dir", str(folder)]
