@@ -1,5 +1,5 @@
 """Everything the code imports is declared in pyproject: in the base, `ai` or `studio` dependencies (what
-`./flicello` installs), or in an optional extra the code only imports when it is there (`paint`, `nvidia`)."""
+`./flicello` installs), or in an optional extra the code only imports when it is there (`paint`, `sound`, `nvidia`)."""
 
 from __future__ import annotations
 
@@ -15,8 +15,9 @@ import vidosuper
 SRC = Path(vidosuper.__file__).parent
 # Imported directly, but guaranteed by a declared framework that exposes it as part of its own API.
 VIA = {"markupsafe": "jinja2", "starlette": "fastapi"}
-# Installed by the launchers on their own (`pip install --no-deps`): declared, it would pull in a second onnxruntime.
-LAUNCHED = {"kokoro_onnx"}
+# Installed on their own with `pip install --no-deps` (by the launchers, or the setup prompt): declared, kokoro-onnx
+# would pull in a second onnxruntime and Stable Audio 3 its own PyTorch build.
+LAUNCHED = {"kokoro_onnx", "stable_audio_3"}
 
 
 def _canon(name: str) -> str:

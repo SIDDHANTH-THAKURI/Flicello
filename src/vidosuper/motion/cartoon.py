@@ -5,8 +5,8 @@ that story. Nothing comes from a character kit or a template engine.
    the cast's model sheets and a style key frame, and writes the shot list (`board.json`): each shot's time, size,
    angle, what happens, its sounds and the narration in it. `bash check` holds it to the rules (whole film covered,
    cuts on the beat, every character painted).
-2. The music is composed for the board (ElevenLabs Music, at the board's tempo, the cuts on its bars) while the
-   shots are made.
+2. The music is composed for the board (on this machine's GPU, or by ElevenLabs Music; at the board's tempo, the
+   cuts on its bars) while the shots are made.
 3. Each shot is animated at a desk of its own, the way the scene designer works (motion/scenes.py): painted parts
    in the film's style (`bash paint`, `--like` the model sheets), cut-out puppets rigged in HTML and animated with
    GSAP, painted worlds with parallax, 3D from Blender when it's there (`bash blender`), `bash look` to see its
@@ -560,8 +560,8 @@ def blender_command(folder: Path, args: list[str]) -> None:
 # ---------------------------------------------------------------- 2. the music
 
 def music_for(board: dict, seconds: float, out: Path, under_voice: bool) -> Path | None:
-    """An original track for the film at the board's tempo, its bars laid out for its length (None: no ElevenLabs
-    key here, or it failed: the film is made without, and that is said)."""
+    """An original track for the film at the board's tempo, its bars laid out for its length (None: nothing here can
+    make music, or it failed: the film is made without, and that is said)."""
     from ..music import compose, made
 
     if not compose.available():
@@ -736,7 +736,7 @@ def make(story: str, work: Path, seconds: float = 40.0, shape: str = "9:16", sty
     pool.shutdown()
     music = music_box.get("path")
     if music is None:
-        log("No music: ElevenLabs isn't connected here (or it failed)")
+        log("No music: nothing here can make it (no GPU for the music model, no ElevenLabs key), or it failed")
     library = library or (Path(os.environ.get("LOCALAPPDATA", str(work))) / "VidoSuper" / "sfx")
     out, laid = mix(picture, total, music, narration, cues, library, work / "cartoon.mp4")
     log(f"Done in {time.monotonic() - t0:.0f} s: {out}")

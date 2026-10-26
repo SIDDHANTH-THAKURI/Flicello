@@ -8,6 +8,7 @@ import platform
 import sys
 
 from ..config import REPO_ROOT
+from .checks import STABLE_AUDIO_3
 
 
 def prompt(port: int = 8765) -> str:
@@ -25,7 +26,11 @@ def prompt(port: int = 8765) -> str:
         f'onnxruntime onnxruntime-directml, then "{py}" -m pip install -e "{REPO_ROOT}[nvidia]"). If it has an NVIDIA '
         f'GPU or Apple Silicon: install the local painter ("{py}" -m pip install -e "{REPO_ROOT}[paint]", with the '
         "PyTorch build for this GPU from pytorch.org) and download its model (the \"Painter\" item says how; about "
-        "58 GB, so tell me first), so painting needs no paid image service.",
+        "58 GB, so tell me first), so painting needs no paid image service. Then install the music and sound maker "
+        f'("{py}" -m pip install -e "{REPO_ROOT}[sound]", then "{py}" -m pip install --no-deps "{STABLE_AUDIO_3}") '
+        "and download the music model (the \"Music maker\" item says how; about 12 GB). The sound effects model "
+        "(the \"Sound effects\" item) is gated: tell me to accept its licence on Hugging Face and log in there "
+        "myself, then download it.",
         f"4. Do NOT handle my API keys or log in to anything for me. If a key is missing, tell me to add it on the "
         f"Connect page (http://127.0.0.1:{port}/connect). If Claude Code itself is not logged in, tell me to run "
         "`claude` and log in.",

@@ -7,8 +7,8 @@ music is for:
 - **bed**: music under someone speaking. It must leave room for the voice: soft, steady, no lead melody in the
   middle of the range, no drops; a gentle ending.
 
-The tool lays the parts out in whole bars at your tempo and sends your styles to a music model (ElevenLabs Music), so
-write styles that model understands: short English phrases, each one thing. Be specific: an instrument with how it is
+The tool lays the parts out in whole bars at your tempo and sends your styles to a music model (an open one on this
+machine's GPU, or ElevenLabs Music), so write styles that model understands: short English phrases, each one thing. Be specific: an instrument with how it is
 played ("soft Rhodes piano chords", "punchy four-on-the-floor kick", "plucked nylon guitar", "warm sub bass"), the
 genre, the mood, the production ("tape saturation", "crisp modern mix"). The first styles set the sound of the whole
 track, so give 6-10 of them.

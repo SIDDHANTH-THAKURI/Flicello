@@ -52,7 +52,7 @@
   <label class="field"><span>What should it sound like? <small class="muted">(optional)</small></span>
     <textarea name="ask" rows="2" maxlength="400" placeholder="{{ 'Soft piano, calm, a little hopeful' if voice else 'Warm lo-fi with piano / big cinematic drums / upbeat summer house' }}"></textarea></label>
   <button class="btn" type="submit">Make it and let me listen</button>
-  <p class="help">Original music made for your {{ 'recording' if voice else 'film' }} by ElevenLabs Music, to its length{% if track_seconds > 75 %}: first a 30-second taste to check the sound, then the full {{ track_seconds|dur }} track{% endif %}. You hear it and say what I got wrong before anything is cut. {% if p.stage == 'setup' %}Skip it and I make one from your note when you start.{% elif voice %}Skip it and I make one to suit the look you pick.{% endif %}</p>
+  <p class="help">Original music made for your {{ 'recording' if voice else 'film' }}, to its length{% if track_seconds > 75 %}: first a 30-second taste to check the sound, then the full {{ track_seconds|dur }} track{% endif %}. You hear it and say what I got wrong before anything is cut. {% if p.stage == 'setup' %}Skip it and I make one from your note when you start.{% elif voice %}Skip it and I make one to suit the look you pick.{% endif %}</p>
 </form>
 {% else %}
 <p class="help">{% if voice %}A soft original beat sits under your voice.{% else %}We make a short original beat to cut on. It's yours to post anywhere.{% endif %}</p>

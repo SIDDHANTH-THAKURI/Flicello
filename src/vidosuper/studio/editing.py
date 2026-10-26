@@ -253,7 +253,8 @@ def view(studio, project: dict, user: dict) -> dict:
 def _remakable(studio, project: dict) -> bool:
     """Whether a stretch of this film's music can be written again (only music made here: Studio.edit_music)."""
     row = studio.beat_row(project, project.get("beat")) if project.get("beat") else None
-    return bool(row and (row.get("full_song_id") or (row.get("song_id") and row.get("whole"))))
+    return bool(row and (row.get("full_song_id") or (row.get("song_id") and row.get("whole"))
+                         or studio._made_here(project, row)))
 
 
 def apply(studio, user: dict, project: dict, ops: list[dict], said: list[str] | None = None) -> list[str]:

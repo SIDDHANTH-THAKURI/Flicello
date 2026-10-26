@@ -1,6 +1,6 @@
-"""Original music for an edit, composed by ElevenLabs Music from a section-by-section plan
-(ELEVENLABS_API_KEY in .env). The plan pins where the build and the drop fall, so the track is
-written for the cut instead of the cut being bent to a stock track."""
+"""Original music for an edit, composed from a section-by-section plan: by the open music model on this machine's
+GPU (music/maker.py), or by ElevenLabs Music (ELEVENLABS_API_KEY). The plan pins where the build and the drop
+fall, so the track is written for the cut instead of the cut being bent to a stock track."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def compose(plan: dict, out_path: Path, *, model: str = DEFAULT_MODEL, output_fo
 
 
 class ComposeError(RuntimeError):
-    """ElevenLabs could not make the track (no key, refused, down)."""
+    """The track could not be made (no maker here, refused, down)."""
 
 
 class BadPlan(ComposeError):
@@ -79,21 +79,62 @@ class BadPlan(ComposeError):
         self.detail = detail
 
 
-def available() -> bool:
-    """A key for ElevenLabs Music is set on this machine."""
+def maker() -> str:
+    """Who makes tracks here: "local" (the open model on this machine's GPU), "elevenlabs" (a key is set) or ""
+    (nobody). VIDO_MUSIC=local|elevenlabs picks one; by default the local model when it can run here."""
+    from . import maker as local
+
     _load_dotenv()
-    return bool(os.environ.get("ELEVENLABS_API_KEY", "").strip())
+    want = os.environ.get("VIDO_MUSIC", "auto").strip().lower()
+    key = bool(os.environ.get("ELEVENLABS_API_KEY", "").strip())
+    if want == "local":
+        return "local"
+    if want == "elevenlabs":
+        return "elevenlabs" if key else ""
+    if local.can_make_music():
+        return "local"
+    return "elevenlabs" if key else ""
+
+
+def available() -> bool:
+    """Tracks can be made on this machine (its own GPU, or an ElevenLabs key)."""
+    return bool(maker())
+
+
+def sound_maker() -> str:
+    """Who makes sound effects to a description here: "local" (Stable Audio 3 on this machine's GPU), "elevenlabs"
+    (a key) or "" (nobody: the built-in effects play, the rest stay silent). VIDO_SFX=local|elevenlabs picks one."""
+    from . import maker as local
+
+    _load_dotenv()
+    want = os.environ.get("VIDO_SFX", "auto").strip().lower()
+    key = bool(os.environ.get("ELEVENLABS_API_KEY", "").strip())
+    if want == "local":
+        return "local"
+    if want == "elevenlabs":
+        return "elevenlabs" if key else ""
+    if local.can_make_sounds():
+        return "local"
+    return "elevenlabs" if key else ""
 
 
 def compose_plan(plan: dict, out_path: Path, *, model: str = "music_v2_5", store: bool = False,
-                 seed: int | None = None, timeout: float = 600.0) -> dict:
-    """Compose a music_v2 plan (chunks) into `out_path` (mp3). `store`: keep it at ElevenLabs as a reference for a
-    later track (a taste the full track should sound like). Returns {"path", "song_id", "seconds"}. Busy or down:
+                 seed: int | None = None, timeout: float = 600.0, reference_audio: Path | None = None) -> dict:
+    """Compose a music_v2 plan (chunks) into `out_path` (mp3). Returns {"path", "song_id", "seconds", "maker"}.
+    On this machine's GPU: `reference_audio` is a track it should sound like (the taste they picked). At ElevenLabs:
+    `store` keeps it there as a reference for a later track (the plan then names it by its song id); busy or down:
     tried three times; a refused plan raises BadPlan, anything else ComposeError."""
     import time
 
     import httpx
 
+    if maker() == "local":
+        from . import maker as local
+
+        try:
+            return {**local.compose(plan, Path(out_path), seed=seed, reference=reference_audio), "maker": "local"}
+        except local.MakerError as exc:
+            raise ComposeError(str(exc)) from exc
     _load_dotenv()
     key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
     if not key:
@@ -126,7 +167,8 @@ def compose_plan(plan: dict, out_path: Path, *, model: str = "music_v2_5", store
                 seconds = float(sf.info(str(out_path)).duration)
             except Exception:  # noqa: BLE001 - the plan's length stands
                 pass
-            return {"path": out_path, "song_id": r.headers.get("song-id", ""), "seconds": round(seconds, 2)}
+            return {"path": out_path, "song_id": r.headers.get("song-id", ""), "seconds": round(seconds, 2),
+                    "maker": "elevenlabs"}
         detail = r.text[:600]
         if r.status_code in (400, 403, 422) and "format" in detail.lower() and fmt != "mp3_44100_128":
             fmt = "mp3_44100_128"  # this plan can't have that format: the standard one

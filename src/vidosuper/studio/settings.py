@@ -30,7 +30,7 @@ class Tier(_Strict):
     videos: int | None = None
     max_seconds: int = Field(60, description="The longest film from clips.")
     max_recording: int = Field(180, description="The longest recording a talking or voice video may use, in seconds.")
-    beats: int = Field(3, description="Tracks ElevenLabs may make for one film.")
+    beats: int = Field(3, description="Tracks ElevenLabs may make for one film (music made on this machine is not counted).")
 
 
 class Limits(_Strict):

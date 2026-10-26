@@ -1171,24 +1171,27 @@ def test_what_was_heard_must_name_words_from_the_transcript_and_parts_in_order()
     assert "in the order" in problems and "not in the transcript" in problems
 
 
-def _fake_composer(monkeypatch, calls: list, fail: bool = False) -> None:
-    """ElevenLabs Music stand-in: every plan becomes our own beat of the plan's length (no network, no money)."""
+def _fake_composer(monkeypatch, calls: list, fail: bool = False, maker: str = "elevenlabs") -> None:
+    """Music maker stand-in (ElevenLabs Music, or the model on this machine's GPU): every plan becomes our own beat
+    of the plan's length (no network, no GPU, no money)."""
     import os
 
     from vidosuper.music import compose as compose_mod
     from vidosuper.music.house import make_beat
 
-    def fake(plan, out_path, *, model="music_v2_5", store=False, seed=None, timeout=600.0):
-        calls.append({"plan": plan, "store": store})
+    def fake(plan, out_path, *, model="music_v2_5", store=False, seed=None, timeout=600.0, reference_audio=None):
+        calls.append({"plan": plan, "store": store, "reference_audio": reference_audio})
         if fail:
             raise compose_mod.ComposeError("the music service is down")
         seconds = sum(c.get("duration_ms", 0) for c in plan["chunks"]) / 1000
         tmp = Path(out_path).with_suffix(".tmp.wav")
         make_beat(tmp, seconds, "balanced")
         os.replace(tmp, out_path)
-        return {"path": Path(out_path), "song_id": f"song{len(calls)}" if store else "", "seconds": seconds}
+        song_id = f"song{len(calls)}" if store and maker == "elevenlabs" else ""
+        return {"path": Path(out_path), "song_id": song_id, "seconds": seconds, "maker": maker}
 
     monkeypatch.setattr(compose_mod, "available", lambda: True)
+    monkeypatch.setattr(compose_mod, "maker", lambda: maker)
     monkeypatch.setattr(compose_mod, "compose_plan", fake)
 
 
@@ -1291,6 +1294,49 @@ def test_a_long_film_hears_a_taste_first_and_its_full_track_is_made_from_it(stud
     assert all(c["duration_ms"] <= 120000 for c in calls[-1]["plan"]["chunks"])
     assert [f.name for f in (work / "music").glob("song.*")] == ["song.mp3"]
     assert studio.beats(studio.db.project(p["id"]))[0]["full_file"] == path.name
+
+
+def test_music_made_on_this_machine_costs_nothing_sounds_like_its_taste_and_is_remade_here(studio, media, monkeypatch):
+    from vidosuper.music import maker
+
+    calls: list = []
+    _fake_composer(monkeypatch, calls, maker="local")
+    owner = _owner(studio)
+    p = studio.create_project(owner, "Road trip", "9:16", 240, "a long road trip")
+    studio.make_beat(p, "epic cinematic drums")
+    _drain(studio)
+    p = studio.db.project(p["id"])
+    row = studio.beats(p)[0]
+    assert row["maker"] == "local" and not row["whole"] and not row["song_id"]
+    assert json.loads(row["plan"])["chunks"]  # its plan is kept: a stretch of it is written again from its words
+    work = studio.s.users_dir / owner["id"] / "projects" / p["id"]
+    job = {"id": studio.db.enqueue("prepare", p["id"], owner["id"], {}, 5)}
+    path = studio._ensure_track(job, p, owner, None)
+    assert calls[-1]["reference_audio"] == work / "beats" / row["file"]  # the taste they picked is what it sounds like
+    assert "conditioning_ref" not in calls[-1]["plan"]["chunks"][0]
+    assert not studio.db.all("SELECT * FROM spend WHERE backend='elevenlabs'")  # made here: nothing paid, nothing counted
+    assert studio.beats_left(studio.db.project(p["id"])) == studio.beats_left(p)
+    row = studio.beats(studio.db.project(p["id"]))[0]
+    assert studio._made_here(p, row) and row["full_file"] == path.name
+    asked = {}
+
+    def repaint(source, start, end, caption, out, **kw):
+        asked.update(source=source, start=start, end=end, caption=caption)
+        import shutil
+
+        shutil.copyfile(source, out)
+        return {"path": out, "song_id": "", "seconds": 242.0}
+
+    monkeypatch.setattr(maker, "repaint", repaint)
+    monkeypatch.setattr(studio, "_version_plan", lambda project, v: [{"id": 1}])
+    monkeypatch.setattr(studio, "work_version", lambda project: 1)
+    monkeypatch.setattr(studio, "_revise_plan", lambda job, project, user: None)
+    studio._job_music_edit({**job, "params": {"start": 200.0, "end": 230.0, "want": "calmer"}}, studio.db.project(p["id"]),
+                           owner)
+    assert asked["source"] == path and (asked["start"], asked["end"]) == (200.0, 230.0)
+    assert asked["caption"].startswith("instrumental") and asked["caption"].endswith("calmer")
+    assert studio.beats(studio.db.project(p["id"]))[0]["full_file"].endswith("-e1.mp3")
+    assert not studio.db.all("SELECT * FROM spend WHERE backend='elevenlabs'")
 
 
 def test_when_the_music_service_fails_our_own_beat_stands_in_and_they_are_told(studio, media, monkeypatch):

@@ -25,8 +25,8 @@ class Key:
 KEYS = (
     Key("GEMINI_API_KEY", "Gemini", "Cello's live voice, watching your footage with its sound, and painting when "
         "this machine can't paint itself", "https://aistudio.google.com/apikey", True),
-    Key("ELEVENLABS_API_KEY", "ElevenLabs", "music made for your film, sound effects, voices",
-        "https://elevenlabs.io/app/settings/api-keys", True),
+    Key("ELEVENLABS_API_KEY", "ElevenLabs (optional)", "music and sound effects when this machine can't make them "
+        "itself", "https://elevenlabs.io/app/settings/api-keys", False),
     Key("ANTHROPIC_API_KEY", "Anthropic API (optional)", "only if you'd rather pay per use than use your Claude Code plan",
         "https://console.anthropic.com/settings/keys", False),
     Key("HF_API_KEY_ID", "Higgsfield key id (optional)", "AI video generation", "https://higgsfield.ai", False),

@@ -148,6 +148,7 @@ def models(models_dir: Path) -> list[dict]:
     out.append(_item("model:whisper", "models", "Whisper (speech to text)", OK if whisper else MISSING,
                      str(models_dir), "it downloads itself on the first video with speech", does="what is said, word by word"))
     out.append(painter_item())
+    out += sound_items()
     return out
 
 
@@ -167,6 +168,41 @@ def painter_item() -> dict:
                  "pip install -e \".[paint]\" (PyTorch with CUDA on NVIDIA), then download it with: huggingface-cli "
                  f"download {painter.MODEL}", needed=False,
                  does="paints the designers' pieces on your GPU, so no image service is needed")
+
+
+def sound_items() -> list[dict]:
+    """Music and sound effects made on this machine (music/maker.py): optional, as ElevenLabs can make them instead."""
+    from ..music import maker
+
+    gpu = maker.device()
+    out = []
+    for kind, label, model, able, size, does in (
+            ("music", "Music maker (ACE-Step 1.5 XL, on your GPU)", maker.MUSIC_MODEL, maker.can_make_music(),
+             "about 12 GB", "makes your film's music, so no music service is needed"),
+            ("sounds", "Sound effects (Stable Audio 3, on your GPU)", maker.SOUND_REPO.get(maker.SOUND_MODEL, ""),
+             maker.can_make_sounds(), "about 4 GB", "makes each sound effect to its description, so no sound service "
+             "is needed. Powered by Stability AI (Community License: for commercial use, register at "
+             "stability.ai/community-license)")):
+        if not able:
+            status, detail = OFF, ("no GPU for it here" if gpu is None and _has_torch() else
+                                   "not installed (pip install -e \".[sound]\")")
+        elif maker.downloaded(kind if kind == "music" else "sound"):
+            status, detail = OK, f"{model} on {gpu}"
+        else:
+            status, detail = MISSING, f"{model}: not downloaded yet ({size})"
+        fix = (f"pip install -e \".[sound]\" (PyTorch with CUDA on NVIDIA), then download it with: huggingface-cli "
+               f"download {model}")
+        if kind == "sounds":
+            fix = ("pip install -e \".[sound]\" and pip install --no-deps \"" + STABLE_AUDIO_3 + "\"; the model is "
+                   f"gated: accept its licence at huggingface.co/{model} and log in (huggingface-cli login), then "
+                   f"huggingface-cli download {model}")
+        out.append(_item(f"model:{kind}", "models", label, status, detail, fix, needed=False, does=does))
+    return out
+
+
+# Stable Audio 3 is installed on its own (pinned, without its dependencies: its own pins would replace this machine's
+# PyTorch build); the `sound` extra has what it needs.
+STABLE_AUDIO_3 = "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@77e0398c26f7d22d801ec1bb036307e8b231f741"
 
 
 def _has_torch() -> bool:

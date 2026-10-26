@@ -31,6 +31,16 @@ service, no per-picture cost. Without it, a Gemini key paints instead. On an NVI
 model runtime once (`pip install -e ".[nvidia]"` after `pip uninstall onnxruntime onnxruntime-directml`): every
 cut-out frame then runs on the GPU.
 
+**Music and sound effects on your own GPU.** Your film's music is made by
+[ACE-Step 1.5 XL](https://github.com/ace-step/ACE-Step-1.5) (MIT, about 12 GB) to the film's length and tempo, and
+each sound effect by [Stable Audio 3 Small-SFX](https://huggingface.co/stabilityai/stable-audio-3-small-sfx) (about
+4 GB; Powered by Stability AI, under the Stability AI Community License: free for commercial use under $1M a year in
+revenue once you register at [stability.ai/community-license](https://stability.ai/community-license); trained on
+licensed audio).
+Install `pip install -e ".[sound]"` and Stable Audio 3 itself (the setup prompt does both). Stable Audio's model is
+gated: accept its licence on Hugging Face and log in there once (`huggingface-cli login`). No music service, no cost
+per track. Without them, an ElevenLabs key makes the music and sounds instead.
+
 ## Quick start
 
 You need [Python 3.11+](https://www.python.org/downloads/), [Node.js 22+](https://nodejs.org),
@@ -54,7 +64,8 @@ On the **Connect** page:
    - **Gemini** (optional): watches your footage with its sound, and is Cello's voice or the painter when this
      machine can't be. Without it, Claude watches from frames, words and sounds measured on your machine
      ([get one](https://aistudio.google.com/apikey))
-   - **ElevenLabs**: music, sound effects, voices ([get one](https://elevenlabs.io/app/settings/api-keys))
+   - **ElevenLabs** (optional): music and sound effects when this machine can't make them itself
+     ([get one](https://elevenlabs.io/app/settings/api-keys))
    - optional: **Anthropic API** (instead of your Claude Code plan), **Higgsfield** (AI video generation),
      **Blender** (3D).
 

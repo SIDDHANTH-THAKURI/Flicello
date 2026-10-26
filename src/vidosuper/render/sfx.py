@@ -95,8 +95,8 @@ def synthesize(name: str) -> np.ndarray:
     return np.stack([y, y], axis=1).astype(np.float32)
 
 
-# The pro library: each effect made once by ElevenLabs' sound generation from a sound designer's description, kept and
-# reused for every film (a few cents once). Without a key, or before it's made, the synthesized effect plays.
+# The pro library: each effect made once from a sound designer's description (by Stable Audio 3 on this machine's GPU,
+# else by ElevenLabs' sound generation), kept and reused for every film. Before it's made, the synthesized effect plays.
 PRO = {
     "whoosh": ("a fast clean cinematic whoosh passing left to right, airy, crisp, no music, no voice", 0.8),
     "whoosh_long": ("a long smooth cinematic swoosh sweeping past, airy and wide, no music, no voice", 1.6),
@@ -122,13 +122,23 @@ def pro_path(name: str, library: Path) -> Path | None:
     path = library / "pro" / f"{name}.wav"  # 48 kHz stereo, as the mix reads it
     if path.exists() and path.stat().st_size > 1000:
         return path
-    from ..music.compose import _load_dotenv
+    from ..music.compose import sound_maker
 
-    _load_dotenv()
-    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
-    if not key:
-        return None
+    who = sound_maker()
     text, seconds = PRO[name]
+    if who == "local":
+        from ..music import maker
+
+        try:
+            return maker.sound(text, seconds, path)
+        except maker.MakerError as exc:  # the synthesized effect plays instead (and the reason is noted)
+            from ..local import health
+
+            health.failed("sound_maker", exc)
+            return None
+    if who != "elevenlabs":
+        return None
+    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
     req = urllib.request.Request("https://api.elevenlabs.io/v1/sound-generation",
                                  data=json.dumps({"text": text, "duration_seconds": seconds, "prompt_influence": 0.6}).encode(),
                                  headers={"xi-api-key": key, "Content-Type": "application/json"})

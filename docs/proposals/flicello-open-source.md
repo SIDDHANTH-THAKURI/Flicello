@@ -35,8 +35,10 @@ screen says what it needs:
 1. `git clone` and `./flicello` (or `flicello.cmd` on Windows): installs Python deps, opens the local site.
 2. The **Connect** page shows every piece, each green / red / not set, checked live:
    - Claude Code (installed, logged in, which plan): the brain for everything by default.
-   - Gemini key: Cello's live voice, watching footage, painting assets.
-   - ElevenLabs key: music, sound effects, voices.
+   - Gemini key (optional since 2026-10-26): Cello's live voice, watching footage, painting assets, when this
+     machine can't (local voice, Claude watcher, local painter).
+   - ElevenLabs key (optional since 2026-10-26): music and sound effects, when this machine can't make them
+     (music/maker.py: ACE-Step 1.5 XL for music, Stable Audio 3 Small-SFX for effects, on the GPU).
    - Optional: Anthropic API key (instead of Claude Code), Higgsfield / other video generation, Blender (3D).
    - Tools: ffmpeg, Node 22, the HyperFrames engine and its Chrome, the AI models (cut-out, depth, matting,
      speech, upscale, object removal).

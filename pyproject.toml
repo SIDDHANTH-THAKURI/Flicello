@@ -54,6 +54,21 @@ paint = [  # the local painter (motion/painter.py): Qwen-Image-Edit-2509 on this
   "accelerate>=1.0",
   "huggingface-hub>=0.30",
 ]
+sound = [  # music and sound effects made on this machine's GPU (music/maker.py): ACE-Step 1.5 through diffusers, and
+  # what Stable Audio 3 needs (it is installed itself with --no-deps: its own pins would replace this machine's PyTorch)
+  "torch>=2.5",
+  "torchaudio>=2.5",
+  "diffusers>=0.42",  # AceStepPipeline
+  "transformers>=5.8",  # Stable Audio 3's T5Gemma text encoder
+  "accelerate>=1.0",
+  "huggingface-hub>=1.7",
+  "safetensors>=0.4",
+  "einops>=0.8",
+  "einops-exts>=0.0.4",
+  "packaging>=24",
+  "tqdm>=4.66",
+  "soundfile>=0.12",
+]
 voice = [  # Cello's voice on this machine (local/voice.py). kokoro-onnx itself is installed with --no-deps by the
   # launchers, so it doesn't replace the GPU build of onnxruntime; these are its other packages (GPL-3: espeak-ng)
   "phonemizer>=3.3",

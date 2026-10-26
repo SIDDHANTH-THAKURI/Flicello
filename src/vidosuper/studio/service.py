@@ -666,7 +666,7 @@ class Studio:
 
     # ------------------------------------------------------------------ music made for the film (music/made.py)
     def can_compose(self) -> bool:
-        """Tracks can be made: this machine has an ElevenLabs key."""
+        """Tracks can be made: by the open music model on this machine's GPU, or with an ElevenLabs key."""
         from ..music.compose import available
 
         return available()
@@ -812,6 +812,7 @@ class Studio:
         bar moves through `span`."""
         from ..music import made
         from ..music.compose import BadPlan, ComposeError, available, compose_plan
+        from ..music.compose import maker as music_maker
         from ..music.house import make_beat as house_beat
 
         def prog(f: float, msg: str) -> None:
@@ -841,8 +842,8 @@ class Studio:
         maker, note, song_id, took = "elevenlabs", "", "", 0.0
         try:
             if not available():
-                raise ComposeError("no ElevenLabs key on this machine")
-            if not self._music_budget_ok(project):
+                raise ComposeError("nothing here can make music (no GPU for the music model, no ElevenLabs key)")
+            if music_maker() == "elevenlabs" and not self._music_budget_ok(project):
                 raise ComposeError("the music budget is used up")
             for attempt in range(2):
                 sound = self._sound(idea.model_dump(), purpose)
@@ -863,8 +864,9 @@ class Studio:
                                                 shape)
                     continue
                 took = time.time() - t0
-                song_id = made_now["song_id"]
-                self._spend_music(project, user, job, made_now["seconds"], took)
+                song_id, maker = made_now["song_id"], made_now.get("maker", "elevenlabs")
+                if maker == "elevenlabs":  # made on this machine: nothing to pay
+                    self._spend_music(project, user, job, made_now["seconds"], took)
                 break
         except (BudgetExceeded, JobStopped):  # (and PersonLimit) the money rules and the person decide
             raise
@@ -880,7 +882,7 @@ class Studio:
         rid = self.db.run("INSERT INTO beats(project_id, created, ask, idea, plan, file, song_id, seconds, whole, facts, "
                           "maker) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                           (project["id"], time.time(), " ".join(x for x in (ask, change) if x)[:500],
-                           idea.model_dump_json(), json.dumps(plan if maker == "elevenlabs" else {}), name, song_id,
+                           idea.model_dump_json(), json.dumps(plan if maker != "house" else {}), name, song_id,
                            seconds, 1 if whole else 0, facts.strip(), maker))
         return self.beat_row(project, rid)
 
@@ -891,6 +893,7 @@ class Studio:
         service is down, our own simple beat (and they are told)."""
         from ..music import made
         from ..music.compose import ComposeError, compose_plan
+        from ..music.compose import maker as music_maker
         from ..music.house import make_beat as house_beat
 
         purpose = "bed" if project["kind"] == "voice" else "cut"
@@ -907,19 +910,22 @@ class Studio:
                              f"Making the full {int(seconds) // 60}:{int(seconds) % 60:02d} track {what}")
         note = ""
         try:
-            if not self._music_budget_ok(project):
+            if music_maker() == "elevenlabs" and not self._music_budget_ok(project):
                 raise ComposeError("the music budget is used up")
             t0 = time.time()
             sections = made.layout(seconds, sound.bpm, purpose)
+            taste = work.beats / row["file"]  # on this machine the taste itself is the reference it sounds like
             try:
                 done = compose_plan(made.plan(sections, sound, purpose, reference=ref if row["song_id"] else None),
-                                    work.beats / name, store=True)  # kept there: a stretch of it can be made again
+                                    work.beats / name, store=True,  # kept there: a stretch of it can be made again
+                                    reference_audio=taste if taste.exists() else None)
             except ComposeError:
                 if not row["song_id"]:
                     raise
                 done = compose_plan(made.plan(sections, sound, purpose), work.beats / name, store=True)
                 note = " (made from the same description: the taste itself could no longer be used as a reference)"
-            self._spend_music(project, user, job, done["seconds"], time.time() - t0)
+            if done.get("maker", "elevenlabs") == "elevenlabs":
+                self._spend_music(project, user, job, done["seconds"], time.time() - t0)
         except ComposeError as exc:
             self.db.event(project["id"], f"music: the full track failed ({exc}); our own beat instead", "warn", job["id"])
             name = Path(row["file"]).stem + "-full.wav"
@@ -2789,14 +2795,21 @@ class Studio:
         self._guard(project, "done")
         row = self.beat_row(project, project.get("beat"))
         song_id = (row or {}).get("full_song_id") or ((row or {}).get("song_id") if (row or {}).get("whole") else None)
-        if not song_id:
+        if not song_id and not self._made_here(project, row):
             raise ActionError("Only music made here can be changed in one stretch; this film's track can't (yet).")
         self._check_revisions(user, project)
         return self._enqueue(project, "music_edit", {"start": start, "end": end, "want": " ".join(want.split())[:200]})
 
+    def _made_here(self, project: dict, row: dict | None) -> bool:
+        """The film's track was made by the music model on this machine (a stretch of it can be written again here)."""
+        if not row or row.get("maker") != "local" or not (row["whole"] or row["full_file"]):
+            return False
+        return (workdir(self.s, project["user_id"], project["id"]).beats / (row["full_file"] or row["file"])).exists()
+
     def _job_music_edit(self, job, project, user):
         import soundfile as sf
 
+        from ..music import maker
         from ..music.sections import remake
 
         params = job["params"]
@@ -2814,8 +2827,15 @@ class Studio:
         self.db.job_progress(job["id"], 0.1, f"Writing {int(start) // 60}:{int(start) % 60:02d}-"
                              f"{int(end) // 60}:{int(end) % 60:02d} of the music again: {words}")
         t0 = time.time()
-        done = remake(song_id, length, start, end, styles, [], out)
-        self._spend_music(project, user, job, max(3.0, end - start), time.time() - t0)
+        if row.get("maker") == "local":  # written again on this machine, around the track's own description
+            try:
+                caption = maker.from_plan(json.loads(row.get("plan") or "{}"))["caption"]
+            except (maker.MakerError, ValueError):
+                caption = ", ".join(row["idea"].get("styles") or [])
+            done = maker.repaint(current, start, end, ", ".join(x for x in (caption, words) if x), out)
+        else:
+            done = remake(song_id, length, start, end, styles, [], out)
+            self._spend_music(project, user, job, max(3.0, end - start), time.time() - t0)
         self.db.run("UPDATE beats SET full_file=?, full_song_id=? WHERE id=?", (out.name, done.get("song_id") or song_id, row["id"]))
         self._choose_beat(self.db.project(project["id"]), self.beat_row(project, row["id"]))
         plan_row = self._version_plan(project, self.work_version(project))[0]

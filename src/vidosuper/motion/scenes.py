@@ -12,7 +12,8 @@ After Effects or a creative coder in an artifact. Nothing comes from a kit of te
    judges them as a strict motion director: is the idea fresh, does each frame act out what is being said, is it
    designed, is anything broken? `write` fixes what it found, up to a few rounds.
 4. `render` makes the scene for real, frame by frame (HyperFrames), shot and all; `finish` puts the person's own sound
-   back under it with the scene's sounds, each made to its description (ElevenLabs) and kept.
+   back under it with the scene's sounds, each made to its description (on this machine's GPU, or by ElevenLabs) and
+   kept.
 """
 
 from __future__ import annotations
@@ -1045,19 +1046,30 @@ def look(brief: Brief, html: str, video: Path, work: Path, client=None, spend=No
 # ---------------------------------------------------------------- 5. sound made to each cue
 
 def sound_for(description: str, seconds: float, library: Path) -> Path | None:
-    """A sound made to its description (ElevenLabs sound generation), kept by its words."""
+    """A sound made to its description, kept by its words: by Stable Audio 3 on this machine's GPU (music/maker.py),
+    else by ElevenLabs sound generation. None: nobody here can make it (or it failed: that cue stays silent)."""
     import urllib.request
 
-    from ..music.compose import _load_dotenv
+    from ..music.compose import sound_maker
 
-    _load_dotenv()
-    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
     name = hashlib.sha1(f"{description}|{seconds:.1f}".encode()).hexdigest()[:16]
     path = library / "made" / f"{name}.wav"
     if path.exists() and path.stat().st_size > 1000:
         return path
-    if not key:
+    who = sound_maker()
+    if who == "local":
+        from ..music import maker
+
+        try:
+            return maker.sound(f"{description}, clean isolated sound effect", max(0.5, min(4.0, seconds)), path)
+        except maker.MakerError as exc:
+            from ..local import health
+
+            health.failed("sound_maker", exc)
+            return None
+    if who != "elevenlabs":
         return None
+    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
     req = urllib.request.Request(
         "https://api.elevenlabs.io/v1/sound-generation",
         data=json.dumps({"text": f"{description}, clean, no music, no voice", "duration_seconds": max(0.5, min(4.0, seconds)),
