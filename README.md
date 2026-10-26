@@ -36,7 +36,7 @@ cut-out frame then runs on the GPU.
 each sound effect by [Stable Audio 3 Small-SFX](https://huggingface.co/stabilityai/stable-audio-3-small-sfx) (about
 4 GB; Powered by Stability AI, under the Stability AI Community License: free for commercial use under $1M a year in
 revenue once you register at [stability.ai/community-license](https://stability.ai/community-license); trained on
-licensed audio).
+licensed and Creative Commons audio).
 Install `pip install -e ".[sound]"` and Stable Audio 3 itself (the setup prompt does both). Stable Audio's model is
 gated: accept its licence on Hugging Face and log in there once (`huggingface-cli login`). No music service, no cost
 per track. Without them, an ElevenLabs key makes the music and sounds instead.

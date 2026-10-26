@@ -527,18 +527,20 @@ def paint(what: str, out: Path, light: Path | None = None, like: Path | None = N
     import cv2
     import numpy as np
 
-    # painted on a flat key colour to cut it out: magenta, or green when the thing itself is pink or purple
+    # Gemini paints on a flat key colour that is keyed out: magenta, or green when the thing itself is pink or purple.
+    # The open model paints on plain white and the cut-out model lifts the thing off it: on a flat key colour it draws
+    # blotches over the background (seen on a real GPU), and asked to paint on a canvas it repaints it as paper.
     green = bool(re.search(r"\b(pink|magenta|purple|violet|fuchsia|lilac|lavender|mauve|plum|rose)\w*", what, re.I))
     which = painter_kind()
     if which == "local":
-        img = _paint_local(what, green, light, like, out)
+        img = _paint_local(what, light, like, out)
     else:
         img = _paint_gemini(what, green, light, like)
     if img is None:
         raise SceneError("the painter's picture couldn't be read")
     (out.parent / ".raw").mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out.parent / ".raw" / out.name), img)  # as painted: keyed again later without painting again
-    rgba = key_out(img, green)
+    cv2.imwrite(str(out.parent / ".raw" / out.name), img)  # as painted: cut out again later without painting again
+    rgba = cut_from_white(img) if which == "local" else key_out(img, green)
     ys, xs = np.where(rgba[..., 3] > 0.05)
     if ys.size == 0:
         raise SceneError("the painted picture was all background")
@@ -607,31 +609,37 @@ def _paint_gemini(what: str, green: bool, light: Path | None, like: Path | None)
     raise SceneError("the painter sent no picture")
 
 
-def _paint_local(what: str, green: bool, light: Path | None, like: Path | None, out: Path):
-    """The open model on this machine (motion/painter.py): image 1 is the empty key-coloured canvas, then the shot
-    whose light it follows and the asset whose style it matches."""
+WHITE = (255, 255, 255)
+
+
+def _paint_local(what: str, light: Path | None, like: Path | None, out: Path):
+    """The open model on this machine (motion/painter.py), asked the way an image editor is: add the thing to image 1,
+    a plain white picture, and keep the rest of it as it is; then the shot whose light it follows and the asset whose
+    style it matches."""
     import cv2
 
     from . import painter
 
-    colour, rgb = ("pure green (#00FF00)", (0, 255, 0)) if green else ("pure magenta (#FF00FF)", (255, 0, 255))
     refs, notes = [], []
     if light is not None and light.exists():
         refs.append(light)
         notes.append(f"Light it the way the person in image {len(refs) + 1} is lit (the direction, warmth and softness "
                      f"of the key light on their face); paint nothing from image {len(refs) + 1} itself.")
     if like is not None and like.exists():
-        flat = out.parent / ".raw" / f".like-{like.stem}.png"  # its transparency on the key colour, as the model sees it
-        _on_key(like, rgb, flat)
+        flat = out.parent / ".raw" / f".like-{like.stem}.png"  # its transparency on white, as the model sees it
+        _on_key(like, WHITE, flat)
         refs.append(flat)
-        notes.append(f"Match the painting style, detail, palette and light of image {len(refs) + 1} exactly, as a part "
-                     "of the same set.")
-    prompt = (f"Image 1 is an empty canvas of flat {colour}. Paint on it: {what}. One single isolated element, whole "
-              "and centred, nothing cropped, premium and richly lit with crisp edges. Everything around it stays "
-              f"perfectly flat {colour}: no shadow, ground, gradient, texture, text or border. " + " ".join(notes))
+        k = len(refs) + 1
+        notes.append(f"Image {k} is only a sample of the painting style: paint the new element in its style, detail, "
+                     f"palette and light, as a part of the same set, but draw nothing that is in image {k} (none of "
+                     f"its objects, characters or shapes): the result shows only {what}.")
+    prompt = (f"Add {what} in the centre of image 1. Keep the plain white background of image 1 exactly as it is: "
+              "clean, even and empty, with no shadow, ground, texture, frame or text added anywhere. The new element "
+              "is one single thing, whole, nothing cropped, premium and richly lit with crisp edges, and fills about "
+              "half of the picture. " + " ".join(notes))
     raw = out.parent / ".raw" / f".painted-{out.stem}.png"
     try:
-        painter.paint(prompt, rgb, refs, raw, seed=int(hashlib.sha1(what.encode()).hexdigest()[:8], 16))
+        painter.paint(prompt, WHITE, refs, raw, seed=int(hashlib.sha1(what.encode()).hexdigest()[:8], 16))
     except painter.PainterError as exc:
         raise SceneError(str(exc)) from exc
     return cv2.imread(str(raw), cv2.IMREAD_COLOR)
@@ -651,6 +659,26 @@ def _on_key(png: Path, rgb: tuple[int, int, int], out: Path) -> None:
         bg = np.array(rgb[::-1], np.float32)[None, None, :]
         img = (img[..., :3].astype(np.float32) * a + bg * (1 - a)).astype(np.uint8)
     cv2.imwrite(str(out), img)
+
+
+def cut_from_white(img):
+    """A painting on plain white, cut out by the cut-out model (BiRefNet): its matte is the transparency, and where the
+    thing was blended with the white (soft, see-through edges) its own colour is taken back out of the mix, so no white
+    fringe is left. Returns float RGBA (BGR order, 0..1)."""
+    import numpy as np
+
+    from ..graphics import birefnet
+
+    if not birefnet.available():
+        raise SceneError(f"cutting out a painting needs the cut-out model ({birefnet.MODEL.name}): the Connect page "
+                         "says how to get it")
+    f = img.astype(np.float32) / 255.0
+    alpha = np.clip(birefnet.person_matte(np.ascontiguousarray(img[..., ::-1])), 0.0, 1.0).astype(np.float32)
+    alpha[alpha < 0.02] = 0.0
+    safe = np.maximum(alpha, 0.04)[..., None]
+    fg = np.clip((f - (1.0 - alpha)[..., None]) / safe, 0.0, 1.0)  # its own colour, the white taken out of the mix
+    fg[alpha < 0.03] = 0.0
+    return np.dstack([fg, alpha])
 
 
 def key_out(img, green: bool = False):

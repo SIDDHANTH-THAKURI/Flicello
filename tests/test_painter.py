@@ -30,16 +30,31 @@ def test_who_paints(monkeypatch):
     assert scenes.painter_kind() == "local"
 
 
-def _painted(path, rgb=(255, 0, 255)):
-    """What the model sends back: the key colour with a blue disc on it."""
+def _painted(path, rgb=(255, 255, 255)):
+    """What the model sends back: the plain picture it was given with a blue disc added, its edge blended."""
     img = np.zeros((512, 512, 3), np.uint8)
     img[:] = rgb[::-1]
-    cv2.circle(img, (256, 256), 120, (200, 90, 30), -1)
+    cv2.circle(img, (256, 256), 120, (200, 90, 30), -1, lineType=cv2.LINE_AA)
     cv2.imwrite(str(path), img)
 
 
-def test_the_local_painter_follows_the_shots_light_and_an_assets_style_and_is_cut_out(tmp_path, monkeypatch):
+def _disc_matte(monkeypatch):
+    """The cut-out model (BiRefNet), standing in: the disc, with a soft edge."""
+    from vidosuper.graphics import birefnet
+
+    def matte(rgb, model=None):
+        h, w = rgb.shape[:2]
+        yy, xx = np.mgrid[0:h, 0:w]
+        d = np.hypot(yy - h / 2, xx - w / 2)
+        return np.clip((121 - d) / 2.0, 0, 1).astype(np.float32)
+
+    monkeypatch.setattr(birefnet, "available", lambda: True)
+    monkeypatch.setattr(birefnet, "person_matte", matte)
+
+
+def test_the_local_painter_adds_the_thing_to_white_follows_the_light_and_a_style_and_is_cut_out(tmp_path, monkeypatch):
     monkeypatch.setenv("VIDO_PAINTER", "local")
+    _disc_matte(monkeypatch)
     light = tmp_path / "frame.jpg"
     cv2.imwrite(str(light), np.full((90, 160, 3), 120, np.uint8))
     like = tmp_path / "assets" / "hero.png"
@@ -57,33 +72,33 @@ def test_the_local_painter_follows_the_shots_light_and_an_assets_style_and_is_cu
 
     monkeypatch.setattr(painter, "paint", fake)
     w, h = scenes.paint("a blue moon, gouache", tmp_path / "assets" / "moon.png", light, like)
-    assert asked["key"] == (255, 0, 255) and asked["refs"][0] == light
+    assert asked["key"] == (255, 255, 255) and asked["refs"][0] == light
     flat = cv2.imread(str(asked["refs"][1]), cv2.IMREAD_COLOR)
-    assert flat.shape == (64, 64, 3) and tuple(flat[0, 0]) == (255, 0, 255)  # its transparency on the key colour
-    assert "Image 1 is an empty canvas of flat pure magenta" in asked["prompt"]
-    assert "person in image 2" in asked["prompt"] and "style, detail, palette and light of image 3" in asked["prompt"]
+    assert flat.shape == (64, 64, 3) and tuple(flat[0, 0]) == (255, 255, 255)  # its transparency on white
+    # asked as an image editor is (on a real GPU, "paint on this canvas" repainted the canvas as paper)
+    assert asked["prompt"].startswith("Add a blue moon, gouache in the centre of image 1. Keep the plain white")
+    assert "person in image 2" in asked["prompt"] and "only a sample of the painting style" in asked["prompt"]
+    assert "draw nothing that is in image 3" in asked["prompt"]  # on a real GPU it drew the sample itself
     again = {}
     monkeypatch.setattr(painter, "paint", lambda *a, **k: (again.setdefault("seed", k["seed"]), fake(*a, **k))[1])
     scenes.paint("a blue moon, gouache", tmp_path / "assets" / "moon2.png", light, like)
     assert again["seed"] == asked["seed"]  # the same words paint the same way
     cut = cv2.imread(str(tmp_path / "assets" / "moon.png"), cv2.IMREAD_UNCHANGED)
     assert cut.shape[2] == 4 and (w, h) == (cut.shape[1], cut.shape[0]) and 240 <= w <= 260
-    assert cut[0, 0, 3] == 0 and cut[h // 2, w // 2, 3] == 255  # the key is gone, the disc is solid
+    assert cut[0, 0, 3] == 0 and cut[h // 2, w // 2, 3] == 255  # the white is gone, the disc is solid
+    edge = cut[h // 2, :, :][cut[h // 2, :, 3] > 0][:3]  # the soft edge: the disc's own blue, no white fringe
+    assert len(edge) == 3 and all(int(px[0]) - int(px[2]) > 120 for px in edge)
 
 
-def test_a_pink_thing_is_painted_on_green(tmp_path, monkeypatch):
+def test_without_the_cut_out_model_it_says_how_to_get_it(tmp_path, monkeypatch):
+    from vidosuper.graphics import birefnet
+
     monkeypatch.setenv("VIDO_PAINTER", "local")
-    asked = {}
-
-    def fake(prompt, key, refs, out, seed=0):
-        asked.update(key=key, prompt=prompt)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        _painted(out, key)
-        return out
-
-    monkeypatch.setattr(painter, "paint", fake)
-    scenes.paint("a pink balloon", tmp_path / "assets" / "balloon.png")
-    assert asked["key"] == (0, 255, 0) and "flat pure green" in asked["prompt"]
+    monkeypatch.setattr(birefnet, "available", lambda: False)
+    monkeypatch.setattr(painter, "paint", lambda prompt, key, refs, out, seed=0: (out.parent.mkdir(parents=True,
+                                                                                    exist_ok=True), _painted(out))[0])
+    with pytest.raises(scenes.SceneError, match="cut-out model.*Connect page"):
+        scenes.paint("a pink balloon", tmp_path / "assets" / "balloon.png")
 
 
 def test_the_painter_process_loads_once_and_paints_on_this_machine(tmp_path, monkeypatch):

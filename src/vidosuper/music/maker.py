@@ -7,8 +7,8 @@ needed (ElevenLabs stays an option for whoever has a key).
   The full track of a long film takes the taste they picked as its reference audio, so it sounds the same; a stretch
   of a made track is written again in place (repaint), the rest kept.
 - Sound effects: Stable Audio 3 Small-SFX, Powered by Stability AI (Stability AI Community License: free to use
-  commercially under $1M a year in revenue, once registered with Stability AI; trained on licensed audio only). A
-  cue's description becomes the sound, at the length asked.
+  commercially under $1M a year in revenue, once registered with Stability AI; trained on licensed and Creative
+  Commons audio). A cue's description becomes the sound, at the length asked.
 
 Both are loaded once by a sound process of its own (`python -m vidosuper.music.maker serve`, on 127.0.0.1), started
 by the first track or sound and left running until it has been idle for IDLE seconds, when it ends and gives the GPU
@@ -37,7 +37,7 @@ MUSIC_STEPS, MUSIC_GUIDANCE, MUSIC_SHIFT = 50, 7.0, 3.0  # XL SFT's own defaults
 SOUND_STEPS = 8
 MUSIC_SR = 48000
 MIN_SECONDS, MAX_SECONDS = 10.0, 600.0  # what ACE-Step makes
-WHOLE_ON_GPU_GB = 20  # below this much GPU memory, the music model's parts visit the GPU in turn (cpu offload)
+WHOLE_ON_GPU_GB = 20  # below this much free GPU memory, the music model's parts visit the GPU in turn (cpu offload)
 CAPTION_CHARS = 512
 
 
@@ -152,7 +152,8 @@ class _Maker:
 
             torch = self.torch
             pipe = AceStepPipeline.from_pretrained(MUSIC_MODEL, torch_dtype=torch.bfloat16)
-            if self.device == "cuda" and torch.cuda.get_device_properties(0).total_memory / 1024 ** 3 < WHOLE_ON_GPU_GB:
+            if self.device == "cuda" and torch.cuda.mem_get_info()[0] / 1024 ** 3 < WHOLE_ON_GPU_GB:  # free now: the
+                # painter may be on the same GPU
                 pipe.enable_model_cpu_offload()
             else:
                 pipe.to(self.device)

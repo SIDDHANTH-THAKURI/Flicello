@@ -1,9 +1,9 @@
 """The painter on this machine: an open image model (Qwen-Image-Edit-2509, Apache-2.0) on the person's own GPU, so
 the designers can paint without a paid image service.
 
-It paints the way the Gemini painter does (scenes.paint): the thing on a flat key colour, which is then keyed out.
-Its input is that empty key-coloured canvas, plus the pictures to follow (the shot whose light it is painted in, an
-asset whose style it matches), so a cartoon's pieces stay in one style.
+It is asked the way an image editor is (scenes.paint): add the thing to a plain white picture and keep the rest of it
+as it is; the cut-out model then lifts the thing off the white. With it come the pictures to follow (the shot whose
+light it is painted in, an asset whose style it matches), so a cartoon's pieces stay in one style.
 
 The model is big (about 58 GB of weights, bfloat16): loading it takes a while, so it is loaded once by a painter
 process of its own (`python -m vidosuper.motion.painter serve`, on 127.0.0.1), started by the first painting and
@@ -28,7 +28,7 @@ PORT = int(os.environ.get("VIDO_PAINTER_PORT", "8791"))
 IDLE = float(os.environ.get("VIDO_PAINTER_IDLE", "1200"))
 SIDE = 1024
 STEPS = 40
-WHOLE_ON_GPU_GB = 64  # below this much GPU memory, the model's parts visit the GPU in turn (cpu offload)
+WHOLE_ON_GPU_GB = 64  # below this much free GPU memory, the model's parts visit the GPU in turn (cpu offload)
 
 
 class PainterError(RuntimeError):
@@ -81,7 +81,8 @@ class _Painter:
         if self.device is None:
             raise PainterError("the local painter needs a GPU (NVIDIA with CUDA, or Apple Silicon)")
         self.pipe = QwenImageEditPlusPipeline.from_pretrained(MODEL, torch_dtype=torch.bfloat16)
-        if self.device == "cuda" and torch.cuda.get_device_properties(0).total_memory / 1024 ** 3 < WHOLE_ON_GPU_GB:
+        if self.device == "cuda" and torch.cuda.mem_get_info()[0] / 1024 ** 3 < WHOLE_ON_GPU_GB:  # free now: the other
+            # models (music, cut-outs) may be on the same GPU
             self.pipe.enable_model_cpu_offload()
         else:
             self.pipe.to(self.device)
@@ -89,6 +90,7 @@ class _Painter:
         self.lock = threading.Lock()
 
     def paint(self, prompt: str, key: tuple[int, int, int], refs: list[str], seed: int) -> "Image.Image":
+        """`key`: the colour of the plain picture it paints into (image 1)."""
         from PIL import Image
 
         canvas = Image.new("RGB", (SIDE, SIDE), key)
@@ -96,7 +98,8 @@ class _Painter:
         gen = self.torch.Generator(device="cpu").manual_seed(seed)
         with self.lock, self.torch.inference_mode():
             out = self.pipe(image=images, prompt=prompt, negative_prompt=" ", true_cfg_scale=4.0, guidance_scale=1.0,
-                            num_inference_steps=STEPS, num_images_per_prompt=1, generator=gen)
+                            num_inference_steps=STEPS, num_images_per_prompt=1, generator=gen,
+                            height=SIDE, width=SIDE)  # else it takes the size of the last picture given
         return out.images[0]
 
 
@@ -206,7 +209,7 @@ def ready(wait: float = 1800.0) -> None:
 
 
 def paint(prompt: str, key: tuple[int, int, int], refs: list[Path], out: Path, seed: int = 0) -> Path:
-    """One painting on the key colour by the painter process (as RGB, the key still in it), saved at `out`."""
+    """One painting by the painter process into a plain picture of the `key` colour (as RGB), saved at `out`."""
     ready()
     said = _ask("/paint", {"prompt": prompt, "key": list(key), "refs": [str(r) for r in refs], "out": str(out),
                            "seed": seed}, timeout=900)
