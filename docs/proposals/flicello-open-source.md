@@ -1,6 +1,10 @@
 # Flicello, open source: the best video studio on your own machine
 
-Status (2026-10-26): steps 1 to 6 built on this machine, not yet committed or published.
+Status (2026-10-26): steps 1 to 6 built, committed and pushed to main (the repository stays private until the
+owner publishes it). Since then every paid service is optional: painting (Qwen-Image-Edit), Cello's voice
+(Whisper, Claude, Kokoro), watching films (Claude), music (ACE-Step 1.5 XL) and sound effects (Stable Audio 3)
+run on the person's own machine. The GPU parts are unit-tested with the models faked; none has run on a real
+GPU yet.
 
 - 1 Local mode, Connect page, keys in the keychain, live health, the setup prompt: done.
 - 2 Cello on Claude Code agent sessions (`bash fl ...`): done.
