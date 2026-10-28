@@ -5,22 +5,49 @@
 {% block content %}
 {# `form`: what they sent, when it comes back with a problem to fix (nothing they typed is lost) #}
 {% set f = form|default({}) %}
-{% set kind_pick = f.get('kind', 'montage') %}{% set len_pick = f.get('length', '30')|string %}
+{% set kind_pick = f.get('kind', 'other') %}{% set len_pick = f.get('length', '30')|string %}
 <a class="crumbs" href="/">← Your films</a>
 <header class="page-head">
   <div>
     <p class="eyebrow-s rise">New film</p>
     <h1 class="page-title rise d1">What are we <em class="sun-text">making?</em></h1>
-    <p class="page-sub rise d2">A few choices now, then you add your clips. You can be specific, or leave it to Flicello.</p>
+    <p class="page-sub rise d2">Say it in your own words. Flicello works out how to make it, and nothing here is fixed: change anything later, just by asking.</p>
   </div>
 </header>
 {% if error %}<div class="error-box" role="alert">{{ error }}</div>{% endif %}
+{% if cartoon_ask %}
+<div class="confirm-box rise" role="alert">
+  <p><b>This sounds like a cartoon.</b> {{ cartoon_ask }}</p>
+</div>
+{% endif %}
 <form method="post" action="/new" id="new-form" class="rise d2">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% if cartoon_ask %}<input type="hidden" name="confirm" value="cartoon">{% endif %}
+  <div class="say-box">
+    <textarea name="describe" rows="3" maxlength="900" autofocus aria-label="What are we making?"
+      placeholder="My trip to Sydney, cut fast on the beat / me explaining my recipe with the steps on screen / a cartoon about a cat who wants to fly">{{ f.get('describe') or f.get('intent', '') }}</textarea>
+    <div class="say-chips" aria-label="Ideas">
+      <button type="button" class="chip" data-say="A film from my clips, cut on the beat of a song">From my clips</button>
+      <button type="button" class="chip" data-say="Me talking to camera, with motion graphics on my words">Me talking</button>
+      <button type="button" class="chip" data-say="My voice memo as an animated video">Just my voice</button>
+      <button type="button" class="chip" data-say="A cartoon about ">A cartoon</button>
+    </div>
+    <div class="say-row">
+      <button class="btn-sun" type="submit"><span>{{ 'Make the cartoon' if cartoon_ask else 'Start' }}</span></button>
+      <button type="button" class="btn-ghost" data-tell-cello>Or just tell Cello</button>
+    </div>
+    <small class="help">Empty is fine too: add your clips and Flicello finds the story in them.</small>
+  </div>
+
+  <details class="more"{% if f.get('kind') not in (None, 'other') %} open{% endif %}>
+  <summary>Choose the details yourself <small class="muted">(optional)</small></summary>
   <fieldset class="group">
     <legend>Kind of film</legend>
     <div class="kinds">
-      <label class="kind"><input type="radio" name="kind" value="montage" {% if kind_pick not in ('talk', 'voice', 'other') %}checked{% endif %}>
+      <label class="kind"><input type="radio" name="kind" value="other" {% if kind_pick not in ('montage', 'talk', 'voice', 'cartoon') %}checked{% endif %}>
+        <span class="kind-card"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6l4 10 10 4-10 4-4 10-4-10-10-4 10-4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M38 32l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <b>From my words</b><small>Flicello picks the way to make it from what you wrote, and tells you.</small></span></label>
+      <label class="kind"><input type="radio" name="kind" value="montage" {% if kind_pick == 'montage' %}checked{% endif %}>
         <span class="kind-card"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="5" y="9" width="12" height="30" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><rect x="19" y="9" width="12" height="30" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><rect x="33" y="9" width="10" height="30" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2 44h44" stroke="currentColor" stroke-width="2" stroke-dasharray="3 3"/></svg>
           <b>A film from my clips</b><small>Your footage, cut on the beat of a song, with a story.</small></span></label>
       <label class="kind"><input type="radio" name="kind" value="talk" {% if kind_pick == 'talk' %}checked{% endif %}>
@@ -29,15 +56,11 @@
       <label class="kind"><input type="radio" name="kind" value="voice" {% if kind_pick == 'voice' %}checked{% endif %}>
         <span class="kind-card"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="18" y="5" width="12" height="22" rx="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 22c0 7 6 12 13 12s13-5 13-12M24 34v8M17 42h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <b>Just my voice</b><small>A voice memo becomes an animated video. No camera needed.</small></span></label>
-      <label class="kind"><input type="radio" name="kind" value="other" {% if kind_pick == 'other' %}checked{% endif %}>
-        <span class="kind-card"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6l4 10 10 4-10 4-4 10-4-10-10-4 10-4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M38 32l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          <b>Something else</b><small>Not sure which? Describe your idea in your own words: Flicello works out the best way to make it and shows you before anything starts.</small></span></label>
+      <label class="kind"><input type="radio" name="kind" value="cartoon" {% if kind_pick == 'cartoon' %}checked{% endif %}>
+        <span class="kind-card"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="26" r="13" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 18l-2-10 9 5M35 18l2-10-9 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="19" cy="25" r="2" fill="currentColor"/><circle cx="29" cy="25" r="2" fill="currentColor"/><path d="M21 31q3 3 6 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <b>A cartoon</b><small>Tell the story above: Claude directs it and an animation engine makes it, shot by shot.</small></span></label>
     </div>
   </fieldset>
-
-  <label class="field" data-kinds="other"><span>Describe the film you have in mind</span>
-    <textarea name="describe" rows="3" maxlength="600" placeholder="A recipe video from my cooking clips with the steps on screen / my podcast as a cartoon / a trailer for my band's gig">{{ f.get('describe', '') }}</textarea>
-    <small class="help">Next you'll see how we'd make it (from your clips, a video of you talking, or just your voice) and can switch if it's wrong.</small></label>
 
   <label class="field"><span>Name it <small class="muted">(optional)</small></span><input name="title" maxlength="60" placeholder="Beach day" value="{{ f.get('title', '') }}"></label>
 
@@ -51,7 +74,7 @@
     </div>
   </fieldset>
 
-  <fieldset class="group" data-kinds="montage voice other">
+  <fieldset class="group" data-kinds="montage voice other cartoon">
     <legend>Where will you post it?</legend>
     <div class="choices">
       <label class="choice"><input type="radio" name="shapes" value="9:16" {% if f.get('shapes') not in ('16:9', 'both') %}checked{% endif %}><span>Reels · Shorts · TikTok <i>vertical 9:16</i></span></label>
@@ -60,7 +83,7 @@
     </div>
   </fieldset>
 
-  <fieldset class="group" data-kinds="montage other">
+  <fieldset class="group" data-kinds="montage other cartoon">
     <legend>How long?</legend>
     {% set known = lengths|map('string')|list %}
     <div class="choices">
@@ -99,9 +122,6 @@
     </div>
   </fieldset>
 
-  <label class="field"><span>What's it about? <small class="muted">(optional: leave it empty to be surprised)</small></span>
-    <textarea name="intent" rows="3" maxlength="600" placeholder="A lazy Sunday at the beach with my dog. Make it feel warm and a bit funny.">{{ f.get('intent', '') }}</textarea></label>
-
-  <button class="btn-sun wide" type="submit"><span>Next: add my clips</span></button>
+  </details>
 </form>
 {% endblock %}

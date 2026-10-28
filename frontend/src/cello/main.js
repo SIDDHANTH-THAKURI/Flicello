@@ -32,7 +32,7 @@ const TOOL_PART = { edit: 'draft', style: 'styles', fix_score: 'ready', export: 
 const S = {
   on: false, ws: null, open: false, ever: false, woke: 0, awaiting: false, acting: 0, muted: false, mic: 0,
   out: 0, handle: sessionStorage.getItem('cello-handle') || '', queue: [], lastSound: 0, since: null, cut: false, inReply: 0, heard: 0,
-  greeted: false, retry: 0, aec: true, target: null, targetUntil: 0, pending: [], asked: 0, warned: false, blocked: '',
+  greeted: false, retry: 0, aec: true, target: null, targetUntil: 0, pending: [], asked: 0, warned: false, blocked: '', dozing: false, sleepSoon: false, hushed: false,
 };
 
 // ---------------------------------------------------------------- the frame: which film, which page
@@ -43,6 +43,15 @@ function film() {
   } catch { return null; }
 }
 function doc() { try { return frame.contentDocument; } catch { return null; } }
+// the frame sent somewhere (or reloaded), and the next tool held until that page has loaded: a tool that runs on the
+// page right after (upload after new_film) must find the new page, not the old one
+function go(src) {
+  return new Promise((done) => {
+    const t = setTimeout(done, 12000);
+    frame.addEventListener('load', () => { clearTimeout(t); setTimeout(done, 150); }, { once: true });
+    if (src === null) frame.contentWindow.location.reload(); else frame.src = src;
+  });
+}
 
 frame.addEventListener('load', () => {
   const d = doc();
@@ -208,9 +217,13 @@ function reveal(el) { // a part tucked away in the one-screen view, brought up (
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-function upload() {
-  const d = doc();
-  const drop = d && d.querySelector('#drop, label.drop');
+async function upload() {
+  let drop = null;
+  for (let k = 0; k < 20 && !drop; k++) { // a page still drawing itself: a moment to find its drop place
+    const d = doc();
+    drop = d && d.readyState !== 'loading' && d.querySelector('#drop, label.drop');
+    if (!drop) await new Promise((r) => setTimeout(r, 150));
+  }
   if (!drop) {
     return { result: film() ? 'This film is past its clips: its clips are in. (To add more, go back to the clips step.)'
       : 'No film is open: start one with new_film first.' };
@@ -303,7 +316,7 @@ async function ears() {
   zero.connect(ctx.destination);
   node.port.onmessage = (e) => {
     S.mic = e.data.rms;
-    if (!S.open || S.muted || !S.on) return;
+    if (!S.open || S.muted || (!S.on && !S.dozing)) return;
     const talking = playing.size > 0;
     if (talking && !S.aec && S.mic < S.out * 2.4) return; // its own voice leaking back in, not them
     const b = new Uint8Array(e.data.pcm);
@@ -422,6 +435,15 @@ function onMessage(m) {
     connect();
     setTimeout(() => { try { old.close(); } catch { /* gone */ } }, 1500);
   }
+  if (m.cello?.woke) { // its name was said while it rested
+    S.dozing = false;
+    S.on = true;
+    S.woke = performance.now();
+    root.classList.remove('dozing');
+    chime(true);
+    S.awaiting = true;
+    S.asked = performance.now();
+  }
   if (m.toolCall) tools(m.toolCall.functionCalls || []);
   const sc = m.serverContent;
   if (!sc) return;
@@ -442,6 +464,13 @@ function onMessage(m) {
   if (sc.interrupted) note('event', 'they spoke over it: stopped');
   if (sc.turnComplete) closeTurn();
   if (sc.turnComplete) { S.awaiting = false; S.asked = 0; S.cut = false; S.inReply = 0; }
+  if (sc.turnComplete && S.sleepSoon) { S.sleepSoon = false; afterWords(doze); }
+  if (sc.inputTranscription?.text) S.hushed = false;
+}
+
+function afterWords(fn) { // when what it is saying has finished playing
+  const wait = () => (playing.size ? setTimeout(wait, 150) : setTimeout(fn, 250));
+  wait();
 }
 
 // what was just said, briefly, beside the orb (never a chat log)
@@ -503,6 +532,8 @@ async function run(name, args) {
   if (name === 'pointing') return pointing();
   if (name === 'page') return { result: onPage(args) };
   if (name === 'upload') return upload();
+  if (name === 'quiet') { stop(); S.hushed = true; return { result: 'Quiet now: say nothing more until they speak to you.' }; }
+  if (name === 'sleep') { S.sleepSoon = true; return { result: 'Going to sleep after this turn.' }; }
   if (name === 'show') return { result: point(String(args.part || '').toLowerCase()) ? 'Shown.' : 'That part is not on this page.' };
   if (name === 'play') return { result: drive(args.do, args.seconds) };
   const part = TOOL_PART[name];
@@ -520,8 +551,8 @@ async function run(name, args) {
     out.result = { ...out.result, ...screen(), ...(onPageClips() ? { on_page: onPageClips() } : {}) };
   }
   const ui = out.ui || {};
-  if (ui.go) frame.src = ui.go;
-  else if (ui.reload || ui.wait) frame.contentWindow.location.reload();
+  if (ui.go) await go(ui.go);
+  else if (ui.reload || ui.wait) await go(null);
   if (ui.wait) S.watch = true;
   return out;
 }
@@ -534,10 +565,10 @@ async function openThing(what) {
     account: ['/account', 'their account settings'],
   };
   const key = what.toLowerCase().trim();
-  if (places[key]) { frame.src = places[key][0]; return { result: `Opened ${places[key][1]}.` }; }
+  if (places[key]) { await go(places[key][0]); return { result: `Opened ${places[key][1]}.` }; }
   if (/^(the )?(editor|timeline)$/.test(key)) {
     if (!film()) return { result: 'No film is open: open one first, then the editor.' };
-    frame.src = `/p/${film()}/edit`;
+    await go(`/p/${film()}/edit`);
     return { result: 'Opened the editor: the film on a timeline, to cut by hand.' };
   }
   const r = await fetch('/api/cello/act', { method: 'POST', credentials: 'same-origin',
@@ -545,7 +576,7 @@ async function openThing(what) {
   const films = (await r.json()).result || [];
   const hit = films.find((f) => f.title.toLowerCase() === key) || films.find((f) => f.title.toLowerCase().includes(key));
   if (!hit) return { result: `No film called "${what}". Their films: ${films.map((f) => f.title).slice(0, 8).join(', ')}.` };
-  frame.src = `/p/${hit.id}`;
+  await go(`/p/${hit.id}`);
   return { result: `Opened "${hit.title}" (${hit.stage}).` };
 }
 
@@ -689,8 +720,22 @@ function chime(up = true) {
   });
 }
 
+// a page inside asks for Cello (the new-film page's "Or just tell Cello")
+window.addEventListener('message', (e) => {
+  if (e.origin === location.origin && e.data && e.data.cello === 'wake' && !S.on) wake();
+});
+
 async function wake() {
   if (S.on) return;
+  if (S.dozing && S.ws && S.open) {
+    S.dozing = false;
+    S.on = true;
+    S.woke = performance.now();
+    root.classList.remove('dozing');
+    chime(true);
+    send({ cello: { doze: false } });
+    return;
+  }
   S.on = true;
   S.woke = performance.now();
   localStorage.setItem('cello-on', '1');
@@ -711,11 +756,29 @@ async function wake() {
 function sleep() {
   chime(false);
   S.on = false;
+  S.dozing = false;
+  root.classList.remove('dozing');
   hush();
   try { S.ws?.close(); } catch { /* gone */ }
   S.ws = null;
   S.open = false;
   S.greeted = false;
+}
+
+// asked to sleep (or tapped to sleep): with this machine's own voice it rests and wakes to its name; otherwise it
+// goes fully off, the line closed, until it is tapped
+function wakesByName() { return !!(S.ws && S.ws.local) && localStorage.getItem('cello-wake') !== '0'; }
+function doze() {
+  if (!S.on) return;
+  if (!wakesByName()) { sleep(); return; }
+  chime(false);
+  hush();
+  S.on = false;
+  S.dozing = true;
+  S.awaiting = false;
+  root.classList.add('dozing');
+  send({ cello: { doze: true } });
+  show('Resting. Say \u201cCello\u201d or tap me when you need me.', 5000);
 }
 
 function turnOff() {
@@ -766,6 +829,13 @@ menu.addEventListener('click', (e) => {
     show(S.muted ? 'Mic off: Cello isn\u2019t listening' : 'Listening again');
   }
   if (what === 'off') turnOff();
+  if (what === 'rest') doze();
+  if (what === 'wakeword') {
+    const on = localStorage.getItem('cello-wake') === '0';
+    localStorage.setItem('cello-wake', on ? '1' : '0');
+    e.target.textContent = on ? 'Don\u2019t wake to my voice' : 'Wake when I say \u201cCello\u201d';
+    show(on ? 'Say \u201cCello\u201d any time to wake me (only on this computer).' : 'Only a tap wakes me now.');
+  }
 });
 typer.addEventListener('submit', (e) => {
   e.preventDefault();

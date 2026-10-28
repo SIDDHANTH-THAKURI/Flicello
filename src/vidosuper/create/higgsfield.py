@@ -1,7 +1,8 @@
 """AI-made video clips through Higgsfield's API (https://docs.higgsfield.ai): one key for many models (Kling, Wan,
 Seedance...), paid per second from the API's own balance.
 
-- Auth: `Authorization: Key {HF_API_KEY_ID}:{HF_API_KEY_SECRET}` (both from the Higgsfield console, kept in .env).
+- Auth: `Authorization: Key {HF_API_KEY_ID}:{HF_API_KEY_SECRET}` (both from the Higgsfield console; the person adds
+  them on the Connect page, which keeps them in the keychain).
 - A still to start from is uploaded first (files/generate-upload-url, then a PUT to the presigned URL).
 - A generation is a POST to the model's path; it answers with a request id and its status URL, which is polled until
   completed (`video.url`), failed, nsfw or canceled. Outputs are kept a week: they are downloaded at once.
@@ -32,7 +33,14 @@ def credentials() -> tuple[str, str] | None:
 
     _load_dotenv()
     kid, secret = os.environ.get("HF_API_KEY_ID", "").strip(), os.environ.get("HF_API_KEY_SECRET", "").strip()
-    return (kid, secret) if kid and secret else None
+    if kid and secret:
+        return kid, secret
+    both = os.environ.get("HIGGSFIELD_API_KEY", "").strip().strip("\"'")  # the console's one-line "id:secret"
+    if ":" in both:
+        kid, secret = (part.strip() for part in both.split(":", 1))
+        if kid and secret:
+            return kid, secret
+    return None
 
 
 def available() -> bool:
@@ -42,7 +50,7 @@ def available() -> bool:
 def _call(method: str, url: str, body: dict | None = None, opener=urllib.request.urlopen) -> dict:
     creds = credentials()
     if creds is None:
-        raise HiggsfieldError("No Higgsfield API key: add HF_API_KEY_ID and HF_API_KEY_SECRET to .env.")
+        raise HiggsfieldError("No Higgsfield key: add your key id and secret on the Connect page.")
     req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": f"Key {creds[0]}:{creds[1]}", "Content-Type": "application/json"})
     try:

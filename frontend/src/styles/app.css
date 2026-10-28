@@ -238,3 +238,24 @@
 .row-form { display: flex; gap: .7rem; align-items: flex-end; margin-bottom: 1rem; }
 .row-form .field { flex: 1; margin: 0; }
 .row-form .btn { height: 52px; border-radius: 14px; }
+
+/* the new film: their words first, the details tucked away */
+.say-box { display: grid; gap: .9rem; margin: .4rem 0 1.6rem; padding: 1.1rem; border-radius: 22px; border: 1px solid var(--line-2);
+  background: linear-gradient(160deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, .015)); box-shadow: 0 30px 80px -40px rgba(255, 46, 126, .35); }
+.say-box textarea { width: 100%; min-height: 120px; padding: 1rem 1.1rem; border-radius: 16px; border: 1px solid var(--line-2); background: rgba(5, 5, 9, .75);
+  color: var(--paper); font: inherit; font-size: 1.15rem; line-height: 1.5; resize: vertical; transition: border-color .25s, box-shadow .25s; }
+.say-box textarea:focus { outline: none; border-color: rgba(255, 106, 61, .7); box-shadow: 0 0 0 4px rgba(255, 106, 61, .14); }
+.say-box textarea::placeholder { color: var(--faint); }
+.say-chips { display: flex; flex-wrap: wrap; gap: .5rem; }
+.say-chips .chip { font: inherit; font-size: .88rem; padding: .45rem .85rem; border-radius: 999px; border: 1px solid var(--line-2); background: rgba(255, 255, 255, .04);
+  color: var(--paper-2); cursor: pointer; transition: border-color .2s, background .2s, transform .2s; }
+.say-chips .chip:hover { border-color: rgba(255, 46, 126, .6); background: rgba(255, 46, 126, .08); transform: translateY(-1px); }
+.say-row { display: flex; gap: .7rem; flex-wrap: wrap; align-items: center; }
+.confirm-box { margin: 0 0 1.1rem; padding: .9rem 1.1rem; border-radius: 14px; background: rgba(255, 179, 71, .08); border: 1px solid rgba(255, 179, 71, .35); color: var(--paper); font-size: .95rem; }
+details.more { margin-top: .4rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+details.more > summary { cursor: pointer; color: var(--paper-2); font-weight: 600; margin-bottom: 1rem; }
+[data-theme="light"] .say-box { background: rgba(255, 255, 255, .8); }
+[data-theme="light"] .say-box textarea { background: #fff; color: var(--paper); }
+[data-theme="light"] .say-chips .chip { background: rgba(255, 255, 255, .8); }
+[data-theme="light"] .confirm-box { background: rgba(255, 179, 71, .14); }
+.say-row .btn-sun, .say-row .btn-ghost { height: 50px; padding: 0 1.5rem; font-size: 1rem; border-radius: 14px; }

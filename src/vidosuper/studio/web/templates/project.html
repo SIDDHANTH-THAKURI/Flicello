@@ -138,12 +138,19 @@
       </details>
       {% endif %}
       {% if p.kind == 'montage' %}
-      <div class="alt-sources">
-        <button class="alt-card" type="button" disabled aria-disabled="true">
-          <b>No footage for it? Generate shots from words</b>
-          <small>Made with Higgsfield AI video · <span class="soon">coming soon</span></small>
-        </button>
-      </div>
+      {% set maker = clip_maker() %}
+      <details class="alt-sources more"><summary><b>No footage for it? Make a shot from words</b></summary>
+        <p class="help">{{ clip_maker_says(maker) }}.</p>
+        {% if maker %}
+        <form method="post" action="/p/{{ p.id }}/ai-clip" class="gap-top">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label class="field"><span>What should the shot show?</span>
+            <textarea name="prompt" rows="2" maxlength="600" required placeholder="Slow drone shot over the Sydney Opera House at sunrise, gulls crossing the frame"></textarea></label>
+          <button class="btn" type="submit">Make the shot</button>
+          <p class="help">It's added to your clips when it's ready (a few minutes), and the story can use it like any other clip.</p>
+        </form>
+        {% else %}<a class="btn gap-top" href="/connect">Open Connect</a>{% endif %}
+      </details>
       {% endif %}
       <details class="more gap-top"><summary>Something else? Tell us what you want</summary>
         <form method="post" action="/p/{{ p.id }}/note" class="gap-top">
@@ -161,7 +168,7 @@
     <section class="panel rise d3">
       <h2>How I read your note</h2>
       <div class="rows">{% for line in note_lines %}<div><span class="v">{{ line }}</span></div>{% endfor %}</div>
-      <p class="help">Not right? Start a new film with a different note or cutting style.</p>
+      <p class="help">Not right? Tell Cello what you meant, or add to it under "Something else?": nothing here is fixed.</p>
     </section>
     {% endif %}
     {% if gaps %}

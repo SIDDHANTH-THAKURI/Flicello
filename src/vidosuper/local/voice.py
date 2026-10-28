@@ -75,6 +75,12 @@ def _kokoro(cpu: bool = False):
     import onnxruntime as ort
     from kokoro_onnx import Kokoro
 
+    if hasattr(ort, "preload_dlls"):  # CUDA and cuDNN from the pip packages, so the GPU build finds them
+        try:
+            ort.preload_dlls()
+        except Exception:  # noqa: BLE001 - without them it runs on the CPU
+            pass
+
     from ..graphics.device import providers
 
     model, voices = voice_files()
@@ -82,6 +88,28 @@ def _kokoro(cpu: bool = False):
         raise VoiceError(f"Cello's voice isn't downloaded: put kokoro-v1.0.onnx and voices-v1.0.bin in {model.parent}")
     chosen = ["CPUExecutionProvider"] if cpu else providers(model)
     return Kokoro.from_session(ort.InferenceSession(str(model), providers=chosen), str(voices))
+
+
+def warm() -> None:
+    """Whisper and Kokoro loaded and run once: on a GPU their first call compiles kernels (Kokoro took 36 s, Whisper
+    6 s on an RTX PRO 4500), which would otherwise land on the first thing the person says to Cello."""
+    if not available():
+        return
+    hear(np.zeros(RATE_IN, np.float32))
+    speak("Ready.")
+
+
+def warm_in_background() -> None:
+    if os.environ.get("VIDO_CELLO_WARM", "1") == "0" or not available():
+        return
+    threading.Thread(target=lambda: _quietly(warm), daemon=True, name="cello-warm").start()
+
+
+def _quietly(fn) -> None:
+    try:
+        fn()
+    except Exception:  # noqa: BLE001 - warming is a head start; a real turn says what is wrong
+        pass
 
 
 def speak(text: str) -> np.ndarray:
@@ -264,6 +292,16 @@ class Mind:
 # ---------------------------------------------------------------- one voice session with the page
 
 SESSIONS: dict[str, "Live"] = {}
+# its name, as Whisper writes it when said on its own or at the start ("Cello", "hey Cello", "chello, ...")
+WAKE = re.compile(r"^\W*(?:(?:hey|hi|ok|okay|yo|oh)\W+)?(?:cello|chello|chelo|celo|cellow|sello|chelloh|tello)\b\W*", re.I)
+
+
+def woken(said: str) -> tuple[bool, str]:
+    """Whether what was heard calls Cello by its name, and what they said after it."""
+    m = WAKE.search(said.strip())
+    if not m:
+        return False, ""
+    return True, said.strip()[m.end():].strip()
 
 
 class Live:
@@ -279,6 +317,8 @@ class Live:
         self.cut_upto = 0  # they spoke over these turns: what is left of them is dropped
         self.talking = 0  # sentences being spoken
         self.done = False
+        self.dozing = False  # asleep, listening only for its name
+        self.note_next = ""  # said to the mind with the next thing they say
         self.mouth = asyncio.Queue()
         self.folder = Path(tempfile.mkdtemp(prefix="cello-live-"))
         self.ears = Ears(self._started, self._heard)
@@ -297,6 +337,8 @@ class Live:
         self._say(text)
 
     def _say(self, text: str) -> None:
+        if self.note_next:
+            text, self.note_next = f"{self.note_next}\n{text}", ""
         self.sent += 1
         self.mind.say(text)
 
@@ -305,7 +347,23 @@ class Live:
         """The turn being written (or spoken) is one they spoke over."""
         return self.finished + 1 <= self.cut_upto
 
+    def doze(self, on: bool) -> None:
+        """Asleep (only its name wakes it) or awake again (woken by a tap)."""
+        was, self.dozing = self.dozing, bool(on)
+        if on:
+            self._started_cut()
+        elif was:
+            self.note_next = "(Note, not them talking: you're awake again: a tap or their typing woke you.)"
+
+    def _started_cut(self) -> None:
+        self.cut_upto = self.sent
+        self.turn_text = ""
+        self.mind.interrupt()
+        self.loop.call_soon_threadsafe(self._drain_mouth)
+
     def _started(self) -> None:
+        if self.dozing:
+            return
         if self.talking or self.turn_text or self.sent > self.finished:  # they spoke over it
             self.cut_upto = self.sent
             self.turn_text = ""
@@ -317,6 +375,21 @@ class Live:
         def work():
             said = hear(stretch)
             if not said:
+                return
+            if self.dozing:  # asleep: only its name counts, and what they say after it is the request
+                called, rest = woken(said)
+                if not called:
+                    return
+                self.dozing = False
+                self._emit({"cello": {"woke": True}})
+                self._emit({"serverContent": {"inputTranscription": {"text": said}}})
+                if re.search(r"\w{2,}", rest):  # "Cello, cut shot three": awake, and that is the request
+                    self.note_next = ("(Note, not them talking: you're awake again: they woke you by saying your "
+                                      "name. Do what they ask.)")
+                    self._say(rest)
+                else:
+                    self._say("(Note, not them talking: you're awake again: they woke you by saying your name. "
+                              "Answer in two or three words.)")
                 return
             self._emit({"serverContent": {"inputTranscription": {"text": said}}})
             self._say(said)

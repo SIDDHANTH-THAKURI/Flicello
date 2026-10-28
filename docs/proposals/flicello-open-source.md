@@ -1,25 +1,26 @@
 # Flicello, open source: the best video studio on your own machine
 
-Status (2026-10-26): steps 1 to 6 built, committed and pushed to main (the repository stays private until the
-owner publishes it). Since then every paid service is optional: painting (Qwen-Image-Edit), Cello's voice
-(Whisper, Claude, Kokoro), watching films (Claude), music (ACE-Step 1.5 XL) and sound effects (Stable Audio 3)
-run on the person's own machine. The GPU parts are unit-tested with the models faked; none has run on a real
-GPU yet.
+Status (2026-10-28): steps 1 to 6 built and pushed to main (the repository stays private until the owner publishes
+it). Every paid service is optional: painting (Qwen-Image-Edit), Cello's voice (Whisper, Claude, Kokoro), watching
+films (Claude), music (ACE-Step 1.5 XL), sound effects (Stable Audio 3) and cartoon motion run on the person's own
+machine. Music, sound effects and the painter are proven on a real GPU (an A100, 2026-10-27).
 
 - 1 Local mode, Connect page, keys in the keychain, live health, the setup prompt: done.
-- 2 Cello on Claude Code agent sessions (`bash fl ...`): done.
+- 2 Cello on Claude Code agent sessions (`bash fl ...`): done. Cello's own voice on this machine works end to end
+  (2026-10-28: heard, started a film, opened it, lit up the upload place); on a laptop CPU a turn takes 20 to 35 s,
+  mostly Whisper; still to be timed on a GPU.
 - 3 The editor timeline and music editing: done.
-- 4 The scene designer: the footage in the page (light, shade and the camera real), GPU models where there is one,
-  the idea step, the director at the desk, paint-never-draw. Quality proofs scored 4 to 6 out of 10; the latest
-  proof could not paint (the Gemini key's prepaid credit ran out) and was stopped for low memory. Proofs continue
-  once painting works.
-- 5 Cartoons as code (motion/cartoon.py: the board desk, a desk per shot, the animation director, the cut, music and
-  sound) and the Blender connector (motion/blender.py, `bash blender` at the desks): built and unit-tested; no full
-  cartoon run yet (it needs Gemini for painting).
-- 6 The hosted layer is gone (accounts, invites, credits, admin, analytics, email, legal pages, cloud and remote
-  renderers, deploy files); the app answers only on 127.0.0.1. README and THIRD_PARTY.md (model licences, GSAP's
-  terms) written. flicello.com shows the holding page from `site/` (Vercel); the full page and gallery wait for
-  results worth showing.
+- 4 The scene designer: built; quality proofs scored 4 to 6 out of 10, and more proofs wait for a GPU run.
+- 5 Cartoons, four engines (motion/cartoon.py): `cartoon` (a painted frame brought to life by Wan 2.2), `anime`
+  (AniSora V3.2), `rig` (Blender rigs) and `drawn` (every frame drawn in code with motion/toon.js, rendered by
+  HyperFrames: no GPU needed). A Wan 2.2 test on real frames worked (real motion, some drift); `drawn` renders end to
+  end here; no full film has been made with any of the four yet (each costs a good part of the Claude plan).
+- 6 The hosted layer is gone; the app answers only on 127.0.0.1. README (with its animated banner, diagram and engine
+  loops) and THIRD_PARTY.md written. flicello.com (`site/`) is rebuilt with a film drawn in code, a sound score and a
+  doorway; it waits for the owner's word to go live.
+- Since then: a new film starts from the person's own words (the details are optional, a cartoon is said before it
+  costs anything); shots from words are made on the GPU here (a painted frame, then Wan 2.2) or by Higgsfield with
+  the person's own key. This work (2026-10-28) waits for the owner's word to be committed and pushed.
 
 ## What it is
 

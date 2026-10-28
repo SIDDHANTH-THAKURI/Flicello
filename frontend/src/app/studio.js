@@ -333,6 +333,21 @@ function newFilm() {
   };
   $$('input[name="kind"]', form).forEach((r) => r.addEventListener('change', apply));
   apply();
+  // the words come first: an idea chip starts the sentence; Cello is one tap away
+  const say = form.querySelector('textarea[name="describe"]');
+  $$('[data-say]', form).forEach((chip) => chip.addEventListener('click', () => {
+    say.value = chip.dataset.say;
+    say.focus();
+    say.setSelectionRange(say.value.length, say.value.length);
+    if (/cartoon/i.test(chip.dataset.say)) { const c = form.querySelector('input[name="kind"][value="cartoon"]'); if (c) { c.checked = true; apply(); } }
+  }));
+  const tell = form.querySelector('[data-tell-cello]');
+  if (tell) {
+    tell.addEventListener('click', () => {
+      if (window.parent !== window) window.parent.postMessage({ cello: 'wake' }, location.origin); // inside Cello: wake it
+      else location.href = '/cello?to=/new';
+    });
+  }
   // fields shown only for one choice (data-when="length=custom")
   const when = () => $$('[data-when]', form).forEach((el) => {
     const [name, value] = el.dataset.when.split('=');

@@ -121,6 +121,54 @@ def test_it_speaks_as_it_writes_stops_when_spoken_over_and_runs_tools_on_the_pag
     asyncio.run(run())
 
 
+def test_its_name_wakes_it_only_when_it_is_called_by_it():
+    assert voice.woken("Cello.") == (True, "")
+    assert voice.woken("Hey Cello, cut shot three.") == (True, "cut shot three.")
+    assert voice.woken("chello can you make it faster") == (True, "can you make it faster")
+    for not_called in ("Hello there", "I love the cello music in this", "Jello", "make it two minutes long"):
+        assert voice.woken(not_called) == (False, "")
+
+
+def test_asleep_it_hears_only_its_name_and_awake_again_it_is_told_so(monkeypatch):
+    monkeypatch.setattr(voice, "Mind", FakeMind)
+    monkeypatch.setattr(voice, "speak", lambda s: np.zeros(int(0.1 * 24000), np.int16))
+    heard = iter(["make it two minutes long", "Cello, make it two minutes long."])
+    monkeypatch.setattr(voice, "hear", lambda stretch: next(heard))
+    sent = []
+
+    async def run():
+        async def send(msg):
+            sent.append(msg)
+
+        live = voice.Live("http://127.0.0.1:1", send, asyncio.get_running_loop())
+        live.doze(True)  # it was asked to sleep
+        before = live.mind.interrupts
+        live.ears.on_start()  # someone talks while it rests: nothing is cut, nothing is said to the mind
+        live.ears.on_speech(np.zeros(16000, np.float32))
+        await asyncio.sleep(0.3)
+        assert live.mind.said == [] and live.dozing and live.mind.interrupts == before
+        live.ears.on_speech(np.zeros(16000, np.float32))  # its name, and a request
+        await asyncio.sleep(0.3)
+        assert not live.dozing and {"cello": {"woke": True}} in sent
+        assert live.mind.said[-1].startswith("(Note, not them talking: you're awake again")
+        assert live.mind.said[-1].endswith("make it two minutes long.")
+        live.doze(True)
+        live.doze(False)  # a tap (or typing) wakes it: the next thing they say carries that
+        live.text("rename it to Bali")
+        assert "awake again" in live.mind.said[-1] and live.mind.said[-1].endswith("rename it to Bali")
+        live.text("make it longer")
+        assert live.mind.said[-1] == "make it longer"
+        live.close()
+
+    asyncio.run(run())
+
+
+def test_cello_can_quiet_itself_and_go_to_sleep_on_the_page():
+    names = {t["name"] for t in cello.TOOLS}
+    assert {"quiet", "sleep"} <= names and {"quiet", "sleep"} <= cello.BROWSER
+    assert "ALWAYS call `sleep`" in cello.SYSTEM and "write NO words" in cello.SYSTEM
+
+
 @pytest.fixture()
 def studio(tmp_path, monkeypatch):
     from vidosuper.studio.service import Studio

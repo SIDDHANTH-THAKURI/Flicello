@@ -19,8 +19,19 @@ from pathlib import Path
 log = logging.getLogger("vidosuper.work")
 
 
+def engine_in(words: str) -> str:
+    """The cartoon engine their words ask for, if they name one ('' lets the machine pick the best it can run)."""
+    import re
+
+    for engine, pattern in (("anime", r"\banime\b"), ("drawn", r"\b(drawn|in code|illustrat\w*|silhouettes?|flat colou?r|paper)\b"),
+                            ("rig", r"\b(3d|blender|rigged)\b")):
+        if re.search(pattern, words, re.I):
+            return engine
+    return ""
+
+
 def start(studio, user: dict, story: str, seconds: float = 40.0, shape: str = "9:16", style: str = "",
-          narration: Path | None = None, on_progress=None) -> dict:
+          narration: Path | None = None, on_progress=None, engine: str = "") -> dict:
     """A new film made as a cartoon, in the background. Returns its task (a `work` row of kind 'cartoon')."""
     from ..motion import cartoon
 
@@ -31,21 +42,28 @@ def start(studio, user: dict, story: str, seconds: float = 40.0, shape: str = "9
         raise ValueError(f"The shape must be one of {', '.join(cartoon.SHAPES)}.")
     if not 8 <= seconds <= 300:
         raise ValueError("A cartoon is 8 seconds to 5 minutes long.")
+    if engine and engine not in cartoon.ENGINES:
+        raise ValueError(f"The way to animate it must be one of {', '.join(cartoon.ENGINES)}.")
+    try:
+        engine = cartoon.engine_for(engine)
+    except cartoon.CartoonError as exc:
+        raise ValueError(str(exc)) from exc
     shapes = shape if shape in ("9:16", "16:9") else "9:16"
     p = studio.create_project(user, "A cartoon", shapes, float(seconds), story[:900], kind="montage")
-    studio._set_info(p, cartoon={"shape": shape, "style": style})
+    studio._set_info(p, cartoon={"shape": shape, "style": style, "engine": engine})
     wid = "k" + secrets.token_hex(6)
     now = time.time()
     studio.db.run("INSERT INTO work(id, project_id, user_id, kind, status, request, key, created, updated) "
                   "VALUES (?,?,?,?,?,?,?,?,?)", (wid, p["id"], user["id"], "cartoon", "running", story[:2000],
                                                  f"{shape} {seconds:g}s", now, now))
-    threading.Thread(target=_make, args=(studio, user, p, wid, story, seconds, shape, style, narration, on_progress),
+    threading.Thread(target=_make, args=(studio, user, p, wid, story, seconds, shape, style, narration, on_progress,
+                                         engine),
                      daemon=True, name=f"cartoon-{wid}").start()
     row = studio.db.one("SELECT * FROM work WHERE id=?", (wid,))
     return {**row, "film": p["id"]}
 
 
-def _make(studio, user, p, wid, story, seconds, shape, style, narration, on_progress) -> None:
+def _make(studio, user, p, wid, story, seconds, shape, style, narration, on_progress, engine="") -> None:
     from ..motion import cartoon, scenes
     from ..studio.storage import workdir
 
@@ -60,7 +78,7 @@ def _make(studio, user, p, wid, story, seconds, shape, style, narration, on_prog
     try:
         work = workdir(studio.s, p["user_id"], p["id"]).ensure()
         scenes.VIA = "claude_code" if studio.s.owner_brain == "claude_code" else "api"
-        result = cartoon.make(story, work.root / "cartoon" / wid, seconds, shape, style, narration,
+        result = cartoon.make(story, work.root / "cartoon" / wid, seconds, shape, style, narration, engine=engine,
                               library=studio.s.home / "sfx", log=progress)
         progress("Making it a film you can edit")
         version = register(studio, p, result, shape)

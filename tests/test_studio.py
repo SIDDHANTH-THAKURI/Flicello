@@ -1068,7 +1068,7 @@ def test_a_new_film_takes_their_own_length_cut_and_kind_and_the_ai_is_told_all_o
     client = local_client(studio)[0]
     studio.db.run("UPDATE users SET onboarded=1 WHERE id=?", (fay["id"],))
     page = client.get("/new").text
-    assert "Something else" in page and "My own length" in page and 'name="improvise"' in page
+    assert "From my words" in page and "My own length" in page and 'name="improvise"' in page
     csrf = _csrf(page)
     # their own length (a beta person: up to 60 s), their own words for the cut, a bold improvisation
     r = client.post("/new", data={"csrf": csrf, "title": "Cafe", "shapes": "9:16", "length": "custom", "length_custom": "40",
@@ -1610,3 +1610,36 @@ def test_clips_from_earlier_films_can_be_added_without_uploading_again(studio, m
                   "('cbo', ?, 'bo.mp4', 'cbo.mp4', 1, 5.0, 0)", (theirs["id"],))
     client.post(f"/p/{pids[1]}/clips/reuse", data={"csrf": csrf, "clip": "cbo"})
     assert [c["id"] for c in studio.db.all("SELECT * FROM clips WHERE project_id=?", (pids[1],))] == [added[0]["id"]]
+
+
+def test_a_new_film_starts_from_their_words_and_a_cartoon_is_asked_before_it_costs(studio, monkeypatch):
+    from vidosuper.motion import cartoon
+    from vidosuper.studio.service import route_kind
+    from vidosuper.work import cartoons_in_studio
+
+    assert route_kind("a cartoon about a cat who wants to fly")[0] == "cartoon"
+    assert route_kind("my podcast as a cartoon")[0] == "voice"  # the recording leads
+    assert cartoons_in_studio.engine_in("an anime short") == "anime"
+    assert cartoons_in_studio.engine_in("drawn in code, silhouettes") == "drawn" and cartoons_in_studio.engine_in("a cat") == ""
+    _friend(studio, "Ana")
+    client = local_client(studio)[0]
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
+    page = client.get("/new").text
+    assert 'name="describe"' in page and "Or just tell Cello" in page and "A cartoon" in page
+    # no words at all: a film from their clips, its story found in them
+    r = client.post("/new", data={"csrf": csrf, "kind": "other", "describe": "", "shapes": "9:16", "length": 30},
+                    follow_redirects=False)
+    assert studio.db.project(r.headers["location"].rsplit("/", 1)[1])["kind"] == "montage"
+    started = {}
+    monkeypatch.setattr(cartoon, "engine_for", lambda asked="": asked or "drawn")
+    monkeypatch.setattr(cartoons_in_studio, "_make", lambda *a: started.setdefault("args", a))
+    story = "A cartoon about a cat who wants to fly, drawn in code with silhouettes at sunset."
+    r = client.post("/new", data={"csrf": csrf, "kind": "other", "describe": story, "shapes": "9:16", "length": 30})
+    assert r.status_code == 200 and "This sounds like a cartoon" in r.text and "Make the cartoon" in r.text
+    assert "drawn in code" in r.text and not started  # nothing made, nothing spent yet
+    r = client.post("/new", data={"csrf": csrf, "kind": "cartoon", "describe": story, "shapes": "9:16", "length": 30,
+                                  "confirm": "cartoon"}, follow_redirects=False)
+    assert r.status_code == 303 and started
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    assert studio._info(studio.db.project(pid))["cartoon"]["engine"] == "drawn"

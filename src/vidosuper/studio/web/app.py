@@ -33,7 +33,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import accounts
 from ..brain.context import read_note
 from ..profiles import QUESTIONS
-from ..service import BUSY, FEEDBACK_TAGS, LENGTHS, STAGES, ActionError, Studio, uses_looks
+from ..service import BUSY, FEEDBACK_TAGS, LENGTHS, STAGES, ActionError, Studio, route_kind, uses_looks
 from ..storage import UploadError, finish_upload, safe_child, start_upload, workdir, write_chunk
 
 HERE = Path(__file__).parent
@@ -127,6 +127,9 @@ def create_app(studio: Studio) -> FastAPI:
                 lp.default_exception_handler(context)
 
         loop.set_exception_handler(quiet)
+        from ...local import voice  # Cello's ears and voice warmed now, not on the first thing they say
+
+        voice.warm_in_background()
         yield
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -145,6 +148,18 @@ def create_app(studio: Studio) -> FastAPI:
     from ..service import IMPROVISE
 
     templates.env.globals["IMPROVISE"] = IMPROVISE
+
+    def clip_maker():  # who makes shots from words here (create/clips.py), asked as the page is drawn
+        from ...create import clips
+
+        return clips.maker()
+
+    def clip_maker_says(who):
+        from ...create import clips
+
+        return clips.describe(who)
+
+    templates.env.globals.update(clip_maker=clip_maker, clip_maker_says=clip_maker_says)
     templates.env.filters["noids"] = lambda t: MOMENT_ID.sub("", str(t or "")).strip()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     from ...local import health as local_health
@@ -329,7 +344,7 @@ def create_app(studio: Studio) -> FastAPI:
                  length: str = Form("30"), length_custom: str = Form(""), length_unit: str = Form("s"),
                  intent: str = Form(""), pace: str = Form("balanced"), kind: str = Form("montage"),
                  style: str = Form("designed"), cut_note: str = Form(""), improvise: int = Form(35),
-                 describe: str = Form("")):
+                 describe: str = Form(""), confirm: str = Form("")):
         user, sess = need_user(request)
         check_csrf(sess, csrf)
         sent = {"kind": kind, "describe": describe, "title": title, "style": style, "shapes": shapes, "length": length,
@@ -341,6 +356,29 @@ def create_app(studio: Studio) -> FastAPI:
                            if length == "custom" else float(length or 30))
             except ValueError:
                 raise ActionError("Type the length as a number.") from None
+            words = " ".join(describe.split())
+            if kind == "cartoon" or (kind == "other" and len(words) >= 3 and route_kind(words)[0] == "cartoon"):
+                # a cartoon is long and uses a good part of their Claude plan: said first, made only once they say so
+                from ...work import cartoons_in_studio
+
+                engine = cartoons_in_studio.engine_in(words)
+                if confirm != "cartoon":
+                    named = {"anime": "made with the anime engine", "drawn": "drawn in code",
+                             "rig": "made with Blender rigs"}.get(engine, "made with the best engine this machine can run")
+                    return page(request, "new.html", user, sess, default_pace=sent["pace"],
+                                form={**sent, "kind": "cartoon"}, **new_ctx(user),
+                                cartoon_ask=f"It will be {named}, about {seconds:g} s long. A cartoon takes "
+                                            "one to three hours and uses a good part of your Claude plan. Check the "
+                                            "story below, then make it.")
+                if len(words) < 10:
+                    raise ActionError("Tell the story (a few sentences at least).")
+                shape = shapes if shapes in ("9:16", "16:9") else "9:16"
+                try:
+                    row = cartoons_in_studio.start(studio, user, words, min(300.0, max(8.0, seconds)), shape,
+                                                   engine=engine)
+                except ValueError as exc:
+                    raise ActionError(str(exc)) from None
+                return back(f"/p/{row['film']}")
             project = studio.create_project(user, title, shapes, seconds, intent, pace, kind, style, cut_note,
                                             improvise, describe)
         except ActionError as exc:
@@ -507,6 +545,10 @@ def create_app(studio: Studio) -> FastAPI:
             said.append(studio.set_settings(p, shapes, seconds))
         done = act(request, csrf, pid, go)
         return back(f"/p/{pid}", said[0]) if said else done
+
+    @app.post("/p/{pid}/ai-clip")
+    def ai_clip(request: Request, pid: str, csrf: str = Form(""), prompt: str = Form("")):
+        return act(request, csrf, pid, lambda u, p: studio.generate_clip(u, p, prompt))
 
     @app.post("/p/{pid}/note")
     def add_note(request: Request, pid: str, csrf: str = Form(""), note: str = Form("")):
@@ -882,6 +924,8 @@ def create_app(studio: Studio) -> FastAPI:
                     await asyncio.to_thread(live.text, str(rt["text"]))
                 if msg.get("toolResponse"):
                     live.answered(msg["toolResponse"].get("functionResponses") or [])
+                if isinstance(msg.get("cello"), dict) and "doze" in msg["cello"]:  # asleep, or tapped awake
+                    live.doze(bool(msg["cello"]["doze"]))
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
@@ -1041,7 +1085,8 @@ def create_app(studio: Studio) -> FastAPI:
         try:
             row = cartoons_in_studio.start(studio, user, str(body.get("story", "")), float(body.get("seconds") or 40),
                                            str(body.get("shape") or "9:16"), str(body.get("style") or ""), voice,
-                                           on_progress=lambda m: studio.work.progress(entry["work"], f"Cartoon: {m}"))
+                                           on_progress=lambda m: studio.work.progress(entry["work"], f"Cartoon: {m}"),
+                                           engine=str(body.get("engine") or ""))
         except (ValueError, TypeError, ActionError) as exc:
             raise HTTPException(400, str(exc)) from exc
         entry["project_id"] = row["film"]  # the agent works on the new film from here

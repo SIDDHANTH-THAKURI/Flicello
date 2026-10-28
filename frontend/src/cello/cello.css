@@ -17,6 +17,9 @@ html, body.cello-shell { margin: 0; height: 100%; overflow: hidden; background: 
   transform: translateX(-50%); white-space: nowrap; font-size: 12px; color: #ffe2c4; padding: 4px 10px; border-radius: 99px;
   background: rgba(20, 16, 28, .82); backdrop-filter: blur(8px); opacity: 0; animation: cello-hint 4s ease-in-out 1.2s infinite; }
 #cello.ready[data-state="sleep"] .cello-body::after { content: "Tap: Cello wakes"; }
+#cello.dozing[data-state="sleep"] .cello-body::after { content: "Say \201CCello\201D or tap"; }
+#cello.dozing .cello-body { box-shadow: 0 0 0 2px rgba(255, 179, 71, .35), 0 0 24px rgba(255, 46, 126, .25); border-radius: 50%; animation: cello-doze 3.2s ease-in-out infinite; }
+@keyframes cello-doze { 50% { box-shadow: 0 0 0 3px rgba(255, 179, 71, .55), 0 0 34px rgba(255, 46, 126, .4); } }
 @keyframes cello-hint { 0%, 100% { opacity: 0; } 30%, 70% { opacity: 1; } }
 
 .cello-caption { position: fixed; right: calc(100vw - var(--x) + 78px); top: var(--y); transform: translateY(-50%);

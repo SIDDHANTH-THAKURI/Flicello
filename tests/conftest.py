@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+os.environ.setdefault("VIDO_CELLO_WARM", "0")  # no studio a test starts loads Whisper and Kokoro
+
 from vidosuper.config import load_config
 from vidosuper.devtools import make_synthetic_clips
 from vidosuper.ingest import ingest_folder

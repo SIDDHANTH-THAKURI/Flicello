@@ -125,6 +125,7 @@ def ask_text(project: dict) -> str:
 KIND_WORDS = [  # 'something else': which engine can make it (the person sees the reason and can change it)
     ("voice", r"\b(voice ?(memo|note|over)|podcast|audio|narrat\w*|my voice|recording|no camera|animat\w* (of|from) my)"),
     ("talk", r"\b(me talking|talking head|to camera|vlog|explain\w*|tutorial|lesson|interview|presentation|speech|pitch)"),
+    ("cartoon", r"\b(cartoons?|anime|animated (short|film|story|movie)|an animation)\b"),
 ]
 
 
@@ -136,7 +137,9 @@ def route_kind(describe: str) -> tuple[str, str]:
             return kind, {"voice": "It sounds like it's built on a recording of a voice, so it's made as an "
                                    "animation of what is said.",
                           "talk": "It sounds like someone talking to camera, so their video stays and graphics "
-                                  "land on their words."}[kind]
+                                  "land on their words.",
+                          "cartoon": "It sounds like a story to animate, so it's made as a cartoon: Claude directs "
+                                     "it and an animation engine makes every shot."}[kind]
     return "montage", "It sounds like it's made from your clips, so they're cut together into a story on the beat."
 STYLES = ("designed", "labels")  # designer animations behind the person; clean labels over the video
 TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180, "beat": 45}  # first guesses, until real jobs have run
@@ -318,11 +321,13 @@ class Studio:
         if shapes not in ("9:16", "16:9", "both"):
             raise ActionError("Pick a shape.")
         routed = ""
-        if kind == "other":  # their own kind of film: the engine that can make it, and why (shown, and changeable)
-            describe = " ".join((describe or "").split())[:600]
-            if len(describe) < 3:
-                raise ActionError("Describe the film you have in mind.")
-            kind, routed = route_kind(describe)
+        describe = " ".join((describe or "").split())[:600]
+        if kind == "other":  # their own words: the engine that can make it, and why (shown, and changeable); no
+            if len(describe) < 3:  # words at all is fine too: a film from their clips, its story found in them
+                kind = "montage"
+            else:
+                kind, routed = route_kind(describe)
+        if describe:  # what they wrote at the top is what the film is about, whichever kind they picked
             intent = (describe + (" " + intent if intent.strip() else "")).strip()
         self.length_ok(user, length)
         if pace not in ("calm", "balanced", "fast", "every", "other"):
@@ -2674,36 +2679,70 @@ class Studio:
             said.append("This film will be made in that shape, and your next films start that way too.")
         return " ".join(said)
 
-    # ------------------------------------------------------------------ AI-made clips (create/higgsfield.py)
+    # ------------------------------------------------------------------ AI-made clips (create/clips.py)
     def generate_clip(self, user: dict, project: dict, prompt: str, shot: int | None = None, seconds: int = 5) -> int:
-        """A clip made from their words by an AI video model; with a shot number it takes that shot's place, as a draft."""
-        from ..create import higgsfield
+        """A clip made from their words by an AI video model (on this GPU, or Higgsfield with their key); with a shot
+        number it takes that shot's place, as a draft."""
+        from ..create import clips
 
-        self._guard(project, "done")
+        self._guard(project, "setup", "done")  # at the clips step it becomes one of their clips
         prompt = " ".join(str(prompt).split())[:600]
         if len(prompt) < 4:
             raise ActionError("Say what the clip should show.")
-        if not higgsfield.available():
-            raise ActionError("AI clips need the Higgsfield API key (HF_API_KEY_ID and HF_API_KEY_SECRET in .env).")
+        if clips.maker() is None:
+            raise ActionError(clips.describe(None) + ".")
         self._check_revisions(user, project)
         return self._enqueue(project, "generate", {"prompt": prompt, "shot": shot, "seconds": seconds})
 
     def _job_generate(self, job, project, user):
-        from ..create import higgsfield
+        from ..create import clips
         from .brain.backends import Usage
 
         params = job["params"]
+        if project["stage"] == "setup":  # before the first cut: the shot joins their clips, as if they'd sent it
+            return self._generate_into_clips(job, project, user, params)
         pipe = self._pipeline(job, project, user)
         k = len(list(pipe.work.clips.glob("ai-*.mp4"))) + 1
         out = pipe.work.clips / f"ai-{k:02d}.mp4"
         shape = self.shapes(project)[0]
-        self.db.job_progress(job["id"], 0.1, "An AI video model is making your clip (a minute or two)")
+        self.db.job_progress(job["id"], 0.1, "An AI video model is making your clip (a few minutes)")
         t0 = time.monotonic()
-        made = higgsfield.generate(params["prompt"], out, seconds=int(params.get("seconds") or 5), aspect=shape)
-        self._spender(project, user["id"], job["id"])(Usage("generate", made["model"], "higgsfield", usd=made["usd"],
+        try:
+            made = clips.make(params["prompt"], out, seconds=int(params.get("seconds") or 5), aspect=shape,
+                              log=lambda m: self.db.job_progress(job["id"], 0.3, m))
+        except clips.ClipError as exc:
+            raise ActionError(str(exc)) from exc
+        self._spender(project, user["id"], job["id"])(Usage("generate", made["model"], made["maker"], usd=made["usd"],
                                                             seconds=round(time.monotonic() - t0, 1)))
         self.db.event(project["id"], f"AI clip ai-{k:02d} made: {params['prompt'][:120]} (${made['usd']:.2f})", "info", job["id"])
         self._swap_in(job, project, user, pipe, out, params.get("shot"), params["prompt"])
+
+    def _generate_into_clips(self, job, project, user, params) -> None:
+        import secrets
+
+        from ..create import clips
+        from .brain.backends import Usage
+        from .storage import _probe, clip_thumb, workdir
+
+        work = workdir(self.s, project["user_id"], project["id"]).ensure()
+        cid = "c" + secrets.token_hex(6)
+        out = work.clips / f"{cid}.mp4"
+        self.db.job_progress(job["id"], 0.1, "An AI video model is making your shot (a few minutes)")
+        t0 = time.monotonic()
+        try:
+            made = clips.make(params["prompt"], out, seconds=int(params.get("seconds") or 5),
+                              aspect=self.shapes(project)[0], log=lambda m: self.db.job_progress(job["id"], 0.3, m))
+        except clips.ClipError as exc:
+            raise ActionError(str(exc)) from exc
+        self._spender(project, user["id"], job["id"])(Usage("generate", made["model"], made["maker"], usd=made["usd"],
+                                                            seconds=round(time.monotonic() - t0, 1)))
+        meta = _probe(out, "clip", self.s)
+        name = "Made: " + params["prompt"][:50]
+        self.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, width, height, created) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)", (cid, project["id"], name, out.name, out.stat().st_size,
+                                                   meta["seconds"], meta["width"], meta["height"], time.time()))
+        clip_thumb(out, work.stills, cid, meta["seconds"])
+        self.db.event(project["id"], f"Shot made from words: {params['prompt'][:120]}", "info", job["id"])
 
     def _swap_in(self, job, project, user, pipe, out: Path, shot: int | None, what: str) -> None:
         """A new clip (made by AI or by an effect) logged, then in the place of a shot as a draft."""

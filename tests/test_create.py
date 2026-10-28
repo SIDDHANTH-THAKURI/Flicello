@@ -68,7 +68,7 @@ def test_without_a_key_it_says_what_to_add(monkeypatch):
     monkeypatch.setenv("HF_API_KEY_ID", "")
     monkeypatch.setenv("HF_API_KEY_SECRET", "")
     assert not higgsfield.available()
-    with pytest.raises(higgsfield.HiggsfieldError, match="HF_API_KEY_ID"):
+    with pytest.raises(higgsfield.HiggsfieldError, match="Connect page"):
         higgsfield._call("GET", "https://api.higgsfield.ai/x")
 
 
@@ -197,3 +197,79 @@ def test_an_object_is_filled_in_only_inside_its_box(tmp_path, monkeypatch):
     corner = frames[5][10, 10].astype(int)
     assert mid[0] < 100 and abs(mid[2] - 160) < 30  # the red box is gone
     assert abs(corner[2] - 160) < 30  # the rest as it was
+
+
+def test_a_shot_from_words_is_made_here_on_a_gpu_else_by_higgsfield_else_says_how(tmp_path, monkeypatch):
+    from vidosuper.create import clips
+
+    monkeypatch.delenv("VIDO_AI_CLIPS", raising=False)
+    monkeypatch.setattr(clips, "local_ready", lambda: False)
+    monkeypatch.setattr(higgsfield, "available", lambda: False)
+    assert clips.maker() is None and "Connect page" in clips.describe(None)
+    with pytest.raises(clips.ClipError, match="Higgsfield key"):
+        clips.make("waves at sunset", tmp_path / "x.mp4")
+    monkeypatch.setattr(higgsfield, "available", lambda: True)
+    assert clips.maker() == "higgsfield"
+    monkeypatch.setattr(clips, "local_ready", lambda: True)
+    assert clips.maker() == "local"  # the GPU here first: no balance spent
+    monkeypatch.setenv("VIDO_AI_CLIPS", "higgsfield")
+    assert clips.maker() == "higgsfield"  # unless they choose Higgsfield
+
+
+def test_a_shot_from_words_on_this_gpu_is_painted_then_animated_at_the_films_size(tmp_path, monkeypatch, media):
+    from vidosuper.create import clips
+    from vidosuper.motion import cartoon, scenes, videogen
+
+    monkeypatch.setenv("VIDO_AI_CLIPS", "local")
+    monkeypatch.setattr(clips, "local_ready", lambda: True)
+    seen = {}
+
+    def paint(what, out, light=None, like=None, whole=False, aspect=9 / 16):
+        seen["paint"] = (what, whole, round(aspect, 3))
+        out.write_bytes(b"png")
+        return 1080, 1920
+
+    def animate(image, prompt, out, **kw):
+        seen["animate"] = (prompt, kw["seconds"])
+        shutil.copyfile(media / "clips" / "b_shaky.mp4", out)
+
+    monkeypatch.setattr(scenes, "paint", paint)
+    monkeypatch.setattr(videogen, "animate", animate)
+    monkeypatch.setattr(videogen, "release", lambda: None)
+    monkeypatch.setattr(cartoon, "fit_clip", lambda clip, secs, w, h, out, interpolate=True:
+                        (seen.setdefault("fit", (secs, w, h)), shutil.copyfile(clip, out)))
+    made = clips.make("gulls over the Opera House at sunrise", tmp_path / "shot.mp4", seconds=5, aspect="9:16")
+    assert made == {"maker": "local", "model": "wan-2.2-i2v", "seconds": 5, "usd": 0.0}
+    assert seen["paint"][1] and seen["paint"][2] == round(1080 / 1920, 3) and "Opera House" in seen["paint"][0]
+    assert seen["animate"][0] == "gulls over the Opera House at sunrise" and seen["fit"] == (5.0, 1080, 1920)
+    assert (tmp_path / "shot.mp4").exists() and not (tmp_path / "shot").exists()
+
+
+def test_a_shot_from_words_at_the_clips_step_joins_their_clips(studio_film, media, monkeypatch):
+    from vidosuper.create import clips
+
+    studio, client, csrf, pid, work = studio_film
+    studio.db.set_stage(pid, "setup")
+    monkeypatch.setattr(clips, "maker", lambda: "higgsfield")
+
+    def make(prompt, out, **kw):
+        shutil.copyfile(media / "clips" / "b_shaky.mp4", out)
+        return {"maker": "higgsfield", "model": "kling-3-std", "seconds": 5, "usd": 0.21}
+
+    monkeypatch.setattr(clips, "make", make)
+    before = studio.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (pid,), 0)
+    assert "Make a shot from words" in client.get(f"/p/{pid}").text
+    client.post(f"/p/{pid}/ai-clip", data={"csrf": csrf, "prompt": "waves at sunset"})
+    _drain_all(studio)
+    rows = studio.db.all("SELECT * FROM clips WHERE project_id=?", (pid,))
+    assert len(rows) == before + 1 and rows[-1]["name"].startswith("Made: waves at sunset")
+    assert (work / "clips" / rows[-1]["file"]).exists() and studio.db.project(pid)["stage"] == "setup"
+
+
+def test_the_consoles_one_line_key_works_too(monkeypatch):
+    monkeypatch.setenv("HF_API_KEY_ID", "")
+    monkeypatch.setenv("HF_API_KEY_SECRET", "")
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "kid-123:secret-456")
+    assert higgsfield.credentials() == ("kid-123", "secret-456")
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "no-colon-here")
+    assert higgsfield.credentials() is None
