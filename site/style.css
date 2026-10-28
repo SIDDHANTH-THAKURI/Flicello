@@ -359,3 +359,10 @@ html.locked { overflow: hidden; }
 .sound-toggle .s-on, html.sound-on .sound-toggle .s-off { display: none; } html.sound-on .sound-toggle .s-on { display: inline; }
 .sound-toggle .eq b { animation-play-state: paused; transform: scaleY(.25); }
 html.sound-on .sound-toggle { color: var(--ink); } html.sound-on .sound-toggle .eq b { animation-play-state: running; background: var(--p); }
+
+/* still being made: a small slate beside the name */
+.wip { display: inline-flex; align-items: center; gap: 7px; margin-left: 12px; margin-right: auto; padding: 4px 10px 4px 8px; border-radius: 999px;
+  font: 500 10.5px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--line2); background: #ffffff08; white-space: nowrap; }
+.wip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #ff3b3b; box-shadow: 0 0 8px #ff3b3b; animation: rec 1.6s steps(1) infinite; }
+@keyframes rec { 50% { opacity: .25; } }
+@media (max-width: 600px) { .wip { font-size: 9px; padding: 3px 8px 3px 6px; margin-left: 8px; } }
