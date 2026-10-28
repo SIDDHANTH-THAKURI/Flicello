@@ -17,6 +17,9 @@ machine by the setup prompt (the Connect page).
 | [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) (optional) | painting on your own GPU | Apache-2.0 |
 | [ACE-Step 1.5 XL SFT](https://huggingface.co/ACE-Step/acestep-v15-xl-sft-diffusers) (optional) | music made on your own GPU | MIT (its text encoder, Qwen3-Embedding-0.6B: Apache-2.0) |
 | [Stable Audio 3 Small-SFX](https://huggingface.co/stabilityai/stable-audio-3-small-sfx) (optional) | sound effects made on your own GPU | Stability AI Community License (free for research, non-commercial use and commercial use under $1M annual revenue; for commercial use you register at <https://stability.ai/community-license>; above $1M an Enterprise licence from Stability AI); its T5Gemma text encoder under the Gemma Terms of Use. Gated: you accept the licence on Hugging Face yourself. Powered by Stability AI |
+| [Wan 2.2 I2V-A14B](https://github.com/Wan-Video/Wan2.2) (optional; fp16 files from [Comfy-Org/Wan_2.2_ComfyUI_Repackaged](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged)) | cartoon motion on your own GPU | Apache-2.0 |
+| [Index-AniSora V3.2](https://github.com/bilibili/index-anisora) (optional) | anime motion on your own GPU | Apache-2.0 |
+| [Qwen-Image-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Lightning) (optional) | the painter's fast mode | Apache-2.0 |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (ONNX files from [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)) | Cello's voice | Apache-2.0 (kokoro-onnx: MIT) |
 | [Whisper](https://github.com/openai/whisper) via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | speech to text | MIT |
 
@@ -27,9 +30,9 @@ machine by the setup prompt (the Connect page).
 | [HyperFrames](https://github.com/heygen-com/hyperframes) | rendering designed scenes and graphics frame by frame | Apache-2.0 |
 | [GSAP](https://gsap.com) | the animation in designed scenes (written by Claude) | Webflow's GSAP Standard "No Charge" licence (see below) |
 | [FFmpeg](https://ffmpeg.org) | everything video and audio | LGPL/GPL (installed by you) |
-| [Blender](https://www.blender.org) (optional) | 3D in cartoons and scenes | GPL (installed by you; Flicello only runs it) |
+| [Blender](https://www.blender.org) (optional) | rigged characters and 3D in cartoons and scenes | GPL (installed by you; Flicello only runs it) |
 | [ONNX Runtime](https://onnxruntime.ai) | running the models on your GPU or CPU | MIT |
-| [PyTorch](https://pytorch.org), [Diffusers](https://github.com/huggingface/diffusers) (optional) | running the painter and the music maker | BSD-3-Clause, Apache-2.0 |
+| [PyTorch](https://pytorch.org), [Diffusers](https://github.com/huggingface/diffusers) (optional) | running the painter, the music maker and the video models | BSD-3-Clause, Apache-2.0 |
 | [stable-audio-3](https://github.com/Stability-AI/stable-audio-3) (optional, the `sound` extra) | running Stable Audio 3 | MIT |
 | [mediabunny](https://github.com/Vanilagy/mediabunny) | shrinking uploads in the browser | MPL-2.0 |
 | [phonemizer](https://github.com/bootphon/phonemizer) and [espeak-ng](https://github.com/espeak-ng/espeak-ng) (the `voice` extra) | turning Cello's words into sounds for Kokoro | GPL-3.0 (installed by you, not part of this repository: if you ship Flicello bundled with them, the GPL applies to that bundle) |

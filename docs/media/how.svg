@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-label="How Flicello works: you say it, Claude directs, your GPU makes it, Cello checks it, your film">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#ffb057"/><stop offset=".45" stop-color="#ff4f8b"/><stop offset=".8" stop-color="#8b6bff"/><stop offset="1" stop-color="#4fe0d0"/></linearGradient>
+    <radialGradient id="bg" cx=".5" cy="0" r="1"><stop offset="0" stop-color="#2a1640"/><stop offset=".7" stop-color="#0b0912"/></radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+    <style>
+      text { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; fill: #f5f2ee; }
+      .k { font: 600 10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; letter-spacing: .18em; fill: #ffa24a; }
+      .t { font-size: 17px; font-weight: 700; }
+      .s { font-size: 12px; fill: #9893a6; }
+      .wire { fill: none; stroke: #ffffff1c; stroke-width: 2; }
+      .flow { fill: none; stroke: url(#g); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 18 140; animation: flow 2.4s linear infinite; }
+      .node { animation: pulse 6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+      .n2 { animation-delay: 1.2s; } .n3 { animation-delay: 2.4s; } .n4 { animation-delay: 3.6s; } .n5 { animation-delay: 4.8s; }
+      .halo { opacity: 0; animation: halo 6s ease-in-out infinite; }
+      .h2 { animation-delay: 1.2s; } .h3 { animation-delay: 2.4s; } .h4 { animation-delay: 3.6s; } .h5 { animation-delay: 4.8s; }
+      .bar { animation: eq 1s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom; }
+      .b2 { animation-delay: -.3s; } .b3 { animation-delay: -.6s; } .b4 { animation-delay: -.15s; }
+      .spin { animation: spin 8s linear infinite; transform-box: fill-box; transform-origin: center; }
+      .tick { stroke-dasharray: 30; stroke-dashoffset: 30; animation: tick 6s ease-in-out infinite 3.6s; }
+      .play { animation: blink 1.2s steps(2) infinite; }
+      @keyframes flow { to { stroke-dashoffset: -160; } }
+      @keyframes pulse { 0%, 22%, 100% { transform: scale(1); } 8% { transform: scale(1.06); } }
+      @keyframes halo { 0%, 24%, 100% { opacity: 0; } 8% { opacity: .9; } }
+      @keyframes eq { 0%, 100% { transform: scaleY(.3); } 50% { transform: scaleY(1); } }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes tick { 0% { stroke-dashoffset: 30; } 10%, 80% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 30; } }
+      @keyframes blink { 50% { opacity: .35; } }
+    </style>
+  </defs>
+  <rect width="960" height="300" rx="22" fill="url(#bg)"/>
+  <rect x=".5" y=".5" width="959" height="299" rx="21.5" fill="none" stroke="#ffffff14"/>
+  <text x="40" y="44" class="k">HOW IT WORKS</text>
+
+  <!-- wires and the signal running through them -->
+  <path class="wire" d="M150 150 H 268 M 352 150 H 468 M 552 150 H 679 M 751 150 H 842"/>
+  <path class="flow" d="M150 150 H 268"/>
+  <path class="flow" d="M352 150 H 468" style="animation-delay:-.6s"/>
+  <path class="flow" d="M552 150 H 679" style="animation-delay:-1.2s"/>
+  <path class="flow" d="M751 150 H 842" style="animation-delay:-1.8s"/>
+
+  <!-- 1. you say it -->
+  <circle class="halo" cx="100" cy="150" r="46" fill="#ff4f8b" filter="url(#glow)"/>
+  <g class="node"><circle cx="100" cy="150" r="42" fill="#15121f" stroke="#ffffff22"/>
+    <g fill="#ff4f8b"><rect class="bar" x="83" y="136" width="5" height="28" rx="2.5"/><rect class="bar b2" x="93" y="136" width="5" height="28" rx="2.5"/><rect class="bar b3" x="103" y="136" width="5" height="28" rx="2.5"/><rect class="bar b4" x="113" y="136" width="5" height="28" rx="2.5"/></g></g>
+  <text x="100" y="222" class="t" text-anchor="middle">You say it</text>
+  <text x="100" y="240" class="s" text-anchor="middle">“cut it on the drop”</text>
+
+  <!-- 2. claude directs -->
+  <g transform="translate(-30 0)">
+  <circle class="halo h2" cx="340" cy="150" r="46" fill="#8b6bff" filter="url(#glow)"/>
+  <g class="node n2"><circle cx="340" cy="150" r="42" fill="#15121f" stroke="#ffffff22"/>
+    <g class="spin"><path d="M340 126 L344 146 L364 150 L344 154 L340 174 L336 154 L316 150 L336 146 Z" fill="#ffa24a"/></g></g>
+  <text x="340" y="222" class="t" text-anchor="middle">Claude directs</text>
+  <text x="340" y="240" class="s" text-anchor="middle">story, shots, timing</text>
+  </g>
+
+  <!-- 3. your gpu makes -->
+  <g transform="translate(-60 0)">
+  <circle class="halo h3" cx="570" cy="150" r="46" fill="#ffa24a" filter="url(#glow)"/>
+  <g class="node n3"><rect x="528" y="108" width="84" height="84" rx="18" fill="#15121f" stroke="#ffffff22"/>
+    <rect x="550" y="130" width="40" height="40" rx="6" fill="none" stroke="#ffa24a" stroke-width="3"/>
+    <g stroke="#ffa24a" stroke-width="3" stroke-linecap="round"><path d="M558 124v-6M570 124v-6M582 124v-6M558 182v-6M570 182v-6M582 182v-6M544 138h-6M544 150h-6M544 162h-6M602 138h-6M602 150h-6M602 162h-6"/></g>
+    <rect x="560" y="140" width="20" height="20" rx="3" fill="#ffa24a" class="play"/></g>
+  <text x="570" y="222" class="t" text-anchor="middle">Your GPU makes it</text>
+  <text x="570" y="240" class="s" text-anchor="middle">paint · music · sound · motion</text>
+  </g>
+
+  <!-- 4. cello checks -->
+  <g transform="translate(-70 0)">
+  <circle class="halo h4" cx="785" cy="150" r="40" fill="#4fe0d0" filter="url(#glow)"/>
+  <g class="node n4"><circle cx="785" cy="150" r="36" fill="#15121f" stroke="#ffffff22"/>
+    <path class="tick" d="M770 151 l10 10 l20 -22" fill="none" stroke="#4fe0d0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="785" y="222" class="t" text-anchor="middle">Cello checks</text>
+  <text x="785" y="240" class="s" text-anchor="middle">on model, on beat</text>
+  </g>
+
+  <!-- 5. your film -->
+  <g transform="translate(-20 0)">
+  <circle class="halo h5" cx="890" cy="150" r="34" fill="#ff4f8b" filter="url(#glow)"/>
+  <g class="node n5"><rect x="862" y="128" width="56" height="44" rx="10" fill="url(#g)"/>
+    <path d="M884 140 L900 150 L884 160 Z" fill="#0b0912"/></g>
+  <text x="890" y="222" class="t" text-anchor="middle">Your film</text>
+  </g>
+
+  </svg>

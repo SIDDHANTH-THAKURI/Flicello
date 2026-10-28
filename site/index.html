@@ -1,87 +1,269 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="locked">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Flicello · Going open source</title>
-  <meta name="description" content="Flicello, the AI film editor, is becoming free and open source. It will run on your own computer, with your own Claude Code plan and your own keys.">
-  <meta name="theme-color" content="#06060a">
+  <title>Flicello · Say it. Cello cuts it.</title>
+  <meta name="description" content="Flicello is a free, open-source AI film studio that runs on your own computer. Talk to Cello: it edits your clips on the beat, cuts talking videos on your words, designs motion graphics, writes your music and animates cartoons, with your own Claude, on your own GPU.">
+  <meta name="theme-color" content="#050508">
   <meta name="color-scheme" content="dark">
   <link rel="canonical" href="https://flicello.com/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Flicello">
-  <meta property="og:title" content="Flicello is going open source">
-  <meta property="og:description" content="The AI film editor that runs on your own computer, with your own Claude Code plan and your own keys.">
+  <meta property="og:title" content="Flicello · Say it. Cello cuts it.">
+  <meta property="og:description" content="An AI film studio that runs on your own computer. Edits, motion graphics, music and cartoons, with your own Claude, on your own GPU. Free and open source.">
   <meta property="og:url" content="https://flicello.com/">
   <meta property="og:image" content="https://flicello.com/media/og.jpg">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="preload" href="/fonts/bricolage.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/instrument-italic.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css">
+  <noscript><style>.intro { display: none; } html.locked { overflow: auto; }</style></noscript>
 </head>
 <body>
-  <div class="roll" aria-hidden="true">
-    <video src="/media/roll.mp4" poster="/media/roll.jpg" autoplay muted loop playsinline></video>
+  <!-- ====================================================== THE DOOR: choose sound or silence -->
+  <div class="intro" data-intro role="dialog" aria-label="Enter Flicello">
+    <div class="intro-in">
+      <div class="porthole">
+        <canvas></canvas>
+        <svg class="ring" viewBox="0 0 200 200" aria-hidden="true"><defs><path id="ringp" d="M100,100 m-90,0 a90,90 0 1,1 180,0 a90,90 0 1,1 -180,0"/></defs><text><textPath href="#ringp">say it · cello cuts it · a film studio on your own machine · </textPath></text></svg>
+      </div>
+      <p class="intro-k">Flicello</p>
+      <div class="intro-t">Step into <em>the studio.</em></div>
+      <p class="intro-s">Every frame on this page is drawn live, and every sound is made as you go. Best with headphones.</p>
+      <div class="intro-b">
+        <button class="btn primary" data-enter="sound"><span>Enter with sound</span><i class="eq" aria-hidden="true"><b></b><b></b><b></b><b></b></i></button>
+        <button class="btn ghost" data-enter="quiet"><span>Enter in silence</span></button>
+      </div>
+      <p class="intro-hint">or press <kbd>Enter</kbd></p>
+    </div>
   </div>
-  <div class="leak" aria-hidden="true"></div>
+  <button class="sound-toggle" data-sound aria-label="Sound on or off"><i class="eq" aria-hidden="true"><b></b><b></b><b></b><b></b></i><span class="s-on">Sound on</span><span class="s-off">Sound off</span></button>
+
+  <canvas class="shader" aria-hidden="true"></canvas>
   <div class="grain" aria-hidden="true"></div>
+  <div class="glow-cursor" aria-hidden="true"></div>
 
   <header class="top">
     <a class="brand" href="/" aria-label="Flicello">
       <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
-        <defs>
-          <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#ffa24a"/><stop offset="0.55" stop-color="#ff4f8b"/><stop offset="1" stop-color="#7a5cff"/>
-          </linearGradient>
-        </defs>
+        <defs><linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffa24a"/><stop offset=".55" stop-color="#ff4f8b"/><stop offset="1" stop-color="#7a5cff"/></linearGradient></defs>
         <rect width="64" height="64" rx="17" fill="url(#tile)"/>
-        <g fill="#fff">
-          <rect class="b b1" x="10" y="33" width="6" height="14" rx="3" fill-opacity="0.6"/>
-          <rect class="b b2" x="19" y="25" width="6" height="22" rx="3" fill-opacity="0.8"/>
-          <rect class="b b3" x="28" y="17" width="6" height="30" rx="3"/>
-          <path d="M41 18 L41 46 L56 32 Z" stroke="#fff" stroke-width="4" stroke-linejoin="round"/>
-        </g>
+        <g fill="#fff"><rect class="b b1" x="10" y="33" width="6" height="14" rx="3" fill-opacity=".6"/><rect class="b b2" x="19" y="25" width="6" height="22" rx="3" fill-opacity=".8"/><rect class="b b3" x="28" y="17" width="6" height="30" rx="3"/><path d="M41 18 L41 46 L56 32 Z" stroke="#fff" stroke-width="4" stroke-linejoin="round"/></g>
       </svg>
       <span>Flicello</span>
     </a>
-    <p class="hud mono" aria-hidden="true"><span class="rec"></span>IN THE EDIT <span class="tc" data-tc>00:00:00:00</span></p>
+    <nav class="links">
+      <a href="#story">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#cartoons">Cartoons</a>
+      <a href="#local">Local</a>
+      <a class="gh magnetic" href="https://github.com/SIDDHANTH-THAKURI/Flicello"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Star</a>
+    </nav>
   </header>
 
-  <main>
-    <p class="eyebrow mono">Coming soon · free · MIT licence</p>
-    <h1>Flicello is going <em>open&nbsp;source.</em></h1>
-    <p class="sub">The AI film editor that runs on your own computer, with your own Claude Code plan and your own keys. Your footage never leaves your machine. No accounts, no credits, no cloud.</p>
-  </main>
+  <!-- ====================================================== HERO -->
+  <section class="hero">
+    <div class="hero-copy">
+      <a class="pill" href="#cartoons"><span class="new">New</span> Cartoons in four engines: Wan, AniSora, Blender, code <span class="arrow">→</span></a>
+      <h1 class="split"><span class="line">Say it.</span><span class="line grad"><em>Cello cuts it.</em></span></h1>
+      <p class="sub">The AI film studio that runs on <b>your</b> computer. Talk to Cello and it edits on the beat, cuts on your words, designs motion graphics, scores your film and animates your stories, with your own Claude, on your own GPU.</p>
+      <div class="cta">
+        <a class="btn primary magnetic" href="#start"><span>Get Flicello</span><i class="shine"></i></a>
+        <a class="btn ghost magnetic" href="#story"><span>See how it works</span></a>
+      </div>
+      <ul class="trust">
+        <li><b data-count="100">0</b>%<span>runs locally</span></li>
+        <li><b data-count="0">0</b><span>uploads</span></li>
+        <li><b data-count="12">0</b>+<span>open models</span></li>
+      </ul>
+    </div>
 
-  <section class="cut" aria-label="What is being built">
-    <p class="cut-label mono">The cut so far</p>
-    <ol class="track">
-      <li class="done"><span class="n mono">01</span><span class="t">Runs on your machine</span></li>
-      <li class="done"><span class="n mono">02</span><span class="t">Cello, your editor</span></li>
-      <li class="done"><span class="n mono">03</span><span class="t">Timeline and music</span></li>
-      <li class="done"><span class="n mono">04</span><span class="t">Designed motion graphics</span></li>
-      <li class="done"><span class="n mono">05</span><span class="t">Cartoons, and Blender</span></li>
-      <li class="now"><span class="n mono">06</span><span class="t">Release</span></li>
-    </ol>
+    <div class="scene3d" data-tilt>
+      <div class="studio">
+        <div class="monitor">
+          <div class="frame" data-frame>
+            <canvas class="film" data-film></canvas>
+            <div class="bars" aria-hidden="true"><i></i><i></i></div>
+            <div class="title-card" data-title>THE NIGHT WE JUMPED</div>
+            <div class="cap" data-cap></div>
+            <div class="flash" data-flash></div>
+          </div>
+          <div class="hud"><span class="rec"></span><span data-tc>00:00:00:00</span><span class="res">4K · 60</span></div>
+        </div>
+        <div class="chat">
+          <div class="bubble you" data-ask>make the drop hit when he jumps</div>
+          <div class="bubble cello" data-answer><span class="who">Cello</span><span data-answer-text></span></div>
+        </div>
+        <div class="timeline">
+          <div class="ruler" data-ruler></div>
+          <div class="track v" data-video></div>
+          <div class="track a"><canvas data-wave></canvas></div>
+          <div class="beats" data-beats></div>
+          <div class="playhead" data-playhead></div>
+        </div>
+      </div>
+      <div class="float f1" style="--z:90px"><i class="ic beat"></i><div><b>120 BPM</b><span>beats found</span></div></div>
+      <div class="float f2" style="--z:140px"><i class="ic icap"></i><div><b>Captions on</b><span>every word timed</span></div></div>
+      <div class="float f3" style="--z:60px"><i class="ic music"></i><div><b>Drop at 0:08</b><span>music made for it</span></div></div>
+      <div class="float f4" style="--z:120px"><span class="score">94</span><div><b>Ready to post</b><span>hook, pace, sound</span></div></div>
+    </div>
+    <a class="scroll-hint" href="#story" aria-label="Scroll"><span></span></a>
   </section>
 
-  <footer class="foot mono">
-    <span>flicello.com</span>
-    <span>Built for high-end machines</span>
-    <span>The repo opens on release</span>
+  <!-- ====================================================== LOGO MARQUEE -->
+  <section class="marquee" aria-label="Built on">
+    <p class="mq-label">Built on the best open models</p>
+    <div class="mq"><div class="mq-track">
+      <span>Claude Code</span><span>Wan 2.2</span><span>AniSora</span><span>ACE-Step</span><span>Stable Audio 3</span><span>Qwen-Image</span><span>Whisper</span><span>Kokoro</span><span>Blender</span><span>BiRefNet</span><span>HyperFrames</span><span>FFmpeg</span>
+      <span>Claude Code</span><span>Wan 2.2</span><span>AniSora</span><span>ACE-Step</span><span>Stable Audio 3</span><span>Qwen-Image</span><span>Whisper</span><span>Kokoro</span><span>Blender</span><span>BiRefNet</span><span>HyperFrames</span><span>FFmpeg</span>
+    </div></div>
+  </section>
+
+  <!-- ====================================================== SCROLLYTELLING: raw to ready -->
+  <section class="story" id="story">
+    <div class="story-sticky">
+      <div class="story-copy">
+        <p class="kicker">From raw to ready</p>
+        <h2 class="reveal-text">Scroll. <em>Watch it edit.</em></h2>
+        <ol class="steps" data-steps>
+          <li><span>01</span><div><b>Drop in your footage</b><p>Every clip watched, with its sound. Moments found, the shaky ones set aside.</p></div></li>
+          <li><span>02</span><div><b>Cello builds the story</b><p>A hook, a build, a payoff. Clips find their place on a timeline.</p></div></li>
+          <li><span>03</span><div><b>Cut on the beat</b><p>Every cut lands on the music. The best shot lands on the drop.</p></div></li>
+          <li><span>04</span><div><b>Designed for the moment</b><p>Captions on the syllable, graphics on the words that matter.</p></div></li>
+          <li><span>05</span><div><b>Scored and checked</b><p>Original music, a sound on every hit, and an honest review before you post.</p></div></li>
+        </ol>
+      </div>
+      <div class="story-stage" data-stage>
+        <div class="st-screen" data-st-screen>
+          <div class="st-frame" data-st-frame><canvas class="film" data-st-film></canvas></div>
+          <div class="st-cap" data-st-cap>you never <b>stop</b> moving</div>
+          <div class="st-graphic" data-st-graphic><b>THE NIGHT<br>WE JUMPED</b><svg viewBox="0 0 200 30"><path d="M4 22 C 60 4, 120 30, 196 8"/></svg></div>
+          <div class="st-score" data-st-score><span>94</span>Ready to post</div>
+        </div>
+        <div class="st-clips" data-st-clips></div>
+        <div class="st-track" data-st-track><i class="st-beatline" data-st-beats></i></div>
+        <canvas class="st-wave" data-st-wave></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================== FEATURES: bento -->
+  <section class="features" id="features">
+    <p class="kicker">Everything, in one conversation</p>
+    <h2 class="reveal-text">A whole studio. <em>No timeline required.</em></h2>
+    <div class="bento">
+      <article class="tile t-voice spot">
+        <canvas class="orb-canvas" data-orb></canvas>
+        <div class="t-copy"><h3>Talk to Cello</h3><p>Point at the screen and say it. Cello sees what you see, does it, and tells you what changed.</p><p class="said" data-said></p></div>
+      </article>
+      <article class="tile t-words spot">
+        <div class="t-demo words"><p class="transcript" data-transcript>so the trick is you never stop moving, <i>um</i>, ever, because that is when it hits</p></div>
+        <div class="t-copy"><h3>Cut on your words</h3><p>Pauses and “um”s gone. Captions land on the syllable.</p></div>
+      </article>
+      <article class="tile t-music spot">
+        <div class="t-demo"><canvas data-music></canvas><div class="sections"><span>intro</span><span>build</span><span class="drop">drop</span><span>outro</span></div></div>
+        <div class="t-copy"><h3>Music made for your cut</h3><p>Original, at your length and tempo. The drop lands on your best shot.</p></div>
+      </article>
+      <article class="tile t-mograph spot">
+        <div class="t-demo mograph"><svg viewBox="0 0 300 170"><defs><linearGradient id="g2" x1="0" x2="1"><stop offset="0" stop-color="#ffa24a"/><stop offset=".5" stop-color="#ff4f8b"/><stop offset="1" stop-color="#7a5cff"/></linearGradient></defs><path class="stroke" d="M20 130 C 70 20, 130 20, 150 85 S 230 150, 280 40"/><circle class="pop p1" cx="150" cy="85" r="10"/><circle class="pop p2" cx="280" cy="40" r="7"/><text class="word" x="150" y="155" text-anchor="middle">the drop</text></svg></div>
+        <div class="t-copy"><h3>Motion graphics, never templates</h3><p>Designed as code for this moment, checked frame by frame.</p></div>
+      </article>
+      <article class="tile t-hits spot">
+        <div class="t-demo hits" data-hits></div>
+        <div class="t-copy"><h3>A sound on every hit</h3><p>Each effect generated from its description, on its frame.</p></div>
+      </article>
+      <article class="tile t-editor spot">
+        <div class="t-demo edit"><canvas class="ed-prev" data-ed-prev></canvas><div class="lanes" data-lanes><div class="lane"><b style="--l:4%;--w:22%"></b><b style="--l:28%;--w:16%"></b><b style="--l:46%;--w:30%" class="sel"></b><b style="--l:78%;--w:18%"></b></div><div class="lane g"><b style="--l:12%;--w:18%">night</b><b style="--l:52%;--w:14%">jumped</b></div><div class="lane m"><b style="--l:0%;--w:100%"></b></div><i class="ed-head" data-ed-head></i></div><div class="cursor"></div></div>
+        <div class="t-copy"><h3>A real editor, when you want it</h3><p>Trim, ripple, keyframes, speed, ducking, undo. You and Cello on one timeline.</p></div>
+      </article>
+      <article class="tile t-export spot">
+        <div class="t-demo formats"><i class="f916">9:16</i><i class="f169">16:9</i><i class="f45">4:5</i><i class="f11">1:1</i></div>
+        <div class="t-copy"><h3>Every shape, every editor</h3><p>MP4, ProRes, GIF, captions, plus Final Cut, Premiere and Resolve projects.</p></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ====================================================== CARTOONS -->
+  <section class="cartoons" id="cartoons">
+    <p class="kicker">Cartoons</p>
+    <h2 class="reveal-text">Tell a story. <em>Get a film.</em></h2>
+    <p class="lede">Claude writes the board, designs the look and the cast, and directs every shot. A real animation engine makes the motion, and a director checks every clip stays on model.</p>
+    <div class="engines">
+      <article class="engine spot tilt">
+        <div class="stage"><canvas data-scene="cartoon"></canvas><span class="stage-tag">shot 3 · take 2 · <i>on model ✓</i></span></div>
+        <p class="tag">cartoon · Wan 2.2</p><h3>Painted, then alive</h3><p>Each shot painted on model, then a video model animates the whole frame.</p>
+      </article>
+      <article class="engine spot tilt">
+        <div class="stage"><canvas data-scene="anime"></canvas><span class="stage-tag">on twos · <i>impact frame</i></span></div>
+        <p class="tag">anime · AniSora</p><h3>Anime timing</h3><p>Bilibili's open anime model: held poses, snappy action, frames you set.</p>
+      </article>
+      <article class="engine spot tilt">
+        <div class="stage"><canvas data-scene="rig"></canvas><span class="stage-tag">pose mode · <i>no AI video</i></span></div>
+        <p class="tag">rig · Blender</p><h3>Rigged in code</h3><p>Real bones and faces, posed and filmed shot by shot. Exact and on model.</p>
+      </article>
+      <article class="engine wide spot">
+        <div class="stage"><canvas data-scene="drawn"></canvas><span class="stage-tag">drawn in code · <i>every frame</i></span></div>
+        <div class="wide-copy"><p class="tag">drawn · code</p><h3>Drawn, frame by frame</h3><p>Every character drawn with its own rig and faces, every shot the whole frame drawn from time: depth, light, wind, a camera, motion blur. No AI video, no 3D, no GPU. Like everything on this page.</p></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ====================================================== LOCAL -->
+  <section class="local" id="local">
+    <div class="local-copy">
+      <p class="kicker">Your machine</p>
+      <h2 class="reveal-text">Nothing rented. <em>Nothing uploaded.</em></h2>
+      <p class="lede">Your Claude Code plan is the brain. Every model runs on your own GPU. No accounts, no credits, no per-minute bills, and your footage stays yours.</p>
+      <div class="stack">
+        <div><b>Brain</b><span>Claude Code, on your plan</span></div>
+        <div><b>Paint</b><span>Qwen-Image-Edit</span></div>
+        <div><b>Music</b><span>ACE-Step 1.5</span></div>
+        <div><b>Sound</b><span>Stable Audio 3</span></div>
+        <div><b>Motion</b><span>Wan 2.2 · AniSora · Blender</span></div>
+        <div><b>Voice</b><span>Whisper + Kokoro</span></div>
+      </div>
+    </div>
+    <div class="machine">
+      <div class="chip"><i class="core"></i><span>YOUR GPU</span></div>
+      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+      <div class="orbit o1"><span>paint</span></div><div class="orbit o3"><span>motion</span></div>
+      <div class="orbit o2"><span>music</span></div><div class="orbit o4"><span>voice</span></div>
+      <div class="pulse"></div>
+    </div>
+  </section>
+
+  <!-- ====================================================== START -->
+  <section class="start" id="start">
+    <p class="kicker">Get started</p>
+    <h2 class="reveal-text">Three lines. <em>Then just talk.</em></h2>
+    <div class="term spot">
+      <div class="term-bar"><i></i><i></i><i></i><span>~/flicello</span><button class="copy" data-copy>Copy</button></div>
+      <pre data-term></pre>
+    </div>
+    <p class="note">Built for powerful machines: an NVIDIA GPU (24 GB+, 80 GB for every model) or Apple Silicon, 32 GB of memory, and Claude Code. The Connect page checks your machine and a setup prompt installs the rest.</p>
+  </section>
+
+  <!-- ====================================================== FINALE -->
+  <section class="finale">
+    <p class="kicker">Free · Open source · MIT</p>
+    <div class="wordmark" data-wordmark>Flicello</div>
+    <div class="cta center">
+      <a class="btn primary magnetic" href="#start"><span>Get Flicello</span><i class="shine"></i></a>
+      <a class="btn ghost magnetic" href="https://github.com/SIDDHANTH-THAKURI/Flicello"><span>Star on GitHub</span></a>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span>© Flicello · MIT licence</span>
+    <span>Made for people who make things</span>
+    <a href="https://github.com/SIDDHANTH-THAKURI/Flicello">GitHub</a>
   </footer>
 
-  <script>
-    // A running timecode at 24 fps since the page opened.
-    const tc = document.querySelector("[data-tc]");
-    const t0 = performance.now();
-    const pad = (n) => String(n).padStart(2, "0");
-    (function tick(now) {
-      const f = Math.floor((now - t0) / (1000 / 24));
-      tc.textContent = `${pad(Math.floor(f / 86400))}:${pad(Math.floor(f / 1440) % 60)}:${pad(Math.floor(f / 24) % 60)}:${pad(f % 24)}`;
-      requestAnimationFrame(tick);
-    })(t0);
-  </script>
+  <script src="/film.js" defer></script>
+  <script src="/sound.js" defer></script>
+  <script src="/app.js" defer></script>
 </body>
 </html>
