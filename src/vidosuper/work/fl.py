@@ -129,6 +129,10 @@ def main(argv: list[str] | None = None) -> None:
     ct.add_argument("--shape", default="9:16", choices=["9:16", "16:9", "1:1", "4:5"])
     ct.add_argument("--style", default="", help="the look they asked for, if any")
     ct.add_argument("--voice", default="", help="a clip of the open film whose sound is their narration")
+    ct.add_argument("--engine", default="", choices=["", "cartoon", "anime", "rig", "drawn"],
+                    help="cartoon (a video model animates painted frames), anime (the anime video model), rig "
+                         "(Blender rigs animated by code), drawn (drawn in code, frame by frame); empty: the best "
+                         "one this machine can run")
     w = sub.add_parser("wait", help="wait for the film's running step (job), a scene task (scene <id>) or a cartoon "
                                     "(cartoon <id>)")
     w.add_argument("what", choices=["job", "scene", "cartoon"])
@@ -194,7 +198,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     if a.cmd == "cartoon":
         out = call("POST", "/api/work/cartoon", {"story": " ".join(a.story), "seconds": a.seconds, "shape": a.shape,
-                                                 "style": a.style, "voice": a.voice})
+                                                 "style": a.style, "voice": a.voice, "engine": a.engine})
         show(out)
         return
     if a.cmd == "wait":

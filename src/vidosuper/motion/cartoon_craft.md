@@ -1,4 +1,4 @@
-# Cartoon craft: a story told as a film, animated by hand in code
+# Cartoon craft: a story told as a film
 
 ## The story
 - One clear want, one obstacle, one turn, one ending that pays off something set up early. A 30-60 s cartoon has
@@ -20,8 +20,7 @@
 - Shot length follows the beat: 1 to 3 s for action and reactions, 3 to 6 s for a moment that lands, longer only
   when something keeps happening on screen. Cuts land on the music's beats (or the narration's pauses).
 - The camera moves with intent: a slow push in as a feeling builds, a whip pan between two characters, a shake
-  on impact, a pull out to reveal. Animate it (#stage or a world wrapper) with parallax: the far layers move
-  less than the near ones.
+  on impact, a pull out to reveal, with real depth (near things move faster than far ones).
 
 ## Acting
 - Pose to pose: strong key poses with clear silhouettes (readable in solid black), then the in-betweens. Hold a
@@ -35,27 +34,22 @@
   a storybook painting).
 - Timing tells weight: big things take longer to start and stop, small things are quick.
 
-## Building characters as cut-out puppets (how it is done in code)
-- Each character is painted once as a model sheet (full body, neutral pose, three-quarter view), and every part
-  that moves on its own is painted as its own piece in that same style (`--like` the model sheet): head, torso,
-  upper arms, forearms, hands, thighs, shins, feet, tail, ears; plus the mouth shapes and eyes the shot needs
-  (open, closed, smile, frown, surprised), each a separate piece swapped or cross-faded on the beat.
-- Assemble the parts in nested elements: each joint is a wrapper div with `transform-origin` at the joint (the
-  shoulder, the elbow, the hip), so rotating the upper arm carries the forearm and hand. Measure where joints are
-  by looking (`bash look`), then nudge.
-- For a big change of pose or a turn (front to profile), paint the whole character in that pose too and swap at
-  the fastest point of the move, hidden by motion blur or a smear frame. Painted key poses swapped on twos (every
-  2 frames, `steps()` or a `tl.set` per frame) give the handmade feel of drawn animation.
-- Keep characters on model: same proportions, colours and details in every shot (read the model sheets before
-  painting anything new for them).
+## Characters stay alive and on model
+- A character is designed once (its model sheet, or its rig) and is the same in every shot: proportions, colours,
+  details, silhouette. Say what it is every time it appears (its shape, its colours, its tell-tale details), so
+  nothing drifts.
+- Characters move as whole bodies: weight shifts, squash and stretch, overlapping action, a face that changes on the
+  beat. Nothing is ever a flat picture slid across the frame; if a shot only pans over a still, it isn't animated.
+- One clear action per shot, readable in silhouette. Big actions need room: a full or wide shot; feelings need a
+  close-up.
 
 ## The world
-- Backgrounds are painted, layered for depth (sky, far, middle, near, foreground framing), with the light of the
-  scene's time of day. The foreground layer (a branch, a doorway, a plant) gives depth when the camera moves.
+- The world has depth (far, middle, near, foreground framing) and the light of the scene's time of day. A
+  foreground element (a branch, a doorway, a chair leg) gives depth when the camera moves.
 - Light and shadow agree: one key light direction per scene, contact shadows under feet and objects, rim light on
   characters against a dark background.
-- Effects (dust, smoke, splashes, sparkles, speed lines, impact stars) are drawn in code in the style of the
-  world, with timing like a hand-drawn effect (fast in, slow dissipate).
+- Effects (dust, smoke, splashes, sparkles, speed lines, impact stars) belong to the world's style, with timing
+  like a hand-drawn effect (fast in, slow dissipate).
 
 ## Sound
 - Every action has a sound (footsteps, a cloth swish, the thud of a landing, a cartoon zip for a fast exit,

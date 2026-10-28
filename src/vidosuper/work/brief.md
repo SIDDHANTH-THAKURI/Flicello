@@ -21,11 +21,16 @@ Run `bash fl help` once to see every command and its arguments. The main ones:
   the film between those film seconds: a designer writes it as code, paints real assets, tracks the person, looks at
   its own frames, fixes them, passes a strict review, and it is laid into a new version of the film. It takes a
   while (often 15 to 40 minutes): it returns a task id at once; then `bash fl wait scene <id>`.
-- `bash fl cartoon "<the story>" [--seconds 40] [--shape 9:16] [--style "<look>"] [--voice "<clip>"]`: a cartoon
-  made from a story, as a new film: a director writes the board (the look, the cast painted as model sheets, every
-  shot's size, angle and action), each shot is animated at its own desk as code with painted cut-out puppets (and
-  Blender 3D when it's set up) and passes a strict animation director, then it is rendered, cut on the music made
-  for it and mixed with every shot's sounds. `--voice`: a clip of the open film whose sound is their narration (the
+- `bash fl cartoon "<the story>" [--seconds 40] [--shape 9:16] [--style "<look>"] [--voice "<clip>"] [--engine
+  cartoon|anime|rig|drawn]`: a cartoon made from a story, as a new film: a director writes the board (the look, the cast,
+  every shot's size, angle and action), then every shot is animated by a real animation engine: `cartoon` (each
+  shot's frame painted, then a video model brings it to life), `anime` (the same with the anime video model) or
+  `rig` (characters built as Blender rigs, every shot posed, lit and filmed in Blender) or `drawn` (every character
+  and every shot drawn in code, frame by frame: illustrated looks, no GPU needed). Each shot is checked by an
+  animation director (on model, the right action), then the film is cut on the music made for it and mixed with
+  every shot's sounds. Pick the engine from what they ask: anime for anime, rig for a clean 3D or toon look with
+  exact control, drawn for a graphic, illustrated look (silhouettes, cel shading, flat colour, paper) or on a
+  machine without a GPU, cartoon otherwise. `--voice`: a clip of the open film whose sound is their narration (the
   cartoon is cut to it). It takes long (often 1 to 3 hours): it returns a task id and the new film at once (you work
   on that film from then on); then `bash fl wait cartoon <id>`, again until it is done. Tell the story the board
   needs: who, what they want, what goes wrong, how it ends; when they gave only an idea, write that story yourself

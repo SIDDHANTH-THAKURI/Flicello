@@ -4,6 +4,7 @@ cut out like any painting."""
 
 from __future__ import annotations
 
+import json
 import socket
 import threading
 
@@ -108,10 +109,10 @@ def test_the_painter_process_loads_once_and_paints_on_this_machine(tmp_path, mon
         def __init__(self):
             loads.append(1)
 
-        def paint(self, prompt, key, refs, seed):
+        def paint(self, prompt, key, refs, seed, size=(256, 256)):
             from PIL import Image, ImageDraw
 
-            img = Image.new("RGB", (256, 256), key)
+            img = Image.new("RGB", size, key)
             ImageDraw.Draw(img).ellipse((64, 64, 192, 192), fill=(30, 90, 200))
             return img
 
@@ -121,11 +122,11 @@ def test_the_painter_process_loads_once_and_paints_on_this_machine(tmp_path, mon
     monkeypatch.setattr(painter, "_Painter", Model)
     monkeypatch.setattr(painter, "PORT", port)
     monkeypatch.setattr(painter, "_start", lambda: threading.Thread(target=painter.serve, args=(port,), daemon=True).start())
-    out = painter.paint("a disc", (255, 0, 255), [], tmp_path / "a.png", seed=3)
-    painter.paint("another disc", (255, 0, 255), [], tmp_path / "b.png", seed=4)
+    out = painter.paint("a disc", (255, 0, 255), [], tmp_path / "a.png", seed=3, size=(256, 256))
+    painter.paint("another disc", (255, 0, 255), [], tmp_path / "b.png", seed=4, size=(144, 256))
     img = cv2.imread(str(out))
     assert img.shape == (256, 256, 3) and tuple(img[0, 0]) == (255, 0, 255) and loads == [1]  # loaded once
-    assert (tmp_path / "b.png").exists()
+    assert cv2.imread(str(tmp_path / "b.png")).shape == (256, 144, 3)  # a whole frame at its own shape
 
 
 def test_the_painter_says_why_it_cannot_start(monkeypatch):
@@ -141,3 +142,44 @@ def test_the_painter_says_why_it_cannot_start(monkeypatch):
     monkeypatch.setattr(painter, "_start", lambda: threading.Thread(target=painter.serve, args=(port,), daemon=True).start())
     with pytest.raises(painter.PainterError, match="needs a GPU"):
         painter.ready(wait=30)
+
+
+def test_a_background_and_the_style_key_are_painted_whole_at_the_films_shape_and_never_cut_out(tmp_path, monkeypatch):
+    """On a real GPU the cut-out lifted a chair and a rug out of 'the living room at night': a set is a whole frame."""
+    from vidosuper.graphics import birefnet
+    from vidosuper.motion import cartoon
+
+    monkeypatch.setenv("VIDO_PAINTER", "local")
+    monkeypatch.setattr(birefnet, "person_matte", lambda *a, **k: pytest.fail("a whole frame is never cut out"))
+    asked = []
+
+    def fake(prompt, key, refs, out, seed=0, size=(1024, 1024)):
+        asked.append({"prompt": prompt, "size": size, "out": out})
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out), np.full((size[1], size[0], 3), (90, 40, 20), np.uint8))
+        return out
+
+    monkeypatch.setattr(painter, "paint", fake)
+    desk = tmp_path / "board"
+    (desk / "assets").mkdir(parents=True)
+    (desk / "settings.json").write_text(json.dumps({"width": 1080, "height": 1920}))
+    cartoon.paint_command(desk, ["style_key", "the moonlit living room, the robot tiny in it",
+                                 "bg_hallway", "the long dark hallway"])
+    assert [a["size"] for a in asked] == [(768, 1360), (768, 1360)]  # the film's 9:16, about a megapixel
+    assert all(a["prompt"].startswith("Paint over the whole of image 1, edge to edge") for a in asked)
+    img = cv2.imread(str(desk / "assets" / "bg_hallway.png"), cv2.IMREAD_UNCHANGED)
+    assert img.shape == (1360, 768, 3)  # whole: no transparency, nothing trimmed
+    asked.clear()
+    cartoon.paint_command(desk, ["--whole", "far_hills", "rolling hills under the moon"])
+    assert asked and asked[0]["size"] == (768, 1360)
+    assert painter.size_for(16 / 9) == (1360, 768)
+
+
+def test_a_painting_asked_for_as_a_whole_frame_is_whole_whatever_its_name():
+    from vidosuper.motion import scenes
+
+    assert scenes.is_whole("floor2", "picture-book gouache painting filling the whole vertical frame")
+    assert scenes.is_whole("far_room2", "the room")
+    assert scenes.is_whole("hall", "a full-bleed vertical background painting of the hallway")
+    assert not scenes.is_whole("dog_sniff", "the dog's nose, sniffing, three-quarter view")
+    assert not scenes.is_whole("plug", "a white plug on its cable, isolated")

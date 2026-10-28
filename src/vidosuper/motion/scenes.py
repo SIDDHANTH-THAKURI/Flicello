@@ -521,11 +521,26 @@ def desk(brief: Brief, video: Path, folder: Path, previous: str | None = None, p
 PAINT_MODEL = "gemini-3-pro-image"
 
 
-def paint(what: str, out: Path, light: Path | None = None, like: Path | None = None) -> tuple[int, int]:
+WHOLE_NAMES = re.compile(r"^(style_key|bg|background|backdrop|sky|set|world|far|establishing)([_-]|$)", re.I)
+WHOLE_WORDS = re.compile(r"full[- ]?bleed|full[- ]frame|fill(s|ing)? the (whole|entire|full)|edge[- ]to[- ]edge|"
+                         r"background (painting|plate|layer)|backdrop|whole (frame|picture|canvas)", re.I)
+
+
+def is_whole(name: str, what: str) -> bool:
+    """A background or set (by its name, or the words it is asked in), painted whole and never cut out."""
+    return bool(WHOLE_NAMES.match(name) or WHOLE_WORDS.search(what))
+
+
+def paint(what: str, out: Path, light: Path | None = None, like: Path | None = None, whole: bool = False,
+          aspect: float = 9 / 16) -> tuple[int, int]:
     """A painted asset of `what`, cut out (transparent PNG). `light`: a frame of the shot, whose light and colour it
-    is painted in; `like`: an asset whose style it matches. Returns its size in px."""
+    is painted in; `like`: an asset whose style it matches. `whole`: a whole picture (a background, the style key
+    frame), painted edge to edge at `aspect` (width / height) and never cut out. Returns its size in px."""
     import cv2
     import numpy as np
+
+    if whole:
+        return _paint_whole(what, out, light, like, aspect)
 
     # Gemini paints on a flat key colour that is keyed out: magenta, or green when the thing itself is pink or purple.
     # The open model paints on plain white and the cut-out model lifts the thing off it: on a flat key colour it draws
@@ -553,6 +568,45 @@ def paint(what: str, out: Path, light: Path | None = None, like: Path | None = N
     return crop.shape[1], crop.shape[0]
 
 
+def _paint_whole(what: str, out: Path, light: Path | None, like: Path | None, aspect: float) -> tuple[int, int]:
+    """A whole picture, edge to edge: a background, a set, the film's style key frame. Nothing is cut out of it."""
+    import cv2
+
+    from . import painter
+
+    which = painter_kind()
+    if which == "local":
+        refs, notes = [], []
+        if light is not None and light.exists():
+            refs.append(light)
+            notes.append(f"Light it the way image {len(refs) + 1} is lit; paint nothing from image {len(refs) + 1}.")
+        if like is not None and like.exists():
+            flat = out.parent / ".raw" / f".like-{like.stem}.png"
+            _on_key(like, WHITE, flat)
+            refs.append(flat)
+            k = len(refs) + 1
+            notes.append(f"Image {k} is only a sample of the painting style: paint in its style, detail, palette and "
+                         f"light, but draw nothing that is in image {k}.")
+        prompt = (f"Paint over the whole of image 1, edge to edge: {what}. A complete full-frame picture that fills "
+                  "the whole canvas, nothing left blank or white, no border, frame or text. " + " ".join(notes))
+        raw = out.parent / ".raw" / f".painted-{out.stem}.png"
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            painter.paint(prompt, WHITE, refs, raw, seed=int(hashlib.sha1(what.encode()).hexdigest()[:8], 16),
+                          size=painter.size_for(aspect))
+        except painter.PainterError as exc:
+            raise SceneError(str(exc)) from exc
+        img = cv2.imread(str(raw), cv2.IMREAD_COLOR)
+    else:
+        img = _paint_gemini(f"{what}. A complete full-frame picture filling the whole image edge to edge (aspect "
+                            f"{aspect:.3f}), no border, frame or text", False, light, like, whole=True)
+    if img is None:
+        raise SceneError("the painter's picture couldn't be read")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), img)
+    return img.shape[1], img.shape[0]
+
+
 def painter_kind() -> str:
     """Who paints: "local" (the open model on this machine's GPU, motion/painter.py) or "gemini" (Gemini's image
     model with their key). VIDO_PAINTER chooses; by default the local painter where it can run, else Gemini."""
@@ -572,7 +626,7 @@ def painter_kind() -> str:
                      "extra installed (pip install -e \".[paint]\"), or add a Gemini key on the Connect page")
 
 
-def _paint_gemini(what: str, green: bool, light: Path | None, like: Path | None):
+def _paint_gemini(what: str, green: bool, light: Path | None, like: Path | None, whole: bool = False):
     import cv2
     import numpy as np
     from google import genai
@@ -590,6 +644,8 @@ def _paint_gemini(what: str, green: bool, light: Path | None, like: Path | None)
     prompt = (f"{what}. A single isolated element for a motion graphics composite: the whole of it in frame, nothing "
               f"cropped, centred, on a perfectly flat {key_name} with no shadow, gradient or texture on the "
               "background, no ground, no text, no border. Premium, richly lit, crisp edges.")
+    if whole:
+        prompt = f"{what}. Premium, richly lit, painterly."
     parts: list = []
     if light is not None and light.exists():
         parts += [types.Part.from_bytes(data=light.read_bytes(), mime_type="image/jpeg"),

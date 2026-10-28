@@ -28,6 +28,12 @@ PORT = int(os.environ.get("VIDO_PAINTER_PORT", "8791"))
 IDLE = float(os.environ.get("VIDO_PAINTER_IDLE", "1200"))
 SIDE = 1024
 STEPS = 40
+# Lightning (lightx2v/Qwen-Image-Lightning, Apache-2.0): a distilled LoRA that paints in 8 steps instead of 40, about
+# five times faster, a little less fine detail. VIDO_PAINTER_LIGHTNING=1 when a film has many pieces to paint.
+LIGHTNING = os.environ.get("VIDO_PAINTER_LIGHTNING", "").strip() in ("1", "true", "yes")
+LIGHTNING_LORA = ("lightx2v/Qwen-Image-Lightning",
+                  "Qwen-Image-Edit-2509/Qwen-Image-Edit-2509-Lightning-8steps-V1.0-bf16.safetensors")
+LIGHTNING_STEPS = 8
 WHOLE_ON_GPU_GB = 64  # below this much free GPU memory, the model's parts visit the GPU in turn (cpu offload)
 
 
@@ -80,26 +86,43 @@ class _Painter:
         self.device = device()
         if self.device is None:
             raise PainterError("the local painter needs a GPU (NVIDIA with CUDA, or Apple Silicon)")
-        self.pipe = QwenImageEditPlusPipeline.from_pretrained(MODEL, torch_dtype=torch.bfloat16)
+        extra = {}
+        if LIGHTNING:  # the scheduler it was distilled with (shift 3), as its authors give it
+            import math
+
+            from diffusers import FlowMatchEulerDiscreteScheduler
+
+            extra["scheduler"] = FlowMatchEulerDiscreteScheduler.from_config({
+                "base_image_seq_len": 256, "base_shift": math.log(3), "invert_sigmas": False,
+                "max_image_seq_len": 8192, "max_shift": math.log(3), "num_train_timesteps": 1000, "shift": 1.0,
+                "shift_terminal": None, "stochastic_sampling": False, "time_shift_type": "exponential",
+                "use_beta_sigmas": False, "use_dynamic_shifting": True, "use_exponential_sigmas": False,
+                "use_karras_sigmas": False})
+        self.pipe = QwenImageEditPlusPipeline.from_pretrained(MODEL, torch_dtype=torch.bfloat16, **extra)
+        self.steps, self.cfg = (LIGHTNING_STEPS, 1.0) if LIGHTNING else (STEPS, 4.0)
         if self.device == "cuda" and torch.cuda.mem_get_info()[0] / 1024 ** 3 < WHOLE_ON_GPU_GB:  # free now: the other
             # models (music, cut-outs) may be on the same GPU
             self.pipe.enable_model_cpu_offload()
         else:
             self.pipe.to(self.device)
+        if LIGHTNING:  # on the GPU first: fused on the CPU it takes many minutes
+            self.pipe.load_lora_weights(LIGHTNING_LORA[0], weight_name=LIGHTNING_LORA[1])
+            self.pipe.fuse_lora()
         self.pipe.set_progress_bar_config(disable=True)
         self.lock = threading.Lock()
 
-    def paint(self, prompt: str, key: tuple[int, int, int], refs: list[str], seed: int) -> "Image.Image":
-        """`key`: the colour of the plain picture it paints into (image 1)."""
+    def paint(self, prompt: str, key: tuple[int, int, int], refs: list[str], seed: int,
+              size: tuple[int, int] = (SIDE, SIDE)) -> "Image.Image":
+        """`key`: the colour of the plain picture it paints into (image 1); `size`: (width, height) of the picture."""
         from PIL import Image
 
-        canvas = Image.new("RGB", (SIDE, SIDE), key)
+        canvas = Image.new("RGB", size, key)
         images = [canvas] + [Image.open(r).convert("RGB") for r in refs[:2] if Path(r).exists()]
         gen = self.torch.Generator(device="cpu").manual_seed(seed)
         with self.lock, self.torch.inference_mode():
-            out = self.pipe(image=images, prompt=prompt, negative_prompt=" ", true_cfg_scale=4.0, guidance_scale=1.0,
-                            num_inference_steps=STEPS, num_images_per_prompt=1, generator=gen,
-                            height=SIDE, width=SIDE)  # else it takes the size of the last picture given
+            out = self.pipe(image=images, prompt=prompt, negative_prompt=" ", true_cfg_scale=self.cfg,
+                            guidance_scale=1.0, num_inference_steps=self.steps, num_images_per_prompt=1, generator=gen,
+                            height=size[1], width=size[0])  # else it takes the size of the last picture given
         return out.images[0]
 
 
@@ -135,13 +158,17 @@ def serve(port: int = PORT) -> None:
 
         def do_POST(self):  # noqa: N802
             state["last"] = time.time()
+            if self.path == "/quit":  # the video model needs the GPU (motion/videogen.py)
+                self._send(200, {"bye": True})
+                threading.Thread(target=server.shutdown, daemon=True).start()
+                return
             if state["painter"] is None:
                 self._send(503, {"error": state["error"] or "still loading"})
                 return
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
             try:
                 img = state["painter"].paint(str(body["prompt"]), tuple(body["key"]), list(body.get("refs") or []),
-                                             int(body.get("seed") or 0))
+                                             int(body.get("seed") or 0), tuple(body.get("size") or (SIDE, SIDE)))
                 out = Path(body["out"])
                 out.parent.mkdir(parents=True, exist_ok=True)
                 img.save(out)
@@ -177,7 +204,11 @@ def _ask(path: str = "/", body: dict | None = None, timeout: float = 10.0) -> di
 
 
 def _start() -> None:
-    """The painter process, started detached (it outlives the desk command that started it)."""
+    """The painter process, started detached (it outlives the desk command that started it). A video model holding
+    the GPU (motion/videogen.py) is asked to let it go first."""
+    from . import videogen
+
+    videogen.release()
     flags = 0
     if os.name == "nt":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
@@ -208,11 +239,19 @@ def ready(wait: float = 1800.0) -> None:
         time.sleep(3)
 
 
-def paint(prompt: str, key: tuple[int, int, int], refs: list[Path], out: Path, seed: int = 0) -> Path:
-    """One painting by the painter process into a plain picture of the `key` colour (as RGB), saved at `out`."""
+def size_for(aspect: float, area: int = SIDE * SIDE) -> tuple[int, int]:
+    """(width, height) of about `area` pixels at `aspect` (width / height), each a multiple of 16 (the model's own)."""
+    w = int(round((area * aspect) ** 0.5 / 16)) * 16
+    return w, int(round(area / w / 16)) * 16
+
+
+def paint(prompt: str, key: tuple[int, int, int], refs: list[Path], out: Path, seed: int = 0,
+          size: tuple[int, int] = (SIDE, SIDE)) -> Path:
+    """One painting by the painter process into a plain picture of the `key` colour (as RGB) of `size`, saved at
+    `out`."""
     ready()
     said = _ask("/paint", {"prompt": prompt, "key": list(key), "refs": [str(r) for r in refs], "out": str(out),
-                           "seed": seed}, timeout=900)
+                           "seed": seed, "size": list(size)}, timeout=3600)  # queued behind other desks: wait
     if said.get("error") or not out.exists():
         raise PainterError(f"the local painter failed: {said.get('error') or 'no picture'}")
     return out

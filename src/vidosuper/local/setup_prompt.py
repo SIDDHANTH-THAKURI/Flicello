@@ -30,7 +30,10 @@ def prompt(port: int = 8765) -> str:
         f'("{py}" -m pip install -e "{REPO_ROOT}[sound]", then "{py}" -m pip install --no-deps "{STABLE_AUDIO_3}") '
         "and download the music model (the \"Music maker\" item says how; about 12 GB). The sound effects model "
         "(the \"Sound effects\" item) is gated: tell me to accept its licence on Hugging Face and log in there "
-        "myself, then download it.",
+        "myself, then download it. For cartoons: with an NVIDIA GPU of 80 GB, install the video models "
+        f'("{py}" -m pip install -e "{REPO_ROOT}[video]", then "{py}" -m vidosuper.motion.videogen prepare cartoon, and '
+        "prepare anime for anime; about 70 GB each, so tell me first). Without one, Blender (blender.org) animates "
+        "cartoons as rigs.",
         f"4. Do NOT handle my API keys or log in to anything for me. If a key is missing, tell me to add it on the "
         f"Connect page (http://127.0.0.1:{port}/connect). If Claude Code itself is not logged in, tell me to run "
         "`claude` and log in.",

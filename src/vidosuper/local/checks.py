@@ -149,6 +149,7 @@ def models(models_dir: Path) -> list[dict]:
                      str(models_dir), "it downloads itself on the first video with speech", does="what is said, word by word"))
     out.append(painter_item())
     out += sound_items()
+    out += video_items()
     return out
 
 
@@ -197,6 +198,30 @@ def sound_items() -> list[dict]:
                    f"gated: accept its licence at huggingface.co/{model} and log in (huggingface-cli login), then "
                    f"huggingface-cli download {model}")
         out.append(_item(f"model:{kind}", "models", label, status, detail, fix, needed=False, does=does))
+    return out
+
+
+def video_items() -> list[dict]:
+    """The video models that animate cartoons (motion/videogen.py): optional, as Blender rigs can animate instead."""
+    from ..motion import videogen
+
+    able = videogen.available()
+    out = []
+    for look, label, size, src in (
+            ("cartoon", "Cartoon animation (Wan 2.2, on your GPU)", "about 70 GB", "Wan 2.2 (Apache-2.0)"),
+            ("anime", "Anime animation (AniSora V3.2, on your GPU)", "about 70 GB", "AniSora by Bilibili (Apache-2.0)")):
+        if not able:
+            status, detail = OFF, ("needs an NVIDIA GPU with 80 GB" if videogen.device() is None and _has_torch()
+                                   else "not installed (pip install -e \".[video]\")")
+        elif videogen.downloaded(look):
+            status, detail = OK, f"{src} ready"
+        else:
+            status, detail = MISSING, f"{src}: not downloaded yet ({size})"
+        out.append(_item(f"model:video-{look}", "models", label, status, detail,
+                         f"pip install -e \".[video]\" (PyTorch with CUDA), then: python -m vidosuper.motion.videogen "
+                         f"prepare {look}", needed=False,
+                         does="brings each painted shot to life (real motion), for cartoons" if look == "cartoon"
+                         else "brings each painted shot to life in anime style"))
     return out
 
 
