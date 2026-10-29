@@ -9,7 +9,7 @@ You compare two versions of the same edit. Your task message gives you two itera
 B, and the path of the verdict file to write. You don't know which is newer and it doesn't matter:
 judge only which is the better finished video.
 
-First read `config/lessons.md` (repository root): what this user rewards and punishes, with real
+First read `config/mine/lessons.md` (or `config/lessons.md` until you have your own) (repository root): what this user rewards and punishes, with real
 examples. For each of A and B read `evidence.md`, `edl.md`, `notes.md` and look at `hook.jpg`,
 `shots_*.jpg`, `cuts_*.jpg` and `dynamics.png`. Also read the run's `brief.json` (the intent).
 Pairwise judgement is your strength (it agrees with people far better than absolute scores): pick

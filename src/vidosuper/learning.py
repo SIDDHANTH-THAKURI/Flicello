@@ -1,7 +1,10 @@
-"""The learning loop. Every rated result goes into config/ratings.jsonl (with what the critics predicted)
-and a dated post-mortem into config/lessons.md, which every agent reads before the next edit
-(Reflexion: turn each result into a lesson in words). The critics' bias against the user's ratings is
-measured here, so a drifting panel shows up as a number."""
+"""The learning loop. Every rated result goes into the person's own ratings (with what the critics predicted)
+and a dated post-mortem into their own lessons, which every agent reads before the next edit (Reflexion: turn
+each result into a lesson in words). The critics' bias against the person's ratings is measured here, so a
+drifting panel shows up as a number.
+
+Their own files live in config/mine/ (never committed); config/ratings.jsonl and config/lessons.md are the empty
+starters that ship with Flicello, read until they have their own, and copied when the first lesson is written."""
 
 from __future__ import annotations
 
@@ -11,12 +14,21 @@ from pathlib import Path
 
 from .config import REPO_ROOT
 
-RATINGS = REPO_ROOT / "config" / "ratings.jsonl"
-LESSONS = REPO_ROOT / "config" / "lessons.md"
+STARTER_RATINGS = REPO_ROOT / "config" / "ratings.jsonl"
+STARTER_LESSONS = REPO_ROOT / "config" / "lessons.md"
+MINE = REPO_ROOT / "config" / "mine"
+RATINGS = MINE / "ratings.jsonl"
+LESSONS = MINE / "lessons.md"
 POSTMORTEMS = "## 6. Post-mortems (newest first)"
 
 
-def read_ratings(path: Path = RATINGS) -> list[dict]:
+def lessons_path() -> Path:
+    """The lessons the agents read: their own, else the starter."""
+    return LESSONS if LESSONS.exists() else STARTER_LESSONS
+
+
+def read_ratings(path: Path | None = None) -> list[dict]:
+    path = path or (RATINGS if RATINGS.exists() else STARTER_RATINGS)
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -43,7 +55,12 @@ def critic_bias(ratings: list[dict]) -> tuple[float | None, int]:
 
 
 def add_postmortem(title: str, text: str, path: Path = LESSONS, day: str | None = None) -> None:
-    """Put a dated post-mortem at the top of the lessons file's post-mortem list."""
+    """Put a dated post-mortem at the top of the lessons file's post-mortem list (their own file, begun from the
+    starter the first time)."""
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(STARTER_LESSONS.read_text(encoding="utf-8") if STARTER_LESSONS.exists() else "# Lessons\n",
+                        encoding="utf-8")
     content = path.read_text(encoding="utf-8")
     if POSTMORTEMS not in content:
         content = content.rstrip("\n") + f"\n\n{POSTMORTEMS}\n"

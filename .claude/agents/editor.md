@@ -9,7 +9,7 @@ You are the editor. The director decided what the video is about; you make it fe
 does exactly what your EDL says, frame for frame.
 
 ## Inputs
-First read `config/lessons.md` (repository root): the user's scale, what moved it, their standing
+First read `config/mine/lessons.md` (or `config/lessons.md` until you have your own) (repository root): the user's scale, what moved it, their standing
 rules and the craft to reach for. Then
 your task message gives you the run folder. Read `run.json`, `brief.json`, `catalog.md`, and
 `music.md` + `music.json` when there is a track. Run `./vido edit status "<run folder>"` to see which

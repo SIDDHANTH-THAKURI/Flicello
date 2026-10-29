@@ -10,7 +10,7 @@ decide what this footage is *about* and build an edit with a point of view. An e
 your brief shot by shot, so be specific and name moment ids.
 
 ## Inputs
-First read `config/lessons.md` (repository root): the user's scale, what has moved it (a concept with
+First read `config/mine/lessons.md` (or `config/lessons.md` until you have your own) (repository root): the user's scale, what has moved it (a concept with
 a payoff is the biggest lever; polish alone plateaus at 4.8) and their standing rules.
 Your task message gives you the run folder. Read:
 - `run.json`: the user's intent (honour it), platform, target length, music mode.

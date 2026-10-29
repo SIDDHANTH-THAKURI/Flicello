@@ -22,7 +22,7 @@ RUN apt-get update \
 WORKDIR /app
 # dependencies first (a stub package), so a code change doesn't reinstall them; the editable install then
 # points at /app/src, where the real code lands
-COPY pyproject.toml README.md PLAN.md ./
+COPY pyproject.toml README.md ./
 RUN mkdir -p src/vidosuper && echo '__version__ = "0.1.0"' > src/vidosuper/__init__.py \
  && python -m venv /venv \
  && /venv/bin/pip install --upgrade pip \

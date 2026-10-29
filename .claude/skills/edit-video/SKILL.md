@@ -6,7 +6,7 @@ description: VidoSuper - turn a folder of raw clips into an edited video with a 
 # Edit video
 
 Run every command from the repository root (`./vido` in Bash, `.\vido.cmd` in PowerShell).
-**Read `config/lessons.md` first** — the user's scale (5 = creators they admire, 6 = the best edit
+**Read `config/mine/lessons.md` (or `config/lessons.md` until you have your own) first** — the user's scale (5 = creators they admire, 6 = the best edit
 they've seen), what has moved it, and their rules. The user is token-conscious: talk in short lines,
 get approval at the two gates below, and don't render what they haven't agreed to.
 
@@ -44,8 +44,8 @@ get approval at the two gates below, and don't render what they haven't agreed t
    1–10 rating, and a separate music rating when the music changed.
 8. **Learn (every time):** `./vido rate <score> --version "<what>" --project <trip> [--music N]
    [--intro-outro N] [--critics N] --note "<their words>" --lesson "<what moved the score, what didn't,
-   the rule it implies>"` — it logs `config/ratings.jsonl`, puts the post-mortem on top of
-   `config/lessons.md` and prints the critics' bias. Update the user-taste memory. The next edit starts
+   the rule it implies>"` — it logs `config/mine/ratings.jsonl`, puts the post-mortem on top of
+   `config/mine/lessons.md` and prints the critics' bias. Update the user-taste memory. The next edit starts
    by reading the lessons. Every ~3 ratings: a short retro (promote what mattered, prune what didn't).
 
 ## The agent loop (when the user asks for it, or for long-form)

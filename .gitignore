@@ -46,3 +46,7 @@ motion/node_modules/
 !site/media/*.mp4
 site/.vercel/
 site/.env*
+
+# your own learning loop (config/mine/: ratings and lessons) and private notes stay on this machine
+config/mine/
+private/

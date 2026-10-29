@@ -1,6 +1,6 @@
 # VidoSuper
 
-AI video editor for raw trip footage. Design and roadmap: [PLAN.md](PLAN.md).
+AI video editor for raw trip footage. Overview: [README.md](../README.md).
 
 ## Setup (once)
 

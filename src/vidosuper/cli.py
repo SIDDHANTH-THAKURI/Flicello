@@ -886,7 +886,7 @@ def rate(score: float | None = typer.Argument(None, help="The user's rating (lea
          intro_outro: float | None = typer.Option(None, "--intro-outro", help="Separate rating for the intro/outro"),
          critics: float | None = typer.Option(None, help="What the critic panel predicted (overall)"),
          note: str = typer.Option("", help="The user's words"),
-         lesson: str = typer.Option("", help="Post-mortem for config/lessons.md: what moved the score, what didn't")) -> None:
+         lesson: str = typer.Option("", help="Post-mortem for your lessons (config/mine/lessons.md): what moved the score, what didn't")) -> None:
     """Log the user's rating of a result (and the critics' prediction), so every edit learns from the last."""
     from .learning import add_postmortem, log_rating, read_ratings, summary
 
