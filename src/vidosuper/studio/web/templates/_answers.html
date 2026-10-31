@@ -1,6 +1,6 @@
-{# The starting questions: each with its options, "Decide for each film", and "Other" with their own words. #}
-{% macro answers(profile) %}
-{% for key, question, options in QUESTIONS %}
+{# The starting questions: each with its options, "Decide for each film", and "Other" with their own words (`only`: just these). #}
+{% macro answers(profile, only=none) %}
+{% for key, question, options in QUESTIONS if only is none or key in only %}
 <fieldset class="group" data-other-group>
   <legend>{{ question }}</legend>
   <div class="choices">

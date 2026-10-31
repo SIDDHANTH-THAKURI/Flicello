@@ -13,6 +13,7 @@ Security in one place:
 from __future__ import annotations
 
 import asyncio
+import os
 import json
 import mimetypes
 import re
@@ -43,6 +44,13 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 def note_read(p: dict) -> list[str]:
     """'How I read your note': what was taken from their words, so a miss is visible before anything starts."""
+    if p["kind"] != "montage":  # a talk or a voice isn't cut to a beat: say what is taken for those instead
+        from ...motion.moments import wants_text
+
+        if not p["intent"]:
+            return []
+        return ["What you describe is shown as you say it, each change on your words",
+                "Words on screen, as you asked" if wants_text(p["intent"]) else "No words on screen unless you ask"]
     lines = read_note(p["intent"], p["pace"]) if p["intent"] else []
     if (p.get("cut_note") or "").strip():
         lines.append(f"Cutting your way: {p['cut_note']}")
@@ -197,7 +205,8 @@ def create_app(studio: Studio) -> FastAPI:
         response.headers["X-Frame-Options"] = "SAMEORIGIN"  # Cello's shell holds the app in a frame of our own
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"  # no referrer to other sites; our own forms keep their Origin
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"  # talking to Cello
+        response.headers["Permissions-Policy"] = ("camera=(self), microphone=(self), display-capture=(self), "
+                                                  "geolocation=()")  # talking to Cello, recording on the spot
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
@@ -262,7 +271,7 @@ def create_app(studio: Studio) -> FastAPI:
     def back(url: str, msg: str = "") -> RedirectResponse:
         from urllib.parse import quote
 
-        return RedirectResponse(url + (f"?msg={quote(msg)}" if msg else ""), status_code=303)
+        return RedirectResponse(url + (f"{'&' if '?' in url else '?'}msg={quote(msg)}" if msg else ""), status_code=303)
 
     @app.get("/robots.txt", response_class=PlainTextResponse)
     def robots():
@@ -294,8 +303,9 @@ def create_app(studio: Studio) -> FastAPI:
                             {q: str(form.get(f"{q}_other", "")) for q, _, _ in QUESTIONS})
         profile.save()
         studio.db.run("UPDATE users SET onboarded=1 WHERE id=?", (user["id"],))
-        if form.get("next") == "/style":
-            return back("/style", "Saved.")
+        nxt = str(form.get("next", ""))
+        if nxt == "/style" or nxt.startswith("/style?tab="):
+            return back(nxt if nxt.replace("/style?tab=", "").isalnum() or nxt == "/style" else "/style", "Saved.")
         return back("/", "Thanks! Your style is saved; you can change it any time.")
 
     # ------------------------------------------------------------------ home and projects
@@ -344,9 +354,18 @@ def create_app(studio: Studio) -> FastAPI:
                  length: str = Form("30"), length_custom: str = Form(""), length_unit: str = Form("s"),
                  intent: str = Form(""), pace: str = Form("balanced"), kind: str = Form("montage"),
                  style: str = Form("designed"), cut_note: str = Form(""), improvise: int = Form(35),
-                 describe: str = Form(""), confirm: str = Form("")):
+                 describe: str = Form(""), confirm: str = Form(""), draft: str = Form("")):
         user, sess = need_user(request)
         check_csrf(sess, csrf)
+        if draft:  # begun by a drop or a take on this page: their words fill it in, and it starts when it can
+            try:
+                project = studio.fill_draft(user, draft, describe)
+                has = studio.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (draft,)) or 0
+                if project["stage"] == "setup" and (has or (project["kind"] == "voice" and project.get("song"))):
+                    studio.start(project)
+            except ActionError as exc:
+                return back(f"/p/{draft}", str(exc))
+            return back(f"/p/{draft}")
         sent = {"kind": kind, "describe": describe, "title": title, "style": style, "shapes": shapes, "length": length,
                 "length_custom": length_custom, "length_unit": length_unit, "pace": pace, "cut_note": cut_note,
                 "improvise": improvise, "intent": intent}  # shown again if something needs fixing: nothing is lost
@@ -385,6 +404,29 @@ def create_app(studio: Studio) -> FastAPI:
             return page(request, "new.html", user, sess, error=str(exc), default_pace=sent["pace"], form=sent,
                         **new_ctx(user))
         return back(f"/p/{project['id']}")
+
+    @app.post("/api/new/draft")
+    async def new_draft(request: Request):
+        """A film begun the moment they drop clips or record a take on the new-film page."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        try:
+            project = studio.new_draft(user, str(body.get("source", "clips")), str(body.get("describe", "")))
+        except ActionError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"pid": project["id"], "kind": project["kind"], "shapes": project["shapes"]})
+
+    @app.post("/api/p/{pid}/suggest")
+    async def suggest(request: Request, pid: str):
+        """One line of what their dropped clips could become, from a frame of each."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        try:
+            text = await run_in_threadpool(studio.suggest_from_clips, user, pid)
+        except ActionError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return JSONResponse({"text": text})
 
     def owned(user: dict, pid: str) -> dict:
         try:
@@ -474,7 +516,9 @@ def create_app(studio: Studio) -> FastAPI:
         draft = studio.draft_of(p) if p["stage"] == "done" else None
         from ..storage import earlier_clips
         earlier = earlier_clips(studio.db, s, p) if p["stage"] == "setup" and p["kind"] == "montage" else []
+        talk_words = film_words(p) if p["stage"] in ("done", "confirm") and p["kind"] in ("talk", "voice") else []
         return page(request, "project.html", user, sess, p=p, job=job, queued_note=studio.queued_note(job), clips=clips,
+                    talk_words=talk_words,
                     clip_thumbs=clip_thumbs, posters=posters, earlier=earlier,
                     joblog=steps_of(job or (studio.db.one("SELECT * FROM jobs WHERE project_id=? ORDER BY id DESC LIMIT 1",
                                                           (pid,)) if p["stage"] == "failed" else None)),
@@ -484,7 +528,7 @@ def create_app(studio: Studio) -> FastAPI:
                     can_compose=studio.can_compose(),
                     names=clip_names(p) if p["stage"] == "understood" else {},
                     lengths=studio.lengths_for(user),
-                    eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"]),
+                    eta=studio.eta(job), total_eta=studio.total_estimate(p["kind"], p),
                     render_eta=studio.typical_seconds("render"),
                     note_lines=note_read(p),
                     sample=samples[0] if samples else None, latest=latest, older=older, rated=feedback,
@@ -506,6 +550,26 @@ def create_app(studio: Studio) -> FastAPI:
                     polish_left=studio.polish_left(p) if p["stage"] == "understood" else 0,
                     chunk=s.limits.chunk_bytes, brief_open=request.query_params.get("open") == "brief",
                     **editor_view(p, user))
+
+    def film_words(p: dict) -> list[list]:
+        """What is said in a talk or voice film, word by word ([start, end, word, is it a change's word]), for the
+        Moments tab: the words light up as the film plays, and the ones a change happens on are underlined."""
+        from ...work import moments_film as mf
+
+        try:
+            speech = studio.said(p)
+        except Exception:  # noqa: BLE001 - no words: the tab shows the moments alone
+            return []
+        if not speech:
+            return []
+        info = json.loads(p["info"]) if p.get("info") else {}
+        keys = {w.lower() for m in info.get("moments") or [] for c in m.get("changes") or []
+                for w in re.findall(r'on "([^"]+)"', str(c))}
+        out = []
+        for a, b, w in mf.words_of(speech)[:900]:
+            bare = re.sub(r"[^\w'-]", "", w).lower()
+            out.append([round(a, 2), round(b, 2), w, bool(bare and bare in keys)])
+        return out
 
     def act(request: Request, csrf: str, pid: str, fn) -> RedirectResponse:
         user, sess = need_user(request)
@@ -593,6 +657,12 @@ def create_app(studio: Studio) -> FastAPI:
     @app.post("/p/{pid}/start")
     def start(request: Request, pid: str, csrf: str = Form("")):
         return act(request, csrf, pid, lambda u, p: studio.start(p))
+
+    @app.post("/p/{pid}/pauses")
+    def pauses(request: Request, pid: str, csrf: str = Form(""), keep: str = Form("0")):
+        said: list[str] = []
+        done = act(request, csrf, pid, lambda u, p: said.append(studio.keep_pauses(p, keep == "1")))
+        return back(f"/p/{pid}", said[0]) if said else done
 
     @app.post("/p/{pid}/pick")
     def pick(request: Request, pid: str, csrf: str = Form(""), pitch: int = Form(0)):
@@ -702,6 +772,36 @@ def create_app(studio: Studio) -> FastAPI:
             return {"id": mid}
         return RedirectResponse(f"/p/{pid}#editor", status_code=303)
 
+    @app.get("/api/p/{pid}/wave")
+    def wave(request: Request, pid: str, file: str):
+        """A version's sound as 600 peaks (0-1), for the timeline under the film; kept beside it once made."""
+        user, _ = need_user(request, api=True)
+        p = owned(user, pid)
+        work = workdir(s, p["user_id"], pid)
+        try:
+            video = safe_child(work.out, file)
+        except Exception:
+            raise HTTPException(404, "No such file.") from None
+        if video is None or not video.exists() or video.suffix.lower() != ".mp4":
+            raise HTTPException(404, "No such file.")
+        cached = video.with_suffix(".wave.json")
+        if not cached.exists() or cached.stat().st_mtime < video.stat().st_mtime:
+            from ...ffmpeg import ffmpeg_bin
+            import subprocess as _sp
+
+            done = _sp.run([ffmpeg_bin(), "-v", "error", "-i", str(video), "-vn", "-ac", "1", "-ar", "2000", "-f", "s16le", "-"],
+                           capture_output=True, timeout=120)
+            import array
+
+            pcm = array.array("h", done.stdout[: len(done.stdout) // 2 * 2])
+            n = 600
+            step = max(1, len(pcm) // n)
+            peaks = [max((abs(x) for x in pcm[k * step:(k + 1) * step]), default=0) / 32768 for k in range(n)]
+            top = max(peaks) or 1.0
+            cached.write_text(json.dumps([round(v / top, 3) for v in peaks]), encoding="utf-8")
+        return Response(cached.read_text(encoding="utf-8"), media_type="application/json",
+                        headers={"Cache-Control": "private, max-age=3600"})
+
     @app.get("/p/{pid}/editor", response_class=HTMLResponse)
     def editor_panel(request: Request, pid: str):
         """The editor panel alone, for the page to swap in when a reply lands."""
@@ -792,12 +892,66 @@ def create_app(studio: Studio) -> FastAPI:
         user, sess = need_owner(request)
         from ...local import checks, keys as local_keys, setup_prompt
 
+        from ...local import fixes
+
         rep = checks.report(s.home, s.models_dir)
         groups = {}
         for item in rep["items"]:
+            item["fixable"] = item["status"] in (checks.MISSING, checks.FAILING) and fixes.fixable(item["id"])
             groups.setdefault(item["group"], []).append(item)
+        ok = [i for i in rep["items"] if i["status"] == checks.OK]
+        bad = [i for i in rep["items"] if i["status"] in (checks.MISSING, checks.FAILING)
+               and (i["needed"] or i["status"] == checks.FAILING)]
+        health = {"ok": len(ok), "total": len(ok) + len(bad), "bad": len(bad)}
         return page(request, "connect.html", user, sess, rep=rep, groups=groups, prompt=setup_prompt.prompt(s.port),
-                    brain=s.owner_brain, blender=s.blender_path, keys=local_keys.KEYS)
+                    brain=s.owner_brain, blender=s.blender_path, keys=local_keys.KEYS, tabs=connect_tabs(rep, groups),
+                    health=health)
+
+    def connect_tabs(rep: dict, groups: dict) -> list[dict]:
+        """Connect's five tabs, each with its count: how many work, how many need them (needed and not working), how
+        many are optional and not set."""
+        from ...local import checks
+
+        out = []
+        for t, label, icon, part in (("pc", "This computer", "gpu", []), ("claude", "Claude", "brain", ["brain"]),
+                                     ("keys", "Keys", "key", ["keys"]), ("tools", "Tools", "chip", ["tools"]),
+                                     ("models", "Models", "wave", ["models"])):
+            items = [i for g in part for i in groups.get(g, [])]
+            bad = [i for i in items if i["status"] in (checks.MISSING, checks.FAILING) and (i["needed"] or i["status"] == checks.FAILING)]
+            ok = [i for i in items if i["status"] == checks.OK]
+            optional = [i for i in items if i not in bad and i not in ok]
+            if t == "pc":
+                machine_ok = rep["machine"].get("ready", True)
+                n, cls = ("fast" if machine_ok else "slow"), ("ok" if machine_ok else "opt")
+            elif t == "claude":
+                n, cls = ("ready", "ok") if not bad else ("needs you", "bad")
+            elif bad:
+                n, cls = f"{len(bad)} failing" if any(i["status"] == checks.FAILING for i in bad) else f"{len(bad)} missing", "bad"
+            elif t == "keys":
+                n, cls = (f"{len(ok)} saved" if ok else f"{len(optional)} optional"), ("ok" if ok else "opt")
+            else:
+                n, cls = f"{len(ok)}/{len(ok) + len(optional)}", "ok"
+            out.append({"t": t, "label": label, "icon": icon, "n": n, "cls": cls, "needs": bool(bad)})
+        return out
+
+    @app.post("/api/connect/fix")
+    async def connect_fix(request: Request):
+        """Fix it for me: start mending one item (fixed steps only), and the page follows it."""
+        user, sess = need_owner(request)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        from ...local import fixes
+
+        run = fixes.start(str(body.get("item", "")), s.home, s.models_dir)
+        return JSONResponse(fixes.state(run.item))
+
+    @app.get("/api/connect/fix")
+    def connect_fix_state(request: Request, item: str):
+        need_owner(request)
+        from ...local import fixes
+
+        return JSONResponse(fixes.state(item) or {"item": item, "steps": [], "done": True, "ok": False,
+                                                  "detail": "Nothing is being fixed."})
 
     @app.get("/api/connect/report")
     def connect_report(request: Request):
@@ -972,7 +1126,8 @@ def create_app(studio: Studio) -> FastAPI:
 
         try:
             project = film if hands is not None else cello_film(user, body.get("pid"))
-            out = await run_in_threadpool(act, studio, user, project, str(body.get("name", "")), body.get("args") or {})
+            out = await run_in_threadpool(act, studio, user, project, str(body.get("name", "")), body.get("args") or {},
+                                          hands is not None)
             go = (out.get("ui") or {}).get("go") or "" if isinstance(out, dict) else ""
             if hands is not None and go.startswith("/p/"):  # the agent opened or started a film: it works on that now
                 entry["project_id"] = go.split("/")[2]
@@ -987,6 +1142,66 @@ def create_app(studio: Studio) -> FastAPI:
             return JSONResponse({"result": f"Not done, something broke: {type(exc).__name__}: {str(exc)[:200]}. "
                                            "Try diagnose, or tell them plainly."})
         return JSONResponse(out)
+
+    CELLO_MODELS = [("claude-haiku-5-5", "Haiku", "fastest replies; real work still goes to your hands"),
+                     ("claude-sonnet-5-5", "Sonnet", "a little slower, sharper"),
+                     ("claude-opus-5-5", "Opus", "the deepest thinker; slowest replies")]
+
+    @app.get("/api/cello/settings")
+    def cello_settings(request: Request):
+        """What the ring shows: their access level, Cello's voice and model (owner only for the machine's settings)."""
+        user, sess = need_user(request, api=True)
+        from ..cello import access_of
+        from ...local import voice as local_voice
+
+        try:
+            from ..cello import voice_mode
+            mode = voice_mode()
+        except RuntimeError:
+            mode = "none"
+        return JSONResponse({"access": access_of(studio, user), "voice": mode, "voice_chosen": s.cello_voice,
+                             "local_voice": local_voice.available(), "gemini": bool(os.environ.get("GEMINI_API_KEY")),
+                             "model": local_voice.MODEL, "models": [{"id": m, "name": n, "says": d} for m, n, d in CELLO_MODELS],
+                             "owner": studio.is_owner(user)})
+
+    @app.post("/api/cello/settings")
+    async def cello_settings_set(request: Request):
+        """Their access level (theirs), Cello's voice and model (this machine's: the owner's)."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        from ..cello import ACCESS
+        from ...local import voice as local_voice
+
+        said = []
+        if body.get("access") in ACCESS:
+            profile = studio.profile(user)
+            profile.answers["cello_access"] = body["access"]
+            profile.save()
+            said.append({"advisor": "Advisor: I'll look, point and suggest; you make the changes.",
+                         "copilot": "Co-pilot: small edits at once, and I'll ask before anything that takes time.",
+                         "full": "Full access: I'll do it all and tell you after."}[body["access"]])
+        machine = {k: body[k] for k in ("voice", "model") if k in body}
+        if machine and not studio.is_owner(user):
+            raise HTTPException(403, "Only the owner changes Cello's voice and model on this computer.")
+        if machine:
+            import yaml
+
+            path = s.home / "studio.yaml"
+            data = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.exists() else {}
+            if machine.get("voice") in ("auto", "local", "gemini"):
+                data["cello_voice"] = s.cello_voice = machine["voice"]
+                if machine["voice"] == "auto":
+                    os.environ.pop("VIDO_CELLO_VOICE_MODE", None)
+                else:
+                    os.environ["VIDO_CELLO_VOICE_MODE"] = machine["voice"]
+                said.append(f"Voice: {machine['voice']} (restart Cello to hear it)")
+            if machine.get("model") in {m for m, _, _ in CELLO_MODELS}:
+                data["cello_model"] = s.cello_model = machine["model"]
+                os.environ["VIDO_CELLO_MODEL"] = local_voice.MODEL = machine["model"]
+                said.append("Model changed (restart Cello to use it)")
+            path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        return JSONResponse({"ok": True, "said": " ".join(said) or "Nothing changed."})
 
     @app.post("/api/cello/log")
     async def cello_log(request: Request):
@@ -1259,6 +1474,18 @@ def create_app(studio: Studio) -> FastAPI:
         except (ActionError, ValueError, ValidationError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
         return await run_in_threadpool(timeline_view, user, pid)
+
+    @app.get("/api/p/{pid}/peek")
+    async def designer_peek(request: Request, pid: str):
+        """The newest frame the designer looked at while it designs the film: the world taking shape."""
+        user, _ = need_user(request, api=True)
+        p = owned(user, pid)
+        from ...motion.worlds import latest_look
+
+        path = latest_look(workdir(studio.s, p["user_id"], p["id"]).root / "worlds")
+        if path is None or not path.exists():
+            raise HTTPException(404, "nothing to see yet")
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.get("/api/p/{pid}/sprite/{clip_id}")
     async def editor_sprite(request: Request, pid: str, clip_id: str):
@@ -1580,7 +1807,7 @@ def create_app(studio: Studio) -> FastAPI:
                              data or None, drop_logo=form.get("drop_logo") == "1")
         except ActionError as exc:
             return back("/style", str(exc))
-        return back("/style", "Your brand is saved: your next films and changes use it.")
+        return back("/style?tab=brand", "Your brand is saved: your next films and changes use it.")
 
     @app.post("/style/forget-looks")
     def style_forget_looks(request: Request, csrf: str = Form("")):
@@ -1598,7 +1825,31 @@ def create_app(studio: Studio) -> FastAPI:
         profile = studio.profile(user)
         if profile.drop(rule):
             profile.save()
-        return back("/style", "Removed.")
+        return back("/style?tab=rules", "Removed: it waits in the bin for 30 days.")
+
+    @app.post("/style/restore")
+    def style_restore(request: Request, csrf: str = Form(""), rule: str = Form("")):
+        user, sess = need_user(request)
+        check_csrf(sess, csrf)
+        profile = studio.profile(user)
+        if profile.restore(rule):
+            profile.save()
+        return back("/style?tab=rules", "It's back.")
+
+    @app.post("/api/style/rule")
+    async def style_rule(request: Request):
+        """A rule switched off or on, removed to the bin, or brought back, in place (the page doesn't reload)."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        rid, op = str(body.get("rule", "")), str(body.get("op", ""))
+        profile = studio.profile(user)
+        done = {"on": lambda: profile.switch(rid, True), "off": lambda: profile.switch(rid, False),
+                "drop": lambda: profile.drop(rid), "restore": lambda: profile.restore(rid)}.get(op, lambda: False)()
+        if done:
+            profile.save()
+        return JSONResponse({"ok": bool(done), "on": sum(1 for r in profile.rules if not r.get("off")),
+                             "bin": len(profile.binned())})
 
     @app.post("/style/add")
     def style_add(request: Request, csrf: str = Form(""), text: str = Form("")):
@@ -1607,7 +1858,7 @@ def create_app(studio: Studio) -> FastAPI:
         profile = studio.profile(user)
         if profile.add(text, "you added it", "you"):
             profile.save()
-        return back("/style", "Added.")
+        return back("/style?tab=rules", "Added.")
 
     @app.post("/account/wipe")
     def wipe(request: Request, csrf: str = Form(""), sure: str = Form("")):

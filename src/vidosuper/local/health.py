@@ -22,7 +22,7 @@ SIGNS = [
      "the key was refused", "check the key on the Connect page (it may be wrong or revoked)"),
     (r"rate[_ ]limit|too many requests|429|resource[_ ]exhausted", "it is rate limited",
      "wait a minute; it carries on by itself"),
-    (r"session limit|usage limit|hit your limit", "your Claude plan's limit is reached",
+    (r"session limit|usage limit|5-hour limit|hit your (\S+ )?limit", "your Claude plan's limit is reached",
      "wait for it to reset (Claude Code shows when), or switch to the Anthropic API on the Connect page"),
     (r"overloaded|unavailable|503|502|timed? ?out|timeout", "the service is down or slow right now",
      "it is tried again; nothing to do"),

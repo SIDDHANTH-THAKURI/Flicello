@@ -140,7 +140,7 @@ def _desk(folder: Path, system: str, prompt: str, commands: tuple[str, ...], bud
         said = str(json.loads(proc.stdout.decode("utf-8", errors="replace")).get("result") or "")
     except ValueError:
         said = ""
-    if re.search(r"(session|usage|weekly) limit|hit your limit", said, re.I):
+    if re.search(r"(session|usage|weekly|5-hour) limit|hit your (\S+ )?limit", said, re.I):
         raise CartoonError(f"the Claude plan's limit is reached: {said[:160]}")
     if proc.returncode != 0 and not said:
         raise CartoonError("the desk stopped: " + proc.stderr.decode("utf-8", errors="replace")[-600:])

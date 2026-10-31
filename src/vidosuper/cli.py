@@ -930,11 +930,15 @@ def connect(as_json: bool = typer.Option(False, "--json", help="Machine-readable
     from .local import checks, keys
     from .studio.settings import settings as studio_settings
 
+    import contextlib
+    import sys
+
     s = studio_settings()
     keys.load(s.home)
-    rep = checks.report(s.home, s.models_dir)
-    if test:
-        rep["tests"] = {svc: checks.test(svc) for svc in ("gemini", "elevenlabs", "anthropic")}
+    with contextlib.redirect_stdout(sys.stderr):  # a model library that prints while it loads can't spoil the JSON
+        rep = checks.report(s.home, s.models_dir)
+        if test:
+            rep["tests"] = {svc: checks.test(svc) for svc in ("gemini", "elevenlabs", "anthropic")}
     if as_json:
         print(json.dumps(rep, indent=1))
         return

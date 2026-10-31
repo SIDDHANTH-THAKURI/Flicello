@@ -2,84 +2,105 @@
 {% from "_answers.html" import answers %}
 {% set active = 'style' %}
 {% block title %}My style · {{ app_name }}{% endblock %}
-{% block main_class %}page narrow{% endblock %}
 {% block content %}
-<header class="page-head">
-  <div>
-    <p class="eyebrow-s rise">My style</p>
-    <h1 class="page-title rise d1">What Flicello knows <em class="sun-text">about your taste.</em></h1>
-    <p class="page-sub rise d2">The editor reads this before every film and adds to it when you rate one. Remove anything that's wrong, or add your own.</p>
-  </div>
-</header>
-
 {% set brand = profile.answers.get('brand') or {} %}
-<section class="panel rise d2" id="brand">
-  <h2>Your brand</h2>
-  <p class="help">Its colour goes on every title, caption and graphic, in its type; its logo sits in a corner of your films.</p>
-  <form method="post" action="/style/brand" enctype="multipart/form-data" class="brand-form">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>Name <input name="name" maxlength="40" value="{{ brand.name|default('') }}" placeholder="Your brand"></label>
-    <label>Colour <input name="color" type="color" value="{{ brand.color or '#ffd38a' }}"></label>
-    <label>Type <select name="font">{% for v, t in [('display', 'Bold grotesque'), ('serif', 'Italic serif'), ('mono', 'Mono')] %}<option value="{{ v }}"{% if brand.font == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
-    <label>Logo <input name="logo" type="file" accept="image/png,image/jpeg,image/webp"></label>
-    {% if brand.logo %}<img class="brand-logo" src="{{ brand.logo }}" alt="Your logo"><label class="inline"><input type="checkbox" name="drop_logo" value="1"> Take the logo off</label>{% endif %}
-    <button class="btn-sun" type="submit"><span>Save my brand</span></button>
-  </form>
-</section>
+{% set on_rules = profile.rules|rejectattr('off')|list %}
+{% set binned = profile.binned() %}
+{% set colour = brand.color or '#ff5a36' %}
+<div class="sheet-page my-style rise">
+  <h1>My style</h1>
+  <p class="muted">What every film of yours starts from. The editor reads it before every film and adds to it when you rate one.</p>
 
-<section class="panel rise d2">
-  <h2>Rules</h2>
-  <p class="lead-s">{{ profile.rules|length }} rule{{ '' if profile.rules|length == 1 else 's' }} so far.</p>
-  {% if profile.rules %}
-  <ul class="rules">
-    {% for r in profile.rules %}
-    <li class="{{ r.source }}"><span>{{ r.text }}{% if r.why %} <i>· {{ r.why }}</i>{% endif %}{% if r.get('for') == 'films' %} <i>· films from footage only</i>{% elif r.get('for') == 'talks' %} <i>· voice and talking videos only</i>{% endif %}</span>
-      <form method="post" action="/style/drop" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="rule" value="{{ r.id }}">
-        <button class="link" type="submit">Remove</button></form></li>
-    {% endfor %}
-  </ul>
-  {% else %}<p class="muted">Nothing yet. It fills in as you make and rate films.</p>{% endif %}
-  <form method="post" action="/style/add" class="row-form gap-top">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="field"><span>Add your own</span><input name="text" maxlength="240" placeholder="e.g. Never use slow motion" required></label>
-    <button class="btn" type="submit">Add</button>
-  </form>
-</section>
-
-<section class="panel rise d3">
-  <h2>Starting answers</h2>
-  <form method="post" action="/welcome">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <input type="hidden" name="next" value="/style">
-    <p class="lead-s">Starting points for every film; "Decide for each film" fixes nothing.</p>
-    {{ answers(profile) }}
-    <label class="field"><span>Never show</span><input name="never" maxlength="200" value="{{ profile.answers.get('never', '') }}"></label>
-    <button class="btn" type="submit">Save answers</button>
-  </form>
-</section>
-
-{% if profile.taste %}
-<section class="panel rise d3">
-  <h2>Your looks</h2>
-  <p class="lead-s">The looks you picked, passed over and changed for your voice and talking videos. Your next video's first look is made from them; the others still try something new.</p>
-  <div class="rows">
-    {% for t in profile.taste|reverse %}{% if loop.index <= 12 %}<div><span class="k">{{ {'picked': 'Picked', 'passed': 'Passed over', 'changed': 'Changed', 'own': 'Your own idea', 'rated': 'Rated'}.get(t.what, t.what) }} · {{ t.look.title or t.note }}</span><span class="v">{% if t.what in ('changed', 'rated') %}{{ t.note }}{% else %}{{ t.at }}{% endif %}</span></div>{% endif %}{% endfor %}
+  <div class="ptabs" role="tablist" data-tabs="tab" aria-label="My style">
+    <button role="tab" type="button" data-t="brand"><svg class="ico s"><use href="#i-palette"/></svg>Brand</button>
+    <button role="tab" type="button" data-t="cut"><svg class="ico s"><use href="#i-scissors"/></svg>How I cut</button>
+    <button role="tab" type="button" data-t="music"><svg class="ico s"><use href="#i-music"/></svg>Sound</button>
+    <button role="tab" type="button" data-t="rules"><svg class="ico s"><use href="#i-list"/></svg>Rules <span class="n opt" data-rules-n>{{ on_rules|length }}</span></button>
+    {% if profile.taste %}<button role="tab" type="button" data-t="looks"><svg class="ico s"><use href="#i-star"/></svg>Looks I liked <span class="n opt">{{ profile.taste|length }}</span></button>{% endif %}
+    {% if profile.history %}<button role="tab" type="button" data-t="learned"><svg class="ico s"><use href="#i-brain"/></svg>What it learned</button>{% endif %}
   </div>
-  <form method="post" action="/style/forget-looks" class="gap-top">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="btn" type="submit">Forget my looks</button>
-  </form>
-</section>
-{% endif %}
 
-{% if profile.history %}
-<section class="panel rise d3">
-  <h2>What it learned</h2>
-  <div class="rows">
-    {% for h in profile.history|reverse %}<div><span class="k">{{ h.summary or "Updated" }}</span><span class="v">{{ h.at }}</span></div>{% endfor %}
+  <div class="tabpanel" data-p="brand">
+    <form method="post" action="/style/brand" enctype="multipart/form-data" class="style-grid" data-brand-form>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="fgrid one">
+        <label class="field"><span>Name <em>on titles and the end card</em></span><input class="input" name="name" maxlength="40" value="{{ brand.name|default('') }}" placeholder="Your name or your brand" data-brand-name></label>
+        <label class="field"><span>Type</span>
+          <select class="input" name="font" data-brand-font aria-label="Type">{% for v, t in [('display', 'Display · bold, modern'), ('serif', 'Serif · editorial'), ('mono', 'Mono · technical')] %}<option value="{{ v }}"{% if (brand.font or 'display') == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+        <div class="field"><span>Colour <em>every graphic takes it</em></span>
+          <input type="hidden" name="color" value="{{ colour }}" data-brand-colour>
+          <div class="swatches" role="group" aria-label="Colour">
+            {% for c in ['#ff5a36', '#8f5bff', '#16a37a', '#2f6bff', '#e8b923', '#ff2e7e'] %}<button type="button" class="sw{{ ' sel' if c == colour }}" data-c="{{ c }}" aria-label="{{ c }}" aria-pressed="{{ 'true' if c == colour else 'false' }}"></button>{% endfor %}
+            <span class="sw add" title="Any colour"><input type="color" value="{{ colour }}" aria-label="Any colour" data-brand-pick></span>
+            <span class="mono muted brand-hex" data-brand-hex>{{ colour }}</span>
+          </div></div>
+        <div class="field"><span>Logo <em>used when you say “my logo”</em></span>
+          <label class="filedrop"><input type="file" name="logo" accept="image/png,image/jpeg,image/webp" data-brand-logo>
+            <span class="thumb" data-brand-thumb>{% if brand.logo %}<img class="brand-logo" src="{{ brand.logo }}" alt="">{% else %}<svg class="ico"><use href="#i-up"/></svg>{% endif %}</span>
+            <span><b data-name>{{ 'Your logo' if brand.logo else 'Drop a logo' }}</b><small>PNG, JPG or WebP, or choose a file</small></span></label>
+          {% if brand.logo %}<div class="checks gap-top"><label><input type="checkbox" name="drop_logo" value="1"><i></i>Take the logo off</label></div>{% endif %}</div>
+        <div class="tab-save"><button class="btn sun" type="submit">Save brand</button></div>
+      </div>
+      <div>
+        <div class="endcard font-{{ brand.font or 'display' }}" data-endcard data-colour="{{ colour }}">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+          <div class="mark"><div class="logo" data-ec-logo>{% if brand.logo %}<img src="{{ brand.logo }}" alt="">{% else %}{{ (brand.name or 'F')[:1]|upper }}{% endif %}</div><div class="name" data-ec-name>{{ brand.name or 'Your name' }}</div><div class="sub2">end card</div></div>
+        </div>
+        <p class="preview-cap"><span class="pill ok"><span class="dot"></span>live</span>How your end card and graphics will look</p>
+      </div>
+    </form>
   </div>
-</section>
-{% endif %}
+
+  <form method="post" action="/welcome" class="answers-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="next" value="/style?tab=cut" data-answers-next>
+    <div class="tabpanel" data-p="cut" hidden>
+      <p class="hint">Starting points for every film; “Decide for each film” fixes nothing.</p>
+      {{ answers(profile, ['pace', 'look']) }}
+      <label class="field"><span>Never show <em>in any film</em></span><input class="input" name="never" maxlength="200" value="{{ profile.answers.get('never', '') }}" placeholder="e.g. car interiors, my face close up"></label>
+      <div class="tab-save"><button class="btn sun" type="submit">Save how I cut</button></div>
+    </div>
+    <div class="tabpanel" data-p="music" hidden>
+      {{ answers(profile, ['sound']) }}
+      <div class="trow"><span>Music is made for each film, to its length and its moments; your voice always stays on top.</span><span class="pill opt">always</span></div>
+      <div class="tab-save"><button class="btn sun" type="submit">Save sound</button></div>
+    </div>
+  </form>
+
+  <div class="tabpanel" data-p="rules" hidden>
+    <div class="rule-list" data-rules>
+      {% for r in profile.rules %}
+      <div class="trow rule{{ ' off' if r.off }}" data-rule="{{ r.id }}">
+        <span class="rule-text">{{ r.text }}{% if r.why %} <i>· {{ r.why }}</i>{% endif %}{% if r.get('for') == 'films' %} <i>· films from footage only</i>{% elif r.get('for') == 'talks' %} <i>· voice and talking videos only</i>{% endif %}</span>
+        <span class="rule-acts"><button type="button" class="sw-btn" role="switch" aria-checked="{{ 'false' if r.off else 'true' }}" aria-label="Follow this rule" data-rule-switch></button><button type="button" class="btn sm ghost" data-rule-drop>Remove</button></span>
+      </div>
+      {% else %}<p class="muted">Nothing yet. It fills in as you make and rate films.</p>{% endfor %}
+    </div>
+    <form method="post" action="/style/add" class="rule-add field">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <span>Add your own</span>
+      <span class="key-row"><input class="input" name="text" maxlength="240" placeholder="e.g. Never use slow motion" required><button class="btn sun" type="submit">Add</button></span>
+    </form>
+    <details class="more gap-top rule-bin" data-rule-bin{% if not binned %} hidden{% endif %}><summary>Removed, kept for 30 days (<span data-bin-n>{{ binned|length }}</span>)</summary>
+      {% for r in binned|reverse %}<div class="trow off" data-binned="{{ r.id }}"><span>{{ r.text }}</span><button type="button" class="btn sm" data-rule-restore>Bring it back</button></div>{% endfor %}
+    </details>
+    <p class="hint gap-top">Or tell Cello: “drop the car rule”, “bring back the car rule”.</p>
+  </div>
+
+  {% if profile.taste %}
+  <div class="tabpanel" data-p="looks" hidden>
+    <p class="hint">The looks you picked, passed over and changed for your voice and talking videos. Your next video's first look is made from them; the others still try something new.</p>
+    {% for t in profile.taste|reverse %}{% if loop.index <= 12 %}<div class="trow"><span><b>{{ {'picked': 'Picked', 'passed': 'Passed over', 'changed': 'Changed', 'own': 'Your own idea', 'rated': 'Rated'}.get(t.what, t.what) }}</b> · {{ t.look.title or t.note }}{% if t.what in ('changed', 'rated') and t.note %} <i>· {{ t.note }}</i>{% endif %}</span><span class="pill opt">{{ t.at }}</span></div>{% endif %}{% endfor %}
+    <form method="post" action="/style/forget-looks" class="tab-save"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn sm" type="submit">Forget my looks</button></form>
+  </div>
+  {% endif %}
+
+  {% if profile.history %}
+  <div class="tabpanel" data-p="learned" hidden>
+    {% for h in profile.history|reverse %}<div class="trow"><span>{{ h.summary or "Updated" }}</span><span class="pill opt">{{ h.at }}</span></div>{% endfor %}
+  </div>
+  {% endif %}
+</div>
 
 <details class="danger-zone">
   <summary>Delete all my films and my style (keep my account)</summary>

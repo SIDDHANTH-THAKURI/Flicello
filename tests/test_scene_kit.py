@@ -156,6 +156,39 @@ def test_the_rigs_move_things_with_weight_in_a_real_render(tmp_path):
 
 
 @ENGINE
+def test_the_made_parts_are_born_grow_and_stay_where_they_were_put(tmp_path):
+    html = """<!doctype html><html><head><style>#stage{position:absolute;inset:0}</style></head><body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="2" data-width="960" data-height="540">
+    <div id="stage" class="clip" data-start="0" data-duration="2">
+    <svg id="art" viewBox="0 0 960 540" width="960" height="540"></svg></div></div><script>
+    const tl = gsap.timeline({ paused: true }), svg = document.getElementById('art');
+    const g = () => craft.el('g', {}, svg);
+    const ball = craft.sphere(g(), { x: 240, y: 220, r: 80, color: '#2060ff', halo: false });
+    ball.born(tl, 0.6); ball.alive(tl, 0.8, 2);
+    const tree = craft.tree(g(), { x: 700, y: 480, h: 300, color: '#20c040', seed: 2 });
+    tree.grow(tl, 0.8); tree.sway(tl, 1.6, 2);
+    craft.cloud(g(), { x: 480, y: 80, w: 200, color: '#ff2020' }).drift(tl, 0, 2, 40);
+    window.__timelines = window.__timelines || {}; window.__timelines["main"] = tl;
+    </script></body></html>"""
+    times = [0.1, 1.9]
+    shots = scenes.stills(scenes.project(html, tmp_path / "proj"), times, tmp_path / "stills")
+    assert (tmp_path / "proj" / "craft.js").exists()
+
+    def mask(png, channel):  # one strong channel over the others
+        img = cv2.imread(str(png), cv2.IMREAD_UNCHANGED).astype(int)
+        others = [c for c in range(3) if c != channel]
+        return (img[..., 3] > 128) & (img[..., channel] > 150) & (img[..., channel] - img[..., others].max(axis=2) > 60)
+
+    assert mask(shots[0.1], 0).sum() < 50 and mask(shots[0.1], 1).sum() < 50  # nothing before its word
+    ys, xs = np.where(mask(shots[1.9], 0))  # the sphere: whole, where it was put
+    assert abs(xs.mean() - 240) < 25 and abs(ys.mean() - 220) < 25 and xs.max() - xs.min() > 120
+    ys, xs = np.where(mask(shots[1.9], 1))  # the tree's crown: grown, above its own foot, low enough to meet its trunk
+    assert abs(xs.mean() - 700) < 40 and ys.max() > 480 - 300 * 0.62 and ys.min() > 480 - 300 * 1.15
+    ys, xs = np.where(mask(shots[1.9], 2))  # the cloud: still where it was put (plus its drift), not slid to a corner
+    assert abs(xs.mean() - 518) < 30 and abs(ys.mean() - 80) < 30
+
+
+@ENGINE
 def test_the_director_reviews_the_scene_at_the_desk(tmp_path, monkeypatch, capsys):
     import json
 

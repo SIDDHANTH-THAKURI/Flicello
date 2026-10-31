@@ -126,21 +126,35 @@ def test_a_new_request_takes_over_from_an_unanswered_question_and_a_stop_hands_o
     assert studio.db.one("SELECT status FROM work WHERE id=?", (second["id"],))["status"] == "stopped"
 
 
-def test_flicello_asks_the_shape_once_and_carries_out_the_answer(studio):
+def test_flicello_decides_the_shape_from_the_clips_and_says_it_in_a_line(studio):
     user = _person(studio)
     film = studio.create_project(user, "Beach", "16:9", 15, "fun")
     studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, width, height, created) "
                   "VALUES ('c1', ?, 'a.mp4', 'a.mp4', 1, 10, 1080, 1920, 0)", (film["id"],))
     asks.after_upload(studio, user, film)
-    asks.after_upload(studio, user, film)  # asked once
+    asks.after_upload(studio, user, film)  # said once
     rows = studio.db.all("SELECT * FROM work WHERE project_id=? AND kind='system'", (film["id"],))
-    assert len(rows) == 1 and json.loads(rows[0]["options"])[0].startswith("Vertical")  # its pick first
+    assert len(rows) == 1 and rows[0]["status"] == "told" and rows[0]["say"].startswith("Vertical 9:16, like your clips")
+    assert studio.db.project(film["id"])["shapes"] == "9:16"  # decided, not asked
+    assert any(e.startswith("[decided] Vertical") for e in cello.work_events(studio, user, film, 0))
+    assert {"what": "Shape", "value": asks.SHAPES["9:16"]} in asks.choices(studio, film)
+
+
+def test_flicello_asks_the_shape_only_on_a_real_toss_up_and_carries_out_the_answer(studio):
+    user = _person(studio)
+    film = studio.create_project(user, "Beach", "9:16", 15, "a trip film for my YouTube channel")
+    studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, width, height, created) "
+                  "VALUES ('c1', ?, 'a.mp4', 'a.mp4', 1, 10, 1080, 1920, 0)", (film["id"],))
+    asks.after_upload(studio, user, film)  # their words say landscape, the footage is vertical
+    rows = studio.db.all("SELECT * FROM work WHERE project_id=? AND kind='system'", (film["id"],))
+    assert len(rows) == 1 and rows[0]["status"] == "asking"
+    assert json.loads(rows[0]["options"])[0].startswith("Landscape") and "your clips are mostly vertical" in rows[0]["say"]
     assert any(e.startswith("[question]") for e in cello.work_events(studio, user, film, 0))
     with pytest.raises(ValueError):
         studio.work.answer(user, rows[0]["id"], "hmm")
-    done = studio.work.answer(user, rows[0]["id"], "vertical please")
-    assert done["status"] == "done" and studio.db.project(film["id"])["shapes"] == "9:16"
-    assert {"what": "Shape", "value": asks.SHAPES["9:16"]} in asks.choices(studio, film)
+    done = studio.work.answer(user, rows[0]["id"], "landscape please")
+    assert done["status"] == "done" and studio.db.project(film["id"])["shapes"] == "16:9"
+    assert {"what": "Shape", "value": asks.SHAPES["16:9"]} in asks.choices(studio, film)
 
 
 def test_cello_picks_the_idea_they_name_by_its_number(studio, monkeypatch):

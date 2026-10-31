@@ -1,90 +1,106 @@
 {% extends "shell.html" %}
 {% set active = 'connect' %}
 {% block title %}Connect · {{ app_name }}{% endblock %}
-{% block main_class %}page narrow{% endblock %}
 {% block content %}
 {% set m = rep.machine %}
-<header class="page-head">
+{% macro state_pill(i) %}{% if i.status == 'ok' %}<span class="pill ok"><span class="dot"></span>working</span>{% elif i.status == 'failing' %}<span class="pill bad"><span class="dot"></span>failing</span>{% elif i.status == 'missing' and i.needed %}<span class="pill bad"><span class="dot"></span>missing</span>{% else %}<span class="pill opt">{{ 'optional' if not i.needed else i.status }}</span>{% endif %}{% endmacro %}
+{% macro row(i, icon) %}
+{% set bad = i.status in ('missing', 'failing') and (i.needed or i.status == 'failing') %}
+<div class="crow {{ 'bad' if bad else ('ok' if i.status == 'ok' else '') }}" data-connect-item="{{ i.id }}">
+  <span class="ic"><svg class="ico"><use href="#i-{{ 'warn' if bad else ('check' if i.status == 'ok' else icon) }}"/></svg></span>
   <div>
-    <p class="eyebrow-s rise">Connect</p>
-    <h1 class="page-title rise d1">Your machine, <em class="sun-text">your Claude.</em></h1>
-    <p class="page-sub rise d2">Flicello runs here, on this computer, with your own Claude Code plan and your own keys. This page shows everything it uses and what's missing.</p>
+    <b>{{ i.label }}</b>
+    {% if i.does %}<small>{{ i.does[:1]|upper ~ i.does[1:] }}.</small>{% endif %}
+    {% if i.detail and i.status == 'ok' %}<small class="mono">{{ i.detail }}</small>{% endif %}
+    {% if bad %}
+    <div class="fix" data-fix-box><b>{{ 'Not working' if i.status == 'failing' else 'Not here yet' }}:</b> {{ i.detail }}.{% if i.fixable %} <b>Fix it for me</b> does it, then proves it with a real test.{% elif i.fix %} To fix it: {{ i.fix }}.{% endif %}</div>
+    {% elif i.status != 'ok' and i.fix %}
+    <small class="opt-how">{{ i.detail }}{% if i.fix %} · to add it: {{ i.fix }}{% endif %}</small>
+    {% endif %}
   </div>
-</header>
+  <div class="acts">{% if i.fixable %}<button class="btn sm sun" type="button" data-fix="{{ i.id }}">Fix it for me</button>{% else %}{{ state_pill(i) }}{% endif %}</div>
+</div>
+{% endmacro %}
 
-<section class="panel rise d2 connect-machine{{ '' if m.ready else ' warn' }}">
-  <h2>This computer</h2>
-  <div class="rows">
-    <div><span class="k">Memory</span><span class="v">{{ m.ram_gb }} GB ({{ m.free_ram_gb }} GB free now)</span></div>
-    <div><span class="k">Graphics</span><span class="v">{% for g in m.gpus %}{{ g.name }}{% if g.vram_gb %} · {{ g.vram_gb }} GB{% endif %}{% if not loop.last %}, {% endif %}{% else %}none found{% endfor %}</span></div>
-    <div><span class="k">CPU threads</span><span class="v">{{ m.cores }}</span></div>
-    <div><span class="k">Free disk</span><span class="v">{{ m.disk_free_gb }} GB</span></div>
+<div class="sheet-page connect rise">
+  <div class="phead">
+    <div>
+      <h1>Connect</h1>
+      <p>What this computer can do, and what you've connected. It opens on the first tab that needs you.</p>
+    </div>
+    {% set circ = 163.4 %}
+    <div class="health" aria-label="{{ health.ok }} of {{ health.total }} working">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><circle class="bg" cx="32" cy="32" r="26"/><circle class="fg" cx="32" cy="32" r="26" stroke-dasharray="{{ circ }}" stroke-dashoffset="{{ (circ * (1 - (health.ok / (health.total or 1))))|round(1) }}"/></svg>
+      <div><b>{{ health.ok }} of {{ health.total }} working</b><small>{% if health.bad %}{{ health.bad }} thing{{ 's' if health.bad != 1 }} need{{ 's' if health.bad == 1 }} you{% else %}Everything it needs is here{% endif %}</small></div>
+    </div>
   </div>
-  {% if not m.ready %}
-  <p class="connect-note">Flicello is built for high-end machines ({{ m.built_for }}) and never lowers its quality to fit a smaller one. This computer has {{ m.short|join('; ') }}: it will work, but designed scenes, clean cut-outs and renders will be slow, and heavy jobs may run out of memory.</p>
-  {% else %}
-  <p class="lead-s">Built for this. Everything runs at full quality.</p>
-  {% endif %}
-</section>
 
-<section class="panel rise d2" id="setup">
-  <h2>Set up with Claude Code</h2>
-  <p class="lead-s">Paste this into Claude Code (in any terminal: run <code>claude</code>). It checks this machine, installs what's missing and tells you what it did. It never touches your keys: add those below.</p>
-  <pre class="connect-prompt" data-connect-prompt>{{ prompt }}</pre>
-  <button type="button" class="btn-sun" data-connect-copy><span>Copy the prompt</span></button>
-</section>
-
-{% set names = {'brain': 'The brain', 'keys': 'Your keys', 'tools': 'Tools', 'models': 'AI models'} %}
-{% for group in ('brain', 'keys', 'tools', 'models') %}
-<section class="panel rise d3" id="{{ group }}">
-  <h2>{{ names[group] }}</h2>
-  {% if group == 'brain' %}
-  <p class="lead-s">What thinks for Flicello: designing scenes, planning edits, writing cartoons, and Cello's thinking.</p>
-  {% elif group == 'keys' %}
-  <p class="lead-s">Kept in this computer's keychain only, never in the repository, and sent only to the service each one belongs to.</p>
+  {% if rep.problems %}
+  <div class="connect-alerts">
+    {% for p in rep.problems %}<div class="crow bad"><span class="ic"><svg class="ico"><use href="#i-warn"/></svg></span><div><b>{{ p.service }}: {{ p.means }}</b><small>{{ p.todo }} · {{ p.at|ago }}</small></div><span class="acts"></span></div>{% endfor %}
+  </div>
   {% endif %}
-  <ul class="connect-list">
-    {% for i in groups.get(group, []) %}
-    <li class="connect-item is-{{ i.status|replace(' ', '-') }}" data-connect-item="{{ i.id }}">
-      <span class="dot" aria-hidden="true"></span>
-      <div class="what">
-        <b>{{ i.label }}</b>{% if i.does %}<small>{{ i.does }}</small>{% endif %}
-        <span class="state">{{ i.status }}{% if i.detail %} · {{ i.detail }}{% endif %}</span>
-        {% if i.status != 'ok' and i.fix %}<span class="fix">{{ i.fix }}</span>{% endif %}
-      </div>
-      {% if group == 'keys' %}
-      <form class="connect-key" data-connect-key="{{ i.key }}">
-        <input type="password" name="value" autocomplete="off" placeholder="{{ 'Replace the key' if i.status == 'ok' else 'Paste your key' }}" aria-label="{{ i.label }}">
-        <button class="btn" type="submit">Save</button>
-        {% if i.status == 'ok' %}<button class="link" type="button" data-connect-test="{{ {'GEMINI_API_KEY': 'gemini', 'ELEVENLABS_API_KEY': 'elevenlabs', 'ANTHROPIC_API_KEY': 'anthropic'}.get(i.key, '') }}">Test</button>{% endif %}
-        <a class="link" href="{{ i.get }}" target="_blank" rel="noopener">Get one</a>
-        <output class="connect-out"></output>
-      </form>
-      {% elif i.id == 'claude' %}
-      <div class="connect-brain">
-        <label><input type="radio" name="brain" value="claude_code" {{ 'checked' if brain == 'claude_code' }} data-connect-brain> Your Claude Code plan</label>
-        <label><input type="radio" name="brain" value="api" {{ 'checked' if brain == 'api' }} data-connect-brain> The Anthropic API (pay per use)</label>
-        <output class="connect-out"></output>
-      </div>
-      {% elif i.id == 'blender' %}
-      <form class="connect-key" data-connect-blender>
-        <input name="value" value="{{ blender }}" placeholder="Path to blender{{ '.exe' if 'Windows' in m.system }}" aria-label="Blender's path">
-        <button class="btn" type="submit">Connect</button>
-        <output class="connect-out"></output>
-      </form>
-      {% endif %}
-    </li>
+
+  <div class="ptabs" role="tablist" data-tabs="tab" aria-label="Connect">
+    {% for t in tabs %}<button role="tab" type="button" data-t="{{ t.t }}"{% if t.needs %} data-needs{% endif %}><svg class="ico s"><use href="#i-{{ t.icon }}"/></svg>{{ t.label }} <span class="n {{ t.cls }}">{{ t.n }}</span></button>{% endfor %}
+  </div>
+
+  <div class="tabpanel" data-p="pc">
+    <div class="crow {{ '' if m.ready else 'bad' }}"><span class="ic"><svg class="ico"><use href="#i-gpu"/></svg></span>
+      <div><b>{% for g in m.gpus %}{{ g.name }}{% if g.vram_gb %} · {{ g.vram_gb }} GB{% endif %}{% if not loop.last %}, {% endif %}{% else %}No graphics card found{% endfor %}</b>
+        <small>{% if m.ready %}Built for this: paints, animates, hears and speaks on this machine at full quality.{% else %}Flicello is built for high-end machines ({{ m.built_for }}) and never lowers its quality to fit a smaller one. This one has {{ m.short|join('; ') }}: it works, but designed scenes, cut-outs and renders are slow.{% endif %}</small></div>
+      <span class="acts">{% if m.ready %}<span class="pill ok"><span class="dot"></span>fast</span>{% else %}<span class="pill warn"><span class="dot"></span>slow</span>{% endif %}</span></div>
+    <div class="crow"><span class="ic"><svg class="ico"><use href="#i-layers"/></svg></span><div><b>{{ m.ram_gb }} GB memory</b><small>{{ m.free_ram_gb }} GB free right now · {{ m.cores }} CPU threads</small></div><span class="acts"></span></div>
+    <div class="crow"><span class="ic"><svg class="ico"><use href="#i-down"/></svg></span><div><b>{{ m.disk_free_gb }} GB free on disk</b><small>Models, footage and renders live here.</small></div><span class="acts"></span></div>
+    <div class="crow" id="setup"><span class="ic"><svg class="ico"><use href="#i-brain"/></svg></span>
+      <div><b>Set everything up with Claude Code</b><small>Paste this into Claude Code (run <code>claude</code> in any terminal). It checks this machine, installs what's missing and tells you what it did. It never touches your keys.</small>
+        <details class="more gap-top"><summary>See the prompt</summary><pre class="connect-prompt" data-connect-prompt>{{ prompt }}</pre></details></div>
+      <span class="acts"><button type="button" class="btn sm" data-connect-copy><span>Copy the prompt</span></button></span></div>
+  </div>
+
+  <div class="tabpanel" data-p="claude" hidden>
+    {% for i in groups.get('brain', []) %}{{ row(i, 'brain') }}{% endfor %}
+    <div class="crow"><span class="ic"><svg class="ico"><use href="#i-brain"/></svg></span>
+      <div><b>What thinks for Flicello</b><small>Designing scenes, planning edits, writing cartoons, and Cello's thinking.</small>
+        <div class="seg gap-top connect-brain" role="group" aria-label="The brain">
+          <button type="button" data-connect-brain="claude_code" aria-pressed="{{ 'true' if brain == 'claude_code' else 'false' }}">Your Claude Code plan</button>
+          <button type="button" data-connect-brain="api" aria-pressed="{{ 'true' if brain == 'api' else 'false' }}">The Anthropic API · pay per use</button>
+        </div>
+        <output class="connect-out hint"></output></div><span class="acts"></span></div>
+  </div>
+
+  <div class="tabpanel" data-p="keys" hidden>
+    <p class="hint">Kept in this computer's keychain only, never in the repository, and sent only to the service each one belongs to. Paste keys here, never in a chat.</p>
+    {% for i in groups.get('keys', []) %}
+    {% set svc = {'GEMINI_API_KEY': 'gemini', 'ELEVENLABS_API_KEY': 'elevenlabs', 'ANTHROPIC_API_KEY': 'anthropic'}.get(i.key, '') %}
+    <div class="crow {{ 'bad' if i.status == 'failing' else ('ok' if i.status == 'ok' else '') }}" data-connect-item="{{ i.id }}">
+      <span class="ic"><svg class="ico"><use href="#i-{{ 'warn' if i.status == 'failing' else 'key' }}"/></svg></span>
+      <div><b>{{ i.label|replace(' (optional)', '') }}</b> {% if not i.needed %}<span class="pill opt">optional</span>{% endif %}
+        <small>{{ i.does[:1]|upper ~ i.does[1:] }}.</small>
+        {% if i.status == 'failing' %}<div class="fix"><b>Not working:</b> {{ i.detail }}. {{ i.fix }}.</div>{% endif %}
+        <form class="connect-key field" data-connect-key="{{ i.key }}">
+          <span class="key-row"><input class="input" type="password" name="value" autocomplete="off" {% if i.key == 'HIGGSFIELD_API_KEY' %}data-check="pair" placeholder="id:secret, the whole key"{% else %}data-check="key" placeholder="{{ 'Replace the key (' ~ i.detail ~ ')' if i.status == 'ok' else 'Paste your key here' }}"{% endif %} aria-label="{{ i.label }}"><button class="btn sm" type="submit">Save</button>{% if i.status == 'ok' and svc %}<button class="btn sm ghost" type="button" data-connect-test="{{ svc }}">Test</button>{% endif %}</span>
+          <span class="hint">{% if i.key == 'HIGGSFIELD_API_KEY' %}One box: the whole key as the console shows it, with the colon.{% elif i.status == 'ok' %}Saved: {{ i.detail }}.{% else %}<a href="{{ i.get }}" target="_blank" rel="noopener">Get one</a>.{% endif %}</span>
+          <output class="connect-out hint"></output>
+        </form></div>
+      <span class="acts">{{ state_pill(i) if i.status == 'ok' else '' }}</span>
+    </div>
     {% endfor %}
-  </ul>
-</section>
-{% endfor %}
+  </div>
 
-{% if rep.problems %}
-<section class="panel rise d3 connect-problems">
-  <h2>Problems while working</h2>
-  <ul class="connect-list">{% for p in rep.problems %}
-    <li class="connect-item is-failing"><span class="dot"></span><div class="what"><b>{{ p.service }}</b><span class="state">{{ p.means }} · {{ p.at|ago }}</span><span class="fix">{{ p.todo }}</span></div></li>
-  {% endfor %}</ul>
-</section>
-{% endif %}
+  <div class="tabpanel" data-p="tools" hidden>
+    {% for i in groups.get('tools', []) %}
+    {% if i.id == 'blender' %}
+    <div class="crow {{ 'ok' if i.status == 'ok' else '' }}" data-connect-item="blender"><span class="ic"><svg class="ico"><use href="#i-{{ 'check' if i.status == 'ok' else 'layers' }}"/></svg></span>
+      <div><b>Blender</b><small>3D scenes. {% if i.status == 'ok' %}<span class="mono">{{ i.detail }}</span>{% else %}Install Blender 4.2 or newer from blender.org, then give its path here.{% endif %}</small>
+        <form class="connect-key field" data-connect-blender><span class="key-row"><input class="input" name="value" value="{{ blender }}" placeholder="Path to blender{{ '.exe' if 'Windows' in m.system }}" aria-label="Blender's path"><button class="btn sm" type="submit">Connect</button></span><output class="connect-out hint"></output></form></div>
+      <span class="acts">{{ state_pill(i) }}</span></div>
+    {% else %}{{ row(i, 'chip') }}{% endif %}
+    {% endfor %}
+  </div>
+
+  <div class="tabpanel" data-p="models" hidden>
+    {% for i in groups.get('models', []) %}{{ row(i, 'wave') }}{% endfor %}
+  </div>
+</div>
 {% endblock %}

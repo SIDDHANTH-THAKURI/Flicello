@@ -2,10 +2,7 @@
 // once as the draft that plays above; undo and redo walk the drafts; Make it renders the draft as a version. What
 // Cello and the work agent change shows up here the same way (the page reloads when they do).
 
-import '../styles/tokens.css';
-import '../styles/studio.css'; // the player's own styles
-import '../styles/light.css';
-import './editor.css';
+import './bundle.css';
 import { keyedAt, Player } from '../app/player.js';
 import { clock, Timeline } from './timeline.js';
 import { inspect } from './inspector.js';

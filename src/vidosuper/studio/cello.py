@@ -78,6 +78,11 @@ Understanding them:
 - When it could mean two very different things and guessing wrong would undo their work, ask one short question.
   Otherwise pick the likely meaning, do it, and say what you did, so they can say "no, the other one".
 
+Never delete for good: deleting a film, every film, their clips, their style or their account is theirs to press.
+When they ask, open the page and point at the button (`page` click shows it lit up without pressing it) and say they
+can press it there; never look for another way to delete, and never remove a confirmation for it. Drafts you made
+(discard) are fine to drop when asked.
+
 Your switch (you can turn yourself down or off):
 - They want you QUIET ("shh", "quiet", "shut up", "hold on", "wait", "not now", "enough", "stop talking", a sigh of
   "okay okay"): call `quiet` and write NO words at all, not even "Okay": silence is the answer. You stay listening;
@@ -276,6 +281,47 @@ TOOLS = [
 ]
 BROWSER = {"open", "show", "play", "pointing", "page", "upload", "quiet", "sleep"}  # run by the page itself
 
+# How much Cello may do on its own (asked once, on hello; changed any time: "take full control", "check with me").
+# Enforced here, whatever the model decides:
+#  - advisor: looks, answers, points and suggests; changes nothing
+#  - copilot (the default): quick, undoable changes at once; a yes before anything that takes time
+#  - full: does it all and tells them after
+# At every level: nothing deleted for good, keys never touched, and a yes before spending paid credit.
+ACCESS = ("advisor", "copilot", "full")
+LOOKS = {"look", "list_films", "open", "show", "play", "pointing", "upload", "find", "diagnose", "quiet", "sleep",
+         "answer"}  # never change anything
+LONG = {"make_it", "build", "step", "effect", "music", "work", "repair"}  # take minutes (or more)
+PAID = {"ai_clip"}  # spends paid credit (their Higgsfield balance)
+for _t in TOOLS:
+    if _t["name"] in LONG | PAID:
+        _t["parameters"].setdefault("properties", {})["they_said_yes"] = {
+            "type": "boolean", "description": "true only once they have said yes to this, just now"}
+
+
+def access_of(studio, user: dict) -> str:
+    """Their access level ("" when they haven't been asked yet: the default then is co-pilot)."""
+    level = studio.profile(user).answers.get("cello_access", "")
+    return level if level in ACCESS else ""
+
+
+def allowed(level: str, name: str, args: dict, hands: bool = False) -> str | None:
+    """Why this tool can't run now at this access level (said back to Cello, which says it to them), or None.
+    `hands`: Cello's work agent, on a request they already said yes to (its long steps are part of that yes)."""
+    level = level or "copilot"
+    if name in LOOKS:
+        return None
+    if level == "advisor":
+        return ("Not done: they gave you Advisor access, so you look, point and suggest, and they make the change "
+                "themselves (or say \"take more control\"). Tell them exactly what to do and where.")
+    yes = bool(args.get("they_said_yes"))
+    if name in PAID and not yes:
+        return ("Not done: this spends paid credit, so ask them first in one sentence (what it makes and that it uses "
+                "their balance), then call again with they_said_yes=true once they agree.")
+    if name in LONG and level == "copilot" and not yes and not hands:
+        return ("Not done: as their co-pilot you ask before anything that takes time. Say what it will do and roughly "
+                "how long, in one sentence, then call again with they_said_yes=true once they say yes.")
+    return None
+
 
 def live_config() -> dict:
     return {"response_modalities": ["AUDIO"], "system_instruction": SYSTEM, "tools": [{"function_declarations": TOOLS}],
@@ -473,13 +519,17 @@ def diagnose(studio, project: dict) -> dict:
 
 # ---------------------------------------------------------------- doing it
 
-def act(studio, user: dict, project: dict | None, name: str, args: dict) -> dict:
+def act(studio, user: dict, project: dict | None, name: str, args: dict, hands: bool = False) -> dict:
     """One of Cello's tools, run with the same checks as the page's buttons. Returns what it should know and say, and
     what the page should do (`ui`: reload a part, go somewhere, point at something)."""
     from . import agent, exports, styles
     from .brain.schemas import ChangeOp
 
     args = dict(args or {})
+    refused = allowed(access_of(studio, user), name, args, hands)
+    if refused:
+        return {"result": refused}
+    args.pop("they_said_yes", None)
 
     def need() -> dict:
         if project is None:
@@ -707,7 +757,7 @@ def work_events(studio, user: dict, project: dict | None, since: float) -> list[
     """What Cello's hands (and Flicello's own questions) did since `since`: a question to ask, done, failed."""
     out = []
     rows = studio.db.all("SELECT * FROM work WHERE user_id=? AND project_id IS ? AND updated>? AND status IN "
-                         "('asking','done','failed') ORDER BY updated", (user["id"], project["id"] if project else None,
+                         "('asking','done','failed','told') ORDER BY updated", (user["id"], project["id"] if project else None,
                                                                          since))
     for r in rows:
         if r["status"] == "asking":
@@ -719,6 +769,8 @@ def work_events(studio, user: dict, project: dict | None, since: float) -> list[
             out.append(f"[work] done: {r['say']}")
         elif r["status"] == "failed":
             out.append(f"[work] failed: {r['say']}")
+        elif r["status"] == "told":  # decided from what Flicello can see: say it in a line
+            out.append(f"[decided] {r['say']}")
     return out
 
 

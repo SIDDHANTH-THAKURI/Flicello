@@ -70,6 +70,36 @@ def claude_code() -> list[dict]:
 
 # ---------------------------------------------------------------- tools
 
+_RENDERER: dict = {}
+
+
+def renderer_starts(timeout: float = 120.0) -> tuple[bool, str]:
+    """Whether the motion engine really draws a frame here (once per process, since it takes a few seconds): a
+    tiny page snapshotted by HyperFrames. (works, what went wrong)."""
+    if "result" in _RENDERER:
+        return _RENDERER["result"]
+    if os.environ.get("VIDO_RENDERER_CHECK") == "0":  # tests: no browser started for every report
+        return True, ""
+    import tempfile
+
+    from ..motion import drawn
+
+    desk = Path(tempfile.mkdtemp(prefix="vido-check-"))
+    try:
+        (desk / "shot.js").write_text("toon.shot({ blur: 0, draw(c, w, h, t) { c.fillStyle = '#7a5cff'; "
+                                      "c.fillRect(0, 0, w, h); } });", encoding="utf-8")
+        drawn.stills(desk, desk / "shot.js", [0.1], desk / "out", width=64, height=64, seconds=0.5)
+        result = (True, "")
+    except Exception as exc:  # noqa: BLE001 - said on the page, with what to do
+        lines = [ln.strip() for ln in str(exc).splitlines() if ln.strip()]
+        why = next((ln for ln in lines if "missing" in ln.lower() or "cannot launch" in ln.lower()), lines[-1] if lines else "")
+        result = (False, f"it is installed but can't draw: {why[:300]}")
+    finally:
+        shutil.rmtree(desk, ignore_errors=True)  # on Windows the browser may still hold a file for a moment
+    _RENDERER["result"] = result
+    return result
+
+
 def tools() -> list[dict]:
     out = []
     out.append(_item("python", "tools", "Python", OK if sys.version_info >= (3, 11) else MISSING,
@@ -95,9 +125,18 @@ def tools() -> list[dict]:
     out.append(_item("frontend", "tools", "The app's pages", OK if any(dist.glob("**/manifest.json")) else MISSING,
                      str(dist), "build them: cd frontend && npm ci && npm run build"))
     engine = REPO_ROOT / "motion" / "node_modules" / ".bin" / ("hyperframes.cmd" if os.name == "nt" else "hyperframes")
-    out.append(_item("hyperframes", "tools", "HyperFrames (the motion engine)", OK if engine.exists() else MISSING,
-                     str(engine), "cd motion && npm ci && npx hyperframes browser ensure",
-                     does="renders designed scenes frame by frame"))
+    if not engine.exists():
+        out.append(_item("hyperframes", "tools", "HyperFrames (the motion engine)", MISSING, str(engine),
+                         "cd motion && npm ci && npx hyperframes browser ensure",
+                         does="renders designed scenes frame by frame"))
+    else:  # found is not enough: its headless Chrome must start (on a bare Linux it lacks system libraries)
+        works, why = renderer_starts()
+        out.append(_item("hyperframes", "tools", "HyperFrames (the motion engine)", OK if works else FAILING,
+                         str(engine) if works else why,
+                         "cd motion && npx hyperframes browser ensure; on Linux also install Chrome's libraries: "
+                         "apt-get install libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 "
+                         "libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 "
+                         "libpango-1.0-0 libcairo2", does="renders designed scenes frame by frame"))
     gsap = REPO_ROOT / "frontend" / "node_modules" / "gsap" / "dist" / "gsap.min.js"
     out.append(_item("gsap", "tools", "GSAP", OK if gsap.exists() else MISSING, str(gsap),
                      "cd frontend && npm ci", does="the animation library designed scenes are written with"))
@@ -105,6 +144,13 @@ def tools() -> list[dict]:
     out.append(_item("blender", "tools", "Blender (optional)", OK if blender else OFF,
                      blender or "not found", "install Blender 4.2+ from blender.org, then set its path on this page",
                      needed=False, does="3D scenes"))
+    if blender and sys.platform.startswith("linux"):  # without the GL loader it renders on the CPU: minutes a frame
+        import ctypes.util
+
+        if not ctypes.util.find_library("EGL"):
+            out.append(_item("blender-gpu", "tools", "Blender on the GPU", FAILING,
+                             "the GL loader (libegl1) is missing, so Blender renders on the CPU: minutes a frame",
+                             "apt-get install libegl1 libgl1", needed=False, does="3D scenes at GPU speed"))
     return out
 
 
@@ -246,7 +292,7 @@ def key_items(home: Path) -> list[dict]:
     for k in keys.KEYS:
         value = os.environ.get(k.name) or keys.get(k.name, home)
         service = {"GEMINI_API_KEY": "gemini", "ELEVENLABS_API_KEY": "elevenlabs", "ANTHROPIC_API_KEY": "anthropic",
-                   "HF_API_KEY_ID": "higgsfield", "HF_API_KEY_SECRET": "higgsfield"}[k.name]
+                   "HIGGSFIELD_API_KEY": "higgsfield"}.get(k.name, k.name.lower())
         if not value:
             status, detail = (MISSING if k.needed else OFF), "not set"
         elif service in failing:

@@ -106,6 +106,10 @@ class StudioSettings(_Strict):
     improve_auto: bool = Field(False, description="Let the studio start the improvement routine (scripts/improve.ps1) "
                                                   "by itself when improve_every ratings have come in.")
     blender_path: str = Field("", description="Blender's program, for 3D scenes (local; empty: looked for).")
+    cello_voice: str = Field("auto", description="Cello's voice: auto, local (this machine: Whisper and Kokoro), or "
+                                                 "gemini (Gemini Live with their key).")
+    cello_model: str = Field("", description="The Claude model Cello thinks with in conversation (empty: the default, "
+                                             "fast).")
 
     @property
     def db_path(self) -> Path:
@@ -199,7 +203,13 @@ def load_settings(home: Path | None = None, overrides: dict | None = None) -> St
         data.pop(k)
     if isinstance(data.get("limits"), dict):
         data["limits"] = {k: v for k, v in data["limits"].items() if k in Limits.model_fields}
-    return StudioSettings.model_validate(data)
+    settings = StudioSettings.model_validate(data)
+    # Cello's voice and model, as chosen in its ring, unless the environment says otherwise
+    if settings.cello_voice in ("local", "gemini") and not os.environ.get("VIDO_CELLO_VOICE_MODE"):
+        os.environ["VIDO_CELLO_VOICE_MODE"] = settings.cello_voice
+    if settings.cello_model and not os.environ.get("VIDO_CELLO_MODEL"):
+        os.environ["VIDO_CELLO_MODEL"] = settings.cello_model
+    return settings
 
 
 @lru_cache(maxsize=1)

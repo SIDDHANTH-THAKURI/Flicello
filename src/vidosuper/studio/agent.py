@@ -685,6 +685,49 @@ def person_act(studio, project: dict, user: dict, person: dict, then: str) -> di
     return {"text": " ".join(lines) or f"{name} noted.", "cards": [], "fast": True}
 
 
+CREATIVE = re.compile(  # asking for something to be made or changed in the film (not a question about it)
+    r"\b(add|make|put|show|design|animate|draw|create|turn|change|replace|redo|rework|swap|move|bring|give|want|need|"
+    r"let'?s|could you|can you|please|instead|should)\b", re.I)
+QUESTION = re.compile(r"^\s*(what|why|how (long|much|many|does|do|is)|when|where|which|who|is it|are you|did you|"
+                      r"do you)\b|\?\s*$", re.I)
+VISUAL = re.compile(r"\b(motion graphics?|graphics?|animat\w*|shapes?|objects?|scenes?|effects?|visuals?|circle|"
+                    r"square|ball|stars?|logo|wings?|world|background|appear\w*|transform\w*|morph\w*|grow\w*|"
+                    r"colou?r\w*|look|style|feel|vibe|music|song|sound\w*|cut|edit|story|intro|end|ending|start|"
+                    r"beginning|title|montage|shots?|clips?|parts?|moments?|transitions?|zoom\w*|slow\w*|fast\w*|"
+                    r"cartoon|drawing|picture|camera|light\w*|glow|explosion|particles?)\b", re.I)
+
+
+def creative_request(words: str) -> bool:
+    """They ask for something to be designed or reworked (a request with something to see or change in it), not a
+    question about the film. Exact quick edits are caught before this (fast_path)."""
+    w = " ".join((words or "").split())
+    return len(w) >= 12 and bool(CREATIVE.search(w)) and bool(VISUAL.search(w)) and not QUESTION.search(w)
+
+
+def hand_over(studio, project: dict, user: dict, words: str) -> dict | None:
+    """A creative request on a made film goes to Claude Code with its full freedom (the work desk: it designs
+    anything, and the fixed changes are only some of its tools), not to the menu of fixed changes. Returns the
+    reply, or None when this is for the editor's own answer."""
+    from ..work import sessions
+
+    asking = studio.db.one("SELECT id FROM work WHERE project_id=? AND kind='agent' AND status='asking' "
+                           "ORDER BY updated DESC LIMIT 1", (project["id"],))
+    if asking is not None and asking["id"] in studio.work.from_page:  # its question, answered here
+        studio.work.answer(user, asking["id"], words)
+        return {"text": "Got it: my hands carry on with that.", "cards": []}
+    if studio.s.owner_brain != "claude_code" or not creative_request(words) or not studio.work_version(project) \
+            or not sessions.available():  # the hands are Claude Code on their plan
+        return None
+    if project["stage"] not in ("done", "review", "confirm"):
+        return None
+    row = studio.work.start(user, project, words)
+    studio.work.from_page.add(row["id"])
+    queued = row["status"] == "queued"
+    return {"text": ("That's a design job, so it goes to my hands (Claude Code), which can make anything you "
+                     "describe. " + ("It starts as soon as the job it's on finishes. " if queued else
+                                     "It's on it now. ") + "I'll tell you here when it's done."), "cards": []}
+
+
 def turn(studio, pid: str, mid: int) -> None:
     """The editor answers their message `mid` (run beside the web request, see Studio.talk)."""
     project = studio.db.project(pid)
@@ -704,6 +747,15 @@ def turn(studio, pid: str, mid: int) -> None:
             return
     except Exception:  # noqa: BLE001 - the editor's own reading takes over
         log.warning("fast path failed for %s", pid, exc_info=True)
+    try:
+        handed = hand_over(studio, project, user, words)
+        if handed is not None:
+            post(studio.db, project, "editor", "text", handed)
+            body["pending"] = False
+            studio.db.run("UPDATE messages SET body=? WHERE id=?", (json.dumps(body), mid))
+            return
+    except Exception:  # noqa: BLE001 - the editor's own reading takes over
+        log.warning("hand-over failed for %s", pid, exc_info=True)
     try:
         messages = [m for m in thread(studio.db, pid) if m["id"] < mid]
         text, facts = view(studio, project, user, words, body.get("refs") or [], messages)

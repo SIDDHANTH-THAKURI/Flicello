@@ -129,6 +129,27 @@ KIND_WORDS = [  # 'something else': which engine can make it (the person sees th
 ]
 
 
+def _one_line(system: str, prompt: str, folder: Path, model: str = "claude-haiku-5-5", timeout: float = 120.0) -> str:
+    """A one-line answer from Claude Code on the person's plan (the pictures named in `prompt`, read from `folder`):
+    its reply is the answer, nothing written to files."""
+    import tempfile
+
+    from ..local import claude_exe, plan_env, run_claude
+
+    with tempfile.TemporaryDirectory(prefix="vido-line-") as tmp:
+        sysfile = Path(tmp) / "system.md"
+        sysfile.write_text(system, encoding="utf-8")
+        cmd = [claude_exe(), "-p", "--output-format", "json", "--model", model, "--system-prompt-file", str(sysfile),
+               "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config", "--max-budget-usd", "2",
+               "--tools", "Read", "--allowedTools", "Read", "--add-dir", str(folder)]
+        proc = run_claude(cmd, prompt, Path(tmp), cwd=tmp, timeout=timeout, env=plan_env())
+    try:
+        data = json.loads(proc.stdout.decode("utf-8", errors="replace"))
+    except ValueError:
+        return ""
+    return "" if data.get("is_error") else str(data.get("result") or "")
+
+
 def route_kind(describe: str) -> tuple[str, str]:
     import re
 
@@ -144,6 +165,7 @@ def route_kind(describe: str) -> tuple[str, str]:
 STYLES = ("designed", "labels")  # designer animations behind the person; clean labels over the video
 TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180, "beat": 45}  # first guesses, until real jobs have run
 DRAW_RATE = {"designed": 20.0, "labels": 3.0}  # first guesses: seconds of drawing per second of a voice or talking video
+MOMENT_SECONDS = 3600.0  # one designed moment, measured 2026-10-30 on an A100: three rounds took about an hour
 
 
 class ActionError(ValueError):
@@ -365,6 +387,64 @@ class Studio:
             log.warning("could not post the editor's hello for %s", pid, exc_info=True)
         return project
 
+    # ---------------------------------------------------------------- the new film, built as they drop and record
+    DRAFT_KINDS = {"clips": "montage", "camera": "talk", "screen": "montage", "voice": "voice"}
+
+    def new_draft(self, user: dict, source: str, describe: str = "") -> dict:
+        """A film started the moment they drop clips or record a take on the new-film page, so what they add has
+        somewhere to go before they press Start (which fills it in). `source`: clips, camera, screen or voice."""
+        kind = self.DRAFT_KINDS.get(source, "montage")
+        return self.create_project(user, "", "9:16" if kind != "talk" else "16:9", 30.0, "", kind=kind,
+                                   describe=" ".join((describe or "").split())[:600] if kind == "montage" else "")
+
+    def fill_draft(self, user: dict, pid: str, describe: str) -> dict:
+        """Start on a film begun by a drop or a take: their words become what it is about, and the kind follows them
+        unless what they recorded already decides it (a take of them talking stays a talk, a voice memo a voice)."""
+        project = self.owned(user, pid)
+        if project["stage"] != "setup":
+            return project
+        words = " ".join((describe or "").split())[:600]
+        kind, routed = project["kind"], project.get("routed") or ""
+        has = self.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (pid,)) or 0
+        if words and kind == "montage" and not project.get("song"):
+            guess, why = route_kind(words)
+            if guess in ("talk", "voice") and (guess != "talk" or has <= 1):
+                kind, routed = guess, why
+        intent = (words + (" " + project["intent"] if project["intent"] and project["intent"] not in words else "")).strip()
+        self.db.run("UPDATE projects SET intent=?, kind=?, routed=?, updated=? WHERE id=?",
+                    (" ".join(intent.split())[:900], kind, routed, time.time(), pid))
+        return self.db.project(pid)
+
+    def suggest_from_clips(self, user: dict, pid: str) -> str:
+        """What these clips could become, in one line, from a frame of each (Flicello looks before they write):
+        shown under the box on the new-film page."""
+        import base64
+
+        from ..motion import scenes
+
+        project = self.owned(user, pid)
+        work = workdir(self.s, user["id"], pid)
+        clips = self.db.all("SELECT * FROM clips WHERE project_id=? ORDER BY created", (pid,))
+        frames = [work.stills / f"clip-{c['id']}.jpg" for c in clips]
+        frames = [f for f in frames if f.exists()][:6]
+        if not frames:
+            return ""
+        system = ("You suggest the short video a person's clips could become, as ONE line in their own voice, the way "
+                  "they'd ask an editor for it (under 16 words, no quotes, no hashtags), naming what is really in the "
+                  "frames: the place, the people, the activity, the mood. e.g. Sydney in 30 seconds, cut on the beat / "
+                  "Our beach day, slow and golden, ending on the sunset. Reply with only that line.")
+        prompt = (f"{len(clips)} clip(s) were just dropped into a new film. Read a frame of each with the Read tool: "
+                  + ", ".join(str(f) for f in frames) + ". Then reply with only the one line.")
+        try:
+            text = _one_line(system, prompt, frames[0].parent)
+        except Exception:  # noqa: BLE001 - a suggestion is a nicety: none when the brain can't be reached
+            log.warning("no suggestion for %s", project["id"], exc_info=True)
+            return ""
+        line = " ".join(text.strip().strip('"').split())
+        if not 3 <= len(line) <= 160 or re.match(r"(i |i'|sorry|unfortunately|error|as an)", line, re.I):
+            return ""  # an apology or an error is never shown as their idea
+        return line
+
     def rename(self, project: dict, title: str) -> str:
         """A film's name, at any time (Cello names it once it knows what it is)."""
         title = " ".join((title or "").split())[:60]
@@ -537,6 +617,8 @@ class Studio:
         such jobs usually take (watching or listening, ideas, a sample)."""
         typical = self.typical_seconds(job["kind"])
         project = self.db.project(job["project_id"]) if job.get("project_id") else None
+        if project is not None and designed_moments(project) and job["kind"] in ("sample", "render", "revise"):
+            return self.moments_seconds(project, job["kind"] == "sample")
         if project is None or project["kind"] == "montage" or job["kind"] not in ("render", "revise"):
             return typical
         seconds = float(json.loads(project["info"] or "{}").get("seconds") or 0)
@@ -573,8 +655,42 @@ class Studio:
             return int(p * (elapsed * (1 - p) / p) + (1 - p) * by_history)
         return int(by_history)
 
-    def total_estimate(self, kind: str = "montage") -> int:
+    def moment_seconds(self) -> float:
+        """One designed moment, start to finish, here: the median of the samples of designed talks and voices (a
+        sample is one moment), else the first measurement."""
+        rows = self.db.all("SELECT j.finished - j.started AS d FROM jobs j JOIN projects p ON p.id = j.project_id "
+                           "WHERE j.kind='sample' AND j.status='done' AND p.style='designed' AND p.kind IN "
+                           "('talk','voice') AND j.started IS NOT NULL AND j.finished IS NOT NULL "
+                           "ORDER BY j.id DESC LIMIT 15")
+        spent = sorted(r["d"] for r in rows if r["d"] and r["d"] > 60)
+        return float(spent[len(spent) // 2]) if spent else MOMENT_SECONDS
+
+    def moments_seconds(self, project: dict, sample: bool) -> float:
+        """A sample is one moment; the film is every planned moment, `parallel()` at a time (before a plan, one
+        moment for about every 8 s of speech)."""
+        from ..work.moments_film import parallel
+
+        per = self.moment_seconds()
+        if sample:
+            return per
+        row = self.db.one("SELECT data FROM plans WHERE project_id=? AND kind IN ('moments','moments-revise') "
+                          "ORDER BY id DESC LIMIT 1", (project["id"],))
+        try:
+            n = len(json.loads(row["data"]).get("moments") or []) if row else 0
+        except ValueError:
+            n = 0
+        if not n:
+            info = json.loads(project.get("info") or "{}")
+            seconds = float(info.get("seconds") or info.get("song_seconds") or 0) or float(
+                self.db.value("SELECT SUM(seconds) FROM clips WHERE project_id=?", (project["id"],)) or 40)
+            n = max(1, round(seconds / 8))
+        return per * -(-n // parallel())
+
+    def total_estimate(self, kind: str = "montage", project: dict | None = None) -> int:
         """Start to a finished video, in seconds, for the page that asks to start."""
+        if project is not None and designed_moments(project):
+            return int(self.typical_seconds("prepare") + self.typical_seconds("pitch")
+                       + self.moments_seconds(project, True) + self.moments_seconds(project, False))
         steps = ("prepare", "pitch", "sample", "render") if kind == "montage" else ("prepare", "sample", "render")
         return int(sum(self.typical_seconds(k) for k in steps))
 
@@ -1065,6 +1181,8 @@ class Studio:
                                          "base": int(base or 0)})
 
     def idea_cap(self, project: dict) -> int:
+        if designed_moments(project):  # the plan of moments, remade as often as they want it changed
+            return MAX_IDEAS + 6
         return MAX_IDEAS + 3 if uses_looks(project) else MAX_IDEAS
 
     def ideas_left(self, project: dict) -> int:
@@ -1972,10 +2090,199 @@ class Studio:
             self.db.run("UPDATE projects SET version=? WHERE id=?", (version, project["id"]))
             self.db.set_stage(project["id"], "done")
 
+    # ------------------------------------------------------------------ designed moments (see ../work/moments_film.py)
+    def _moments_shape(self, project: dict, speech: dict) -> str:
+        if project["kind"] == "voice":
+            return self.shapes(project)[0]
+        return "9:16" if (speech.get("height") or 0) > (speech.get("width") or 0) else "16:9"
+
+    def said(self, project: dict) -> dict | None:
+        """What a talking or voice film says, on the timeline its graphics are made on: a talking film is cut on its
+        phrases (the long pauses and lone "um"s go) unless they asked to keep their pauses."""
+        from ..explainer import make
+        from ..work import moments_film as mf
+
+        speech = make.load_speech(workdir(self.s, project["user_id"], project["id"]).root)
+        if speech is None or project["kind"] != "talk" or self._info(project).get("keep_pauses"):
+            return speech
+        cut = mf.tighten(speech)
+        if cut.get("tightened") and self._info(project).get("tightened") != cut["tightened"]:
+            self._set_info(project, tightened=cut["tightened"])
+        return cut
+
+    def keep_pauses(self, project: dict, keep: bool) -> str:
+        """Their pauses kept (or cut again) for the next time the film is planned and made."""
+        if project["kind"] != "talk":
+            raise ActionError("Only a talking film is cut on its pauses.")
+        self._set_info(project, keep_pauses=bool(keep))
+        return ("Your pauses stay in: the next version keeps every moment as you recorded it." if keep
+                else "Your pauses and lone “um”s come out again on the next version.")
+
+    def _job_moments(self, job, project, user, step: str) -> None:
+        """A designed talking or voice film: its moments planned from what is said (before, each change on its word,
+        after; no words on screen unless asked), each designed from zero and checked over time, laid into their
+        video. The sample is one moment in place; the film is all of them."""
+        from ..explainer import make
+        import shutil
+
+        from ..motion import moments as mo
+        from ..motion import scenes, worlds
+        from ..work import moments_film as mf
+
+        work = workdir(self.s, project["user_id"], project["id"])
+        speech = self.said(project)
+        if speech is None:
+            raise ActionError("Start again: the recording is missing.")
+        scenes.VIA = "claude_code" if self.s.owner_brain == "claude_code" else "api"
+        shape = self._moments_shape(project, speech)
+        w, h = mf.SIZES.get(shape, mf.SIZES["9:16"])
+        words = mf.words_of(speech)
+        ask = ask_text(project)
+        feedback = job["params"].get("note") or job["params"].get("feedback") or ""
+        if job["params"].get("tags"):
+            feedback += "\nThey also ticked: " + ", ".join(job["params"]["tags"])
+        row = self.latest_plan(project)
+        if job["params"].get("pitch"):  # the plan they picked to build
+            picked = self.db.one("SELECT data FROM pitches WHERE id=? AND project_id=?",
+                                 (job["params"]["pitch"], project["id"]))
+            plan_ref = json.loads(picked["data"]).get("plan") if picked else None
+            row = self.db.one("SELECT * FROM plans WHERE id=? AND project_id=?", (plan_ref, project["id"])) or row
+        previous = None
+        if row is not None and row["kind"] in ("moments", "moments-revise"):
+            previous = mo.FilmDesign.model_validate_json(row["data"])
+        progress = lambda f, msg: self.db.job_progress(job["id"], f, msg)  # noqa: E731
+        folder = work.root / "worlds"
+        # notes on a film already made: its sections change where the notes point, nothing is planned again
+        revising = (step == "revise" and previous is not None and bool(feedback.strip())
+                    and (folder / "film.mp4").exists())
+        if revising:
+            design, plan_id = previous, row["id"]
+        elif previous is None or feedback.strip():
+            progress(0.03, "Working out what should be seen, word by word" if previous is None else
+                     "Working your changes into the moments")
+            design = mo.plan(words, float(speech["duration"]), ask, project["kind"], w, h, previous, feedback,
+                             log=lambda msg: progress(0.05, msg))
+            plan_id = self._save_script(project, design, "moments" if previous is None else "moments-revise")
+            self.db.event(project["id"], f"Moments planned ({len(design.moments)}): " + "; ".join(
+                f"{_mmss(m.start)} {m.before[:50]}" for m in design.moments)[:900], "info")
+        else:
+            design, plan_id = previous, row["id"]
+        if not design.moments:
+            raise ActionError("I found nothing in what is said that should be seen. Tell me what to show, and where.")
+        bed = None
+        if project["kind"] == "voice" and project["music"] == "made":
+            bed = self._ensure_track(job, project, user, self._pipeline(job, project, user), (0.06, 0.08))
+        picture = mf.base(speech, shape, work.root / "moments" / f"base-{shape.replace(':', 'x')}"
+                                             f"{'-cut' if speech.get('keep') else ''}.mp4", bed)
+        library = self.s.home / "sfx"
+        span = (0.1, 0.95)
+        engine = "3D (Blender)" if design.engine == "3d" else "2D"
+
+        def tick(done: int, total: int, msg: str) -> None:
+            progress(span[0] + (span[1] - span[0]) * done / max(1, total), msg)
+
+        sections = worlds.sections(design, float(speech["duration"]))
+        if revising:
+            try:
+                result = worlds.revise(design, picture, words, ask, project["kind"], folder, library, feedback,
+                                       progress=tick)
+            except worlds.WorldError:  # not all of it is here (made before this engine): designed again with the notes
+                design = mo.plan(words, float(speech["duration"]), ask, project["kind"], w, h, previous, feedback,
+                                 log=lambda msg: progress(0.05, msg))
+                plan_id = self._save_script(project, design, "moments-revise")
+                result = worlds.make(design, picture, words, ask, project["kind"], folder, library, progress=tick)
+        else:
+            result = worlds.make(design, picture, words, ask, project["kind"], folder, library,
+                                 only_first=step == "sample", progress=tick)
+        total = 1 if step == "sample" else len(sections)
+        rows = worlds.requirements(design, result, ask, total)
+        if step == "sample":
+            first = sections[0]
+            name = f"sample-{plan_id}.mp4"
+            shutil.copyfile(result["video"], work.out / name)
+            inside = [design.moments[k] for k in first.moments]
+            self._set_info(project, moments=self._moment_list(design), changes=[
+                f"The first {first.duration:.0f} s, designed as a {engine} world"
+                + (f": {inside[0].before[:80]}" if inside else "")])
+            self._note_requirements(project, rows, f"{shape} sample")
+            self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
+                        "findings, created, style) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        (project["id"], plan_id, project["version"], "sample", shape, name, first.duration, 0.0,
+                         json.dumps(rows), time.time(), "designed"))
+            self.db.set_stage(project["id"], "review")
+            return
+        version = project["version"] + 1
+        name = f"v{version}-{shape.replace(':', 'x')}.mp4"
+        shutil.copyfile(result["video"], work.out / name)
+        self._note_requirements(project, rows, f"{shape} final")
+        for note in result["notes"]:
+            self.db.event(project["id"], note, "warn")
+        if len(self.shapes(project)) > 1 and project["kind"] == "voice":
+            self.db.event(project["id"], f"Designed for {shape} only: ask for the other shape and it is designed for "
+                                         "that frame.", "info")
+        changed = result.get("changed")
+        self._set_info(project, moments=self._moment_list(design), changes=[
+            (f"Your notes worked into section{'s' if len(changed) > 1 else ''} "
+             + ", ".join(f"{sections[k - 1].start:.0f}-{sections[k - 1].end:.0f} s" for k in changed)
+             + "; the rest kept as it was") if changed else
+            f"{len(sections)} sections designed as one {engine} world"
+            + (f"; {len(result['notes'])} couldn't be made" if result["notes"] else "")])
+        self.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
+                    "findings, created, style) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (project["id"], plan_id, version, "final", shape, name, round(float(speech["duration"]), 2), 0.0,
+                     json.dumps(rows), time.time(), "designed"))
+        self.db.run("UPDATE projects SET version=? WHERE id=?", (version, project["id"]))
+        self.db.set_stage(project["id"], "done")
+
+    def _job_moment_plan(self, job, project, user) -> None:
+        """The plan of moments, written from what is said and shown before anything is built (the prompt
+        workshop): what is seen in each moment, before, on which words it changes, after. They build it, or say
+        what should be different and it is written again from their words (the old plan set aside)."""
+        from ..explainer import make
+        from ..motion import moments as mo
+        from ..work import moments_film as mf
+
+        work = workdir(self.s, project["user_id"], project["id"])
+        speech = self.said(project)
+        if speech is None:
+            raise ActionError("Start again: the recording is missing.")
+        w, h = mf.SIZES.get(self._moments_shape(project, speech), mf.SIZES["9:16"])
+        params = job["params"]
+        feedback = (params.get("reason") or "").strip()
+        if (params.get("own") or "").strip():
+            feedback = (feedback + "\n" if feedback else "") + f"Their own idea for it (it wins): {params['own'].strip()}"
+        row = self.latest_plan(project)
+        previous = None
+        if not params.get("first") and feedback and row is not None and row["kind"] in ("moments", "moments-revise"):
+            previous = mo.FilmDesign.model_validate_json(row["data"])
+        self.db.job_progress(job["id"], 0.1, "Working out what should be seen, word by word" if previous is None
+                             else "Writing the plan again with your changes")
+        design = mo.plan(mf.words_of(speech), float(speech["duration"]), ask_text(project), project["kind"], w, h,
+                         previous, feedback, log=lambda msg: self.db.job_progress(job["id"], 0.5, msg))
+        if not design.moments:
+            raise ActionError("I found nothing in what is said that should be seen. Say what to show, and where.")
+        plan_id = self._save_script(project, design, "moments")
+        self.db.run("UPDATE pitches SET rejected=1 WHERE project_id=?", (project["id"],))  # the plan before it: set aside
+        self._save_pitches(project, [{"pitch": {"title": "What you'll see", "plan": plan_id, "look": design.look,
+                                                "idea": design.idea, "engine": design.engine, "world": design.world,
+                                                "moments": self._moment_list(design),
+                                                "prompt": mo.as_prompt(design)}, "stills": []}],
+                           project["pitch_round"] + 1)
+        self.db.set_stage(project["id"], "choose")
+
+    @staticmethod
+    def _moment_list(design) -> list[dict]:
+        """The moments as they are shown and read back: when, and what is seen, in their words."""
+        return [{"start": m.start, "end": m.end, "before": m.before,
+                 "changes": [f"on \"{c.word}\": {c.becomes}" for c in m.changes], "after": m.after,
+                 "text": m.text} for m in design.moments]
+
     def _job_explainer(self, job, project, user, step: str) -> None:
         from ..explainer import make
         from ..explainer.script import VoiceScript
 
+        if step != "prepare" and project.get("style") == "designed":
+            return self._job_moments(job, project, user, step)
         pipe = self._pipeline(job, project, user)
         work = workdir(self.s, project["user_id"], project["id"])
         if step == "prepare":
@@ -2057,6 +2364,14 @@ class Studio:
         if old.get("autopilot"):
             info["autopilot"] = True
         info["speech"] = self._speech_film(project, pipe, old.get("speech"))
+        if info["speech"] and self._one_person_talking(pipe):  # what it is, from the footage: a talking film
+            self.db.run("UPDATE projects SET kind='talk', style='designed', music='none', shapes=?, updated=? "
+                        "WHERE id=?", (project["shapes"] if project["shapes"] != "both" else "9:16", time.time(),
+                                       project["id"]))
+            self.db.event(project["id"], "It's one video of you talking, so it's made as a talking film: your "
+                                         "video stays, cut on your words, with designed motion graphics where you "
+                                         "describe things (each moment takes 15-40 minutes to design).", "info")
+            return self._job_explainer(job, self.db.project(project["id"]), user, "prepare")
         fitted = False if info["speech"] else self._fit_length(project, pipe, info)
         if info["speech"]:
             fitted = self._speech_length(project, pipe)
@@ -2085,6 +2400,15 @@ class Studio:
         if said is not None:
             return bool(said)
         return spoken >= 0.45
+
+    def _one_person_talking(self, pipe) -> bool:
+        """One clip, speech through most of it: someone talking to camera, whatever kind was picked at the start."""
+        from . import speech_cut
+
+        clips = pipe.project.clips()
+        if len(clips) != 1:
+            return False
+        return speech_cut.share(pipe.project, list(clips), {c: float(v.duration) for c, v in clips.items()}) >= 0.6
 
     def _speech_length(self, project: dict, pipe) -> bool:
         """A talking film is as long as what they say (pauses out): its length, and its music, follow that."""
@@ -2263,12 +2587,14 @@ class Studio:
         abilities.note(self.db, project, " ".join([brief["story"], *brief["must"], brief.get("music", "")]))
         self.db.run("DELETE FROM pitches WHERE project_id=?", (project["id"],))
         self.db.run("UPDATE projects SET chosen=NULL, pitch_round=0 WHERE id=?", (project["id"],))
-        if project["kind"] == "montage" or uses_looks(project):  # stories, or looks to pick from
+        if project["kind"] == "montage" or uses_looks(project) or designed_moments(project):  # stories, looks, a plan
             self._enqueue(self.db.project(project["id"]), "pitch", {"first": True})
         else:  # clean labels: the script and its sample come next
             self._enqueue(self.db.project(project["id"]), "sample", {"first": True})
 
     def _job_pitch(self, job, project, user):
+        if designed_moments(project):
+            return self._job_moment_plan(job, project, user)
         if project["kind"] != "montage":
             return self._job_looks(job, project, user)
         pipe = self._pipeline(job, project, user)
@@ -3458,8 +3784,18 @@ def stage_label(stage: str) -> str:
 
 
 def uses_looks(project: dict) -> bool:
-    """Voice videos and designed talking videos are pitched as looks, painted by an image model."""
-    return project["kind"] == "voice" or (project["kind"] == "talk" and project.get("style") == "designed")
+    """Voice videos with clean labels are pitched as looks, painted by an image model. Designed voice and talking
+    videos are not: each film's look is designed with its moments (work/moments_film.py)."""
+    return project["kind"] == "voice" and project.get("style") != "designed"
+
+
+def designed_moments(project: dict) -> bool:
+    """A talking or voice film whose motion graphics are designed moment by moment (work/moments_film.py)."""
+    return project["kind"] in ("talk", "voice") and project.get("style") == "designed"
+
+
+def _mmss(t: float) -> str:
+    return f"{int(t) // 60}:{int(t) % 60:02d}"
 
 
 def usage_dict(u: Usage) -> dict:

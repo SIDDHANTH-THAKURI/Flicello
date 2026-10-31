@@ -43,6 +43,7 @@ PLUGINS = ("CustomEase", "CustomBounce", "CustomWiggle", "DrawSVGPlugin", "Morph
 CRAFT = REPO_ROOT / "motion" / "node_modules" / "hyperframes" / "dist" / "skills" / "hyperframes" / "references" / "motion.md"
 SCENE_CRAFT = Path(__file__).with_name("scene_craft.md")  # designed things acting in a real person's video
 RIG = Path(__file__).with_name("rig.js")  # the designer's own rigs: physics, follow-through, the person's body
+PARTS = Path(__file__).with_name("craft.js")  # finished flat parts: shaded spheres, trees, sky, ground, water, weather
 FONTS = ("Inter, Montserrat, Outfit, Nunito, Oswald, League Gothic, Archivo Black, Space Mono, IBM Plex Mono, "
          "JetBrains Mono, EB Garamond, Playfair Display, Source Code Pro, Roboto, Open Sans, Lato, Poppins")
 
@@ -65,6 +66,8 @@ class Brief:
     frames: list[tuple[float, bytes]] = field(default_factory=list)  # (seconds into the scene, jpeg)
     people: list[dict] = field(default_factory=list)  # {t, box: [x0, y0, x1, y1], head: [x, y]} in frame shares
     track: list[dict] = field(default_factory=list)  # every 0.1 s: {t, head: [x, y], shoulders: [[x, y], [x, y]], box}
+    spec: list[dict] = field(default_factory=list)  # {t, expect}: what a still must show then (moments.checkpoints)
+    text: str = ""  # the words allowed on screen; empty = none at all
 
     @property
     def duration(self) -> float:
@@ -188,8 +191,13 @@ frame and laid over their footage.
 - Everything comes from this moment: their words, their frame, what they asked. Never a template, never a stock \
 "lower third", never clip art. If they describe something happening, it happens on screen, as real moving objects \
 with weight: anticipation before a move, follow-through after it, arcs, squash and stretch where it is physical, \
-shadows and light that agree, secondary motion (a puff of dust where it lands, a ripple, a trail). Words on screen \
-only where words are the point or they ask for them.
+shadows and light that agree, secondary motion (a puff of dust where it lands, a ripple, a trail). No words on screen \
+(captions, labels, titles, kinetic type, numbers or letters as graphics) unless the brief's TEXT line allows them; \
+then only those words, in one text layer.
+- When the brief gives BEFORE, CHANGES and AFTER, that is the contract, checked frame by frame: each state is visible \
+at its time exactly as written (the object, its colour, how many, its size and place), each change lands on its word \
+and takes the time it says. Design everything around it (the look, the light, depth, secondary motion), never \
+instead of it.
 - First decide the look and write it in a comment at the top of the file: palette (3 to 5 hex colours), type (from \
 the fonts below), the material (flat graphic, glossy 3D-ish, paper cut-out, line art, neon glow, chrome, risograph...), \
 how light falls, how deep the world is. Hold it everywhere. If they named a style, that is the look.
@@ -283,7 +291,12 @@ def _content(brief: Brief, previous: str | None, problems: list[str] | None) -> 
             + f"\nThe scene: {brief.width} x {brief.height} px, {brief.fps} fps, {brief.duration:.2f} s long "
             f"(DURATION = {brief.duration:.2f}, W = {brief.width}, H = {brief.height}).\n"
             f"What is said, word by word (seconds into the scene, start-end word):\n{said}\n\n"
-            f"Where the person is (frame shares, x0 y0 x1 y1; head top x y): {people}\n"
+            + ("Checkpoints (seconds into the scene; a still then must show exactly this, and the director checks "
+               "each one):\n" + "\n".join(f"- {p['t']:.2f} s: {p['expect']}" for p in brief.spec) + "\n"
+               if brief.spec else "")
+            + (f"Words allowed on screen: only \"{brief.text}\".\n" if brief.text.strip() else
+               "Words allowed on screen: none at all.\n")
+            + f"Where the person is (frame shares, x0 y0 x1 y1; head top x y): {people}\n"
             f"The person is tracked through the whole scene every 0.1 s ({len(brief.track)} samples: head top, left "
             "and right shoulder, box, in frame shares). It is in the composition as `window.PERSON` (an array of "
             "{t, head:[x,y], shoulders:[[x,y],[x,y]], box:[x0,y0,x1,y1]}). Anything attached to them (wings on the "
@@ -359,6 +372,8 @@ def _ask_claude_code(system: str, content: list[dict], task: str, timeout: float
                 text = str(json.loads(proc.stdout.decode("utf-8", errors="replace")).get("result") or "")
             except ValueError:
                 text = ""
+            if re.search(r"(session|usage|weekly|5-hour) limit|hit your (\S+ )?limit", text, re.I):  # said plainly, not "unreadable"
+                raise SceneError(f"the Claude plan's limit is reached: {text[:160]}")
         LAST.update(task=task, stop="claude_code exit %s" % proc.returncode, text=text,
                     tokens=0, err=proc.stderr.decode("utf-8", errors="replace")[-800:])
         return text
@@ -444,7 +459,8 @@ asset you already have (parts of one thing, a set that belongs together).
 one. To see motion, give a stretch: `bash look 1.2-2.0` makes one strip of 6 frames across it, left \
 to right (arcs, spacing, overlap and settling show there, not in single stills). If the scene fails to run, it prints \
 the error instead.
-- Look at every beat at least once, and at the moments between beats. Be your own harshest critic: does each frame \
+- Look at every checkpoint in the brief (`bash look` with their times) and fix the scene until each still shows \
+exactly what that checkpoint says. Look at every beat at least once, and at the moments between beats. Be your own harshest critic: does each frame \
 act out what is being said at that moment, is it designed and alive (not clip art, not a template, not timid), is \
 anything broken, cut off, covering the face, or leftover? Fix and look again. Use as many looks as it takes.
 - When you think it's right, show it to the director: `bash review` (it takes 2 to 4 minutes) shows the scene to \
@@ -489,7 +505,8 @@ def desk(brief: Brief, video: Path, folder: Path, previous: str | None = None, p
     (folder / "brief.md").write_text("\n\n".join(texts) + note, encoding="utf-8")
     (folder / "person.json").write_text(json.dumps(brief.track), encoding="utf-8")
     (folder / "brief.json").write_text(json.dumps({k: getattr(brief, k) for k in ("ask", "start", "end", "width",
-                                                                                  "height", "fps", "style", "words")}),
+                                                                                  "height", "fps", "style", "words",
+                                                                                  "spec", "text")}),
                                        encoding="utf-8")  # for its reviews
     _look_script(folder)
     system = (_system().replace("{DURATION}", f"{brief.duration:.2f}").replace("{W}", str(brief.width))
@@ -510,7 +527,7 @@ def desk(brief: Brief, video: Path, folder: Path, previous: str | None = None, p
         said = str(json.loads(proc.stdout.decode("utf-8", errors="replace")).get("result") or "")
     except ValueError:
         said = ""
-    if re.search(r"(session|usage|weekly) limit|hit your limit", said, re.I):
+    if re.search(r"(session|usage|weekly|5-hour) limit|hit your (\S+ )?limit", said, re.I):
         raise SceneError(f"the Claude plan's limit is reached: {said[:160]}")
     html = (folder / "scene.html").read_text(encoding="utf-8") if (folder / "scene.html").exists() else ""
     if "<html" not in html.lower() and "data-composition-id" not in html:
@@ -858,8 +875,15 @@ def review_command(folder: Path) -> None:
     out = folder / "reviews"
     out.mkdir(exist_ok=True)
     n = len(list(out.glob("review-*.md"))) + 1
+    allowed = review_allowance(folder)
+    if allowed is not None and n > allowed:
+        print(USED_UP)
+        return
     try:
-        seen = look(brief, html, None, folder / ".review" / str(n))
+        seen = look(brief, html, None, folder / ".review" / str(n), most=DEEP if allowed is not None else 8)
+        if has_behind(html) and (STAGE[0] / "matte-clean.mkv").exists():
+            seen = with_measured(seen, measured(html, brief.duration, STAGE[0] / "matte-clean.mkv",
+                                                folder / ".review" / f"{n}-measured"))
     except SceneError as exc:
         print(f"THE SCENE FAILED TO RUN: {exc}")
         return
@@ -875,6 +899,68 @@ def review_command(folder: Path) -> None:
                                                       "problems": seen["problems"]}), encoding="utf-8")
     print(said)
     print("\nThe strips it judged (4 frames around each key moment, left to right):\n" + "\n".join(strips))
+
+
+# HyperFrames draws a video's frames as an <img class="__render_frame__"> right after it, so that image is the
+# person too
+ALONE = ("<style id=\"vido-alone\">:where(body *){visibility:hidden !important}"
+         "html,body,#stage{background:#000 !important}"
+         "#person,#person+.__render_frame__{visibility:visible !important}{extra}</style>")
+
+
+def alone_html(html: str, silhouette: bool = False) -> str:
+    """The scene with only the person showing, placed and filmed exactly as in it (`silhouette`: as a white
+    shape, their mask)."""
+    style = ALONE.replace("{extra}", "#person,#person+.__render_frame__{filter:brightness(0) invert(1) !important}"
+                          if silhouette else "")
+    if re.search(r"</body>", html, re.I):
+        return re.sub(r"(</body>)", lambda m: style + m.group(1), html, count=1, flags=re.I)
+    return html + style
+
+
+def measured(html: str, duration: float, matte: Path, work: Path) -> list[str]:
+    """The person in the scene measured (motion/framing.py): their face covered, them cut off or shrunk."""
+    import cv2
+    import numpy as np
+
+    from . import framing
+
+    times = framing.sample_times(duration)
+    full = moments(html, work / "full", times)
+    alone = moments(alone_html(html), work / "alone", times)
+    shape = moments(alone_html(html, True), work / "mask", times)
+    source = framing.source_masks(matte, times)
+
+    def img(jpg, flag=cv2.IMREAD_COLOR):
+        return cv2.imdecode(np.frombuffer(jpg, np.uint8), flag) if jpg else None
+
+    seen = []
+    for t in times:
+        f, a, m = img(full.get(t)), img(alone.get(t)), img(shape.get(t), cv2.IMREAD_GRAYSCALE)
+        if f is not None and a is not None and m is not None:
+            seen.append(framing.measure(t, f, a, m, source.get(t)))
+    return framing.problems(seen)
+
+
+def with_measured(seen: dict, problems: list[str]) -> dict:
+    """A verdict with the measured problems first: any of them means not ready, 6 at most."""
+    if not problems:
+        return seen
+    return {**seen, "score": min(float(seen.get("score") or 0), 6.0), "ok": False,
+            "problems": problems + list(seen.get("problems") or [])}
+
+
+DEEP = 14  # beats one deep review looks at (a desk allowed few reviews gets them all at their sharpest)
+USED_UP = ("You've had your review. Fix every problem it found, look to check each fix, then reply DONE "
+           "(a person watches the film next and gives their notes).")
+
+
+def review_allowance(folder: Path) -> int | None:
+    """How many reviews a desk may ask for (its review-limit file), None: no limit."""
+    try:
+        return max(0, int((folder / "review-limit").read_text(encoding="utf-8").strip()))
+    except (OSError, ValueError):
+        return None
 
 
 def _digest(html: str) -> str:
@@ -973,8 +1059,9 @@ def project(html: str, folder: Path) -> Path:
             shutil.copyfile(src, folder / "gsap" / name)
     libs = "".join(f'<script src="gsap/{n}"></script>' for n in GSAP_FILES if (GSAP_DIR / n).exists())
     libs += "<script>gsap.registerPlugin(...[" + ", ".join(f"window.{p}" for p in PLUGINS) + "].filter(Boolean));</script>"
-    if RIG.exists():  # the designer's rigs (window.rig)
-        shutil.copyfile(RIG, folder / "rig.js")
+    for lib in (RIG, PARTS):  # the designer's rigs (window.rig) and parts (window.craft)
+        if lib.exists():
+            shutil.copyfile(lib, folder / lib.name)
     doc = html
     if STAGE and (STAGE[0] / stage.SHOT).exists():  # their shot, and the person when something goes behind them
         person = (STAGE[0] / stage.PERSON).exists() and has_behind(doc)
@@ -983,8 +1070,7 @@ def project(html: str, folder: Path) -> Path:
             stage.link(STAGE[0] / name, folder / "assets" / name)
     if PERSON_TRACK:  # the person's track, for anything pinned to them
         libs += "<script>window.PERSON = " + json.dumps(PERSON_TRACK) + ";</script>"
-    if RIG.exists():
-        libs += '<script src="rig.js"></script>'
+    libs += "".join(f'<script src="{lib.name}"></script>' for lib in (RIG, PARTS) if lib.exists())
     if re.search(r"<head[^>]*>", doc, re.I):
         doc = re.sub(r"(<head[^>]*>)", lambda m: m.group(1) + libs, doc, count=1, flags=re.I)
     else:
@@ -1083,26 +1169,45 @@ objects, weather) drawn as flat vector shapes or silhouettes are clip art: say t
 4. Is anything broken: missing or invisible elements, things cut off at the frame's edge, overlaps that hide what \
 matters, text you can't read, the person's face covered without reason, ugly artifacts, halos or holes around the \
 person's cut-out?
-5. Does it belong to the shot: its light from the same side and as warm as the footage's (glows that light what is \
+5. The contract, when there are checkpoints: each still at a checkpoint must show exactly what it says (the \
+object, its colour, how many, size, place, whether the change has happened yet). Any mismatch is a serious problem: \
+name the checkpoint and what is there instead.
+6. Words on screen: only the words the brief allows. Any other text, caption, label, title or number drawn as type \
+is a serious problem.
+7. Does it belong to the shot: its light from the same side and as warm as the footage's (glows that light what is \
 near them, shadows that darken it), contact shadows where things touch, scale right against the person, edges and \
 grain that sit in the footage rather than pasted over it?
-Reply with JSON only: {"score": 0-10 (10 = gallery-grade), "ok": true when it is ready to show (score >= 8 and no \
-serious problem), "problems": ["at 7.2 s: the ball is still in the air but he says it hits the ground: land it on \
+8. Is the whole frame designed: a world the person stands in, with depth, light and a camera? Things floating on \
+top of their untouched footage read as stickers: that scores 5 at most, and the first problem says what world the \
+frame should be. An empty black world, a timid small subject, a grey washed-out person or shapes all in one flat \
+plane read as unfinished: say so.
+Your fixes make what is there better: never ask for new objects, props, characters or ideas that the contract and \
+the brief don't name (a scale cue, a hand, an extra prop), since added things are how fixes break a scene. If \
+something not in the contract is there and hurts it, ask for it to go.
+Reply with JSON only: {"score": 0-10 (10 = gallery-grade), "ok": true when it is ready to show (score >= 8, no \
+serious problem, every checkpoint matched), "problems": ["at 7.2 s: the ball is still in the air but he says it hits the ground: land it on \
 'hits' and squash it", ...]} — each problem concrete and fixable, with its time."""
 
 
-def look(brief: Brief, html: str, video: Path, work: Path, client=None, spend=None) -> dict:
+def look(brief: Brief, html: str, video: Path, work: Path, client=None, spend=None, most: int = 8) -> dict:
     """The scene around its beats over the footage (a strip of frames at each), judged. {score, ok, problems, sheet}."""
+    return judge(brief, beats_of(html, brief.duration), lambda times, sub="": moments(html, work / sub if sub else work, times),
+                 person_note(html, "reviewer"), client, spend, most)
+
+
+def judge(brief: Brief, beats: list[dict], frames, note: str = "", client=None, spend=None, most: int = 8) -> dict:
+    """A scene judged by the director, whatever made it: `frames(times, sub)` gives its frames at those times as JPEGs
+    (a HyperFrames page, a Blender scene), at up to `most` of its beats spread over the whole scene. {score, ok,
+    problems, sheet}."""
     client = client or _client()
-    beats = beats_of(html, brief.duration)
     keys = sorted({round(min(brief.duration - 0.05, float(b["t"]) + 0.2), 2) for b in beats})
     if len(keys) < 3:
         keys = sorted(set(keys) | {round(brief.duration * f, 2) for f in (0.2, 0.5, 0.8)})
-    keys = keys[:8]
+    if len(keys) > most:  # spread over the whole scene, never only its start
+        keys = [keys[round(i * (len(keys) - 1) / (most - 1))] for i in range(most)]
     around = {k: [round(min(brief.duration - 0.03, max(0.0, k + d)), 2) for d in (-0.3, -0.05, 0.2, 0.5)] for k in keys}
     times = sorted({t for ts in around.values() for t in ts})
-    seen = moments(html, work, times)
-    note = person_note(html, "reviewer")
+    seen = frames(times, "")
     content: list[dict] = [{"type": "text", "text": f"What they asked for: {brief.ask}"
                             + (f"\nStyle: {brief.style}" if brief.style else "") + (f"\n{note}" if note else "")}]
     sheet = []
@@ -1117,6 +1222,20 @@ def look(brief: Brief, html: str, video: Path, work: Path, client=None, spend=No
                         f"Being said: \"{said}\". The designer meant: {meant or '(between beats)'}"})
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                     "data": base64.b64encode(jpg).decode("ascii")}})
+    if brief.spec:  # the contract: a still at each checkpoint
+        at = [round(min(brief.duration - 0.03, float(p["t"])), 2) for p in brief.spec]
+        spec_seen = frames(at, "spec")
+        content.append({"type": "text", "text": "The checkpoints of the contract, one still each:"})
+        for t, p in zip(at, brief.spec):
+            jpg = spec_seen.get(t)
+            if jpg is None:
+                continue
+            sheet.append((t, jpg))
+            content.append({"type": "text", "text": f"At {t:.2f} s it must show: {p['expect']}"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                        "data": base64.b64encode(jpg).decode("ascii")}})
+    content.append({"type": "text", "text": f"Words allowed on screen: only \"{brief.text}\"." if brief.text.strip()
+                    else "Words allowed on screen: none at all."})
     reply = _ask(client, REVIEW, content, 16000, spend, "scene-review", "high")
     m = re.search(r"\{.*\}", reply, re.S)
     try:
@@ -1399,12 +1518,18 @@ def finish(video: Path, start: float, end: float, picture: Path, cues: list[dict
 # ---------------------------------------------------------------- the whole loop
 
 def make(video: Path, words: list[tuple[float, float, str]], start: float, end: float, ask: str, work: Path,
-         style: str = "", rounds: int = 3, library: Path | None = None, log=print, spend=None) -> dict:
+         style: str = "", rounds: int = 3, library: Path | None = None, log=print, spend=None,
+         spec: list[dict] | None = None, text: str | None = None) -> dict:
     """Design, look, fix (up to `rounds` designs), then render and lay the scene on the footage. Returns the files,
-    the scores of each round and the problems found."""
+    the scores of each round and the problems found. `spec`: checkpoints its frames are held to (moments.py);
+    `text`: the words allowed on screen (None: words only if the ask asks for them)."""
+    from .moments import wants_text
+
     work.mkdir(parents=True, exist_ok=True)
     client = _client()
     brief = gather(video, words, start, end, ask, style)
+    brief.spec = list(spec or [])
+    brief.text = text if text is not None else ("the words they asked for, exactly" if wants_text(ask) else "")
     PERSON_TRACK[:] = brief.track
     log(f"brief: {brief.duration:.1f} s, {len(brief.words)} words, {len(brief.frames)} frames, person in {len(brief.people)}")
     # their shot, put into the scene's page, and the person cut out of it while the design is being written (the
@@ -1445,7 +1570,8 @@ def make(video: Path, words: list[tuple[float, float, str]], start: float, end: 
                         "seconds": round(time.monotonic() - t0, 1)})
         log(f"round {r}: score {seen['score']}, {len(seen['problems'])} problems ({time.monotonic() - t0:.0f} s)")
         for p in seen["problems"][:8]:
-            log(f"   - {p}".encode("ascii", "replace").decode("ascii"))
+            plain = str(p).replace("–", "-").replace("—", "-").replace("≈", "~").replace("×", "x")
+            log(f"   - {plain}".encode("ascii", "replace").decode("ascii"))
         if best is None or float(seen["score"] or 0) >= float(best[1] or 0):
             best = (html, seen["score"])
         if seen["ok"]:

@@ -1,0 +1,154 @@
+/* Cello's ring (tap the orb), its type box (part of Cello, alive), and the hello that asks how much it may do. */
+.cello-caption { display: none !important; } /* the type box shows what was heard and said now */
+.cello-shell { font-family: var(--f-sans); color: var(--paper); }
+
+/* ------------------------------------------------------------------ the type box, joined to the orb */
+@keyframes lc-rot { to { --spin: 360deg; } }
+.cello-lc { position: fixed; right: calc(100vw - var(--x) + 58px); top: var(--y); transform: translateY(-50%); z-index: 2;
+  width: min(560px, calc(var(--x) - 90px), 74vw); pointer-events: auto; animation: cello-in .35s cubic-bezier(.16, 1, .3, 1); }
+#cello.flip .cello-lc { right: auto; left: calc(var(--x) + 58px); width: min(560px, calc(100vw - var(--x) - 90px), 74vw); }
+#cello.high .cello-lc { transform: translateY(-20%); }
+.lc-panel { --c1: var(--rose); --c2: var(--violet); position: relative; border-radius: 24px; padding: 14px 14px 10px 18px;
+  background: rgba(16, 12, 24, .9); -webkit-backdrop-filter: blur(22px) saturate(1.4); backdrop-filter: blur(22px) saturate(1.4);
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .7); color: #f4f1ea; }
+.lc-panel::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px; pointer-events: none;
+  background: conic-gradient(from var(--spin), var(--c1), transparent 30%, var(--c2) 55%, transparent 80%, var(--c1));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: lc-rot 4s linear infinite; }
+.lc-panel::after { content: ""; position: absolute; inset: -26px; border-radius: 46px; z-index: -1; filter: blur(10px); transition: .6s;
+  background: radial-gradient(60% 60% at 70% 50%, color-mix(in srgb, var(--c1) 22%, transparent), transparent 70%); }
+.cello-lc.listen .lc-panel, .cello-lc.type .lc-panel { --c1: var(--amber); --c2: var(--rose); }
+.cello-lc.heard .lc-panel { --c1: var(--amber); --c2: var(--violet); }
+.cello-lc.think .lc-panel { --c1: var(--violet); --c2: var(--rose); }
+.cello-lc.think .lc-panel::before { animation-duration: 1.4s; }
+.cello-lc.done .lc-panel { --c1: var(--rose); --c2: var(--violet); }
+.cello-lc .status { display: flex; gap: 6px; font-family: var(--f-mono); font-size: 10.5px; color: rgba(255, 255, 255, .4); margin-bottom: 8px; align-items: center; }
+.cello-lc .status span { padding: 2px 8px; border-radius: 99px; border: 1px solid transparent; transition: .3s; }
+.cello-lc .status span.on { color: #fff; border-color: rgba(255, 255, 255, .2); background: rgba(255, 255, 255, .07); }
+.cello-lc .status span.ok { color: #7cf3c4; }
+.cello-lc .status i { width: 14px; height: 1px; background: rgba(255, 255, 255, .18); }
+.cello-lc .lc-body { min-height: 30px; font-size: 15.5px; line-height: 1.45; }
+.cello-lc .lc-body .heard { max-height: 9.5em; overflow: auto; }
+.cello-lc .lc-body .soft { color: rgba(255, 255, 255, .55); font-size: 13.5px; }
+.cello-lc .lc-body textarea { width: 100%; border: 0; background: none; outline: 0; resize: none; font: inherit; font-size: 15.5px; color: #fff; min-height: 44px; padding: 0; }
+.cello-lc .lc-body textarea::placeholder { color: rgba(255, 255, 255, .45); }
+.cello-lc .steps { display: grid; gap: 5px; font-size: 13.5px; }
+.cello-lc .steps > div { display: flex; gap: 8px; align-items: center; animation: ui-rise .3s cubic-bezier(.16, 1, .3, 1); }
+.cello-lc .steps .ok { color: #7cf3c4; width: 14px; text-align: center; }
+.cello-lc .comp-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.cello-lc .chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.cello-lc .chip { background: rgba(255, 255, 255, .06); border-color: rgba(255, 255, 255, .16); color: #fff; }
+.cello-lc .icon-btn { background: rgba(255, 255, 255, .07); border-color: rgba(255, 255, 255, .16); color: #fff; width: 34px; height: 34px; }
+.cello-lc .icon-btn.sun { background: var(--sun); color: #170c12; border: 0; }
+#cello.muted .cello-lc [data-lc-mic] { color: #ff8f8f; border-color: rgba(255, 120, 120, .45); }
+@media (max-width: 640px) {
+  .cello-lc, #cello.flip .cello-lc { left: 12px; right: 12px; width: auto; top: auto; bottom: calc(100vh - var(--y) + 58px); transform: none; }
+  .cello-lc .kbd { display: none; }
+}
+
+/* ------------------------------------------------------------------ the ring */
+.cello-ring { position: fixed; inset: 0; z-index: 20; pointer-events: auto; display: grid; place-items: center; }
+.ring-veil { position: absolute; inset: 0; background: rgba(6, 6, 10, .74); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); animation: cello-in .3s ease; }
+.ring-stage { position: relative; display: flex; gap: 26px; align-items: center; justify-content: center; width: min(1180px, 96vw); }
+.ring-wrap { flex: none; }
+.ring { position: relative; width: min(560px, 74vh, 92vw); aspect-ratio: 1; }
+.ring .halo { position: absolute; inset: 12%; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .14); background: radial-gradient(circle, rgba(255, 46, 126, .12), transparent 62%); transition: .7s cubic-bezier(.16, 1, .3, 1); }
+.ring .halo2 { position: absolute; inset: 30%; border-radius: 50%; border: 1px dashed rgba(255, 255, 255, .1); animation: ui-spin 60s linear infinite; }
+@property --a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.ring .sweep { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; opacity: 0; transition: --a .5s cubic-bezier(.16, 1, .3, 1), opacity .4s;
+  background: conic-gradient(from calc(var(--a) - 14deg), rgba(255, 46, 126, .34) 0deg, rgba(143, 91, 255, .2) 28deg, transparent 28deg);
+  -webkit-mask: radial-gradient(circle, transparent 33%, #000 34%, #000 49%, transparent 50%); mask: radial-gradient(circle, transparent 33%, #000 34%, #000 49%, transparent 50%); }
+.ring .sweep.on { opacity: 1; }
+.ring .center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: grid; justify-items: center; gap: 6px; text-align: center; z-index: 2; color: #fff; }
+.ring .center canvas { width: 150px; height: 150px; cursor: pointer; }
+.ring .center b { font-size: 15px; }
+.ring .center small { font-size: 11px; color: rgba(255, 255, 255, .6); font-family: var(--f-mono); }
+.rb { position: absolute; width: 84px; transform: translate(-50%, -50%); display: grid; justify-items: center; gap: 5px; text-align: center;
+  cursor: pointer; background: none; border: 0; padding: 0; color: #fff; font: inherit;
+  transition: opacity .45s cubic-bezier(.16, 1, .3, 1), transform .6s cubic-bezier(.34, 1.56, .64, 1); transition-delay: var(--d, 0s); }
+.ring.closed .rb { opacity: 0; transform: translate(-50%, -50%) scale(.2); pointer-events: none; transition-delay: 0s; }
+.ring.closed .halo { inset: 40%; opacity: 0; }
+.rb .disc { position: relative; width: 50px; height: 50px; border-radius: 50%; display: grid; place-items: center; background: rgba(20, 16, 30, .92);
+  border: 1px solid rgba(255, 255, 255, .16); transition: .3s cubic-bezier(.16, 1, .3, 1); }
+.rb:hover .disc, .rb:focus-visible .disc, .rb.sel .disc { transform: scale(1.14); border-color: var(--rose); box-shadow: 0 0 26px -4px rgba(255, 46, 126, .65); }
+.rb:focus-visible { outline: none; }
+.rb .lbl { font-size: 11px; color: rgba(255, 255, 255, .82); line-height: 1.15; text-shadow: 0 1px 6px rgba(0, 0, 0, .7); }
+.rb .state { position: absolute; right: -2px; top: -2px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #120d18; background: #66636f; transition: .3s; }
+.rb.on .disc { border-color: rgba(124, 243, 196, .55); }
+.rb.on .state { background: #7cf3c4; box-shadow: 0 0 8px #7cf3c4; }
+.rb.danger .disc { color: #ff8f9a; }
+.saying { margin-top: 14px; display: flex; gap: 10px; align-items: center; justify-content: center; font-size: 14px; color: rgba(255, 255, 255, .6); min-height: 24px; }
+.saying b { color: #fff; font-weight: 400; font-family: var(--f-serif); font-style: italic; font-size: 19px; }
+.ring-panel { width: min(400px, 40vw); max-height: 74vh; overflow: auto; border-radius: 22px; padding: 18px; color: #f4f1ea;
+  background: rgba(16, 12, 24, .92); border: 1px solid rgba(255, 255, 255, .12); box-shadow: 0 30px 80px -30px rgba(0, 0, 0, .8); animation: ui-rise .35s cubic-bezier(.16, 1, .3, 1); }
+.ring-panel h5 { margin: 0 0 12px; font-size: 13px; font-weight: 650; }
+.ring-panel .hint { color: rgba(255, 255, 255, .55); font-size: 12px; margin: 10px 0 0; }
+.ring-panel .choices-list { display: grid; gap: 8px; }
+.ring-panel .choice { display: grid; grid-template-columns: auto 1fr; gap: 12px; text-align: left; padding: 12px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, .1);
+  background: none; color: inherit; font: inherit; cursor: pointer; transition: .25s; }
+.ring-panel .choice:hover { border-color: rgba(255, 255, 255, .22); }
+.ring-panel .choice[disabled] { opacity: .45; cursor: not-allowed; }
+.ring-panel .choice.sel { border-color: transparent; background: var(--sun-soft); box-shadow: 0 0 0 1.5px var(--rose) inset; }
+.ring-panel .choice .r { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, .3); margin-top: 2px; transition: .25s; }
+.ring-panel .choice.sel .r { border: 5px solid var(--rose); }
+.ring-panel .choice b { display: block; font-size: 14px; }
+.ring-panel .choice small { color: rgba(255, 255, 255, .6); font-size: 12.5px; }
+.ring-panel .logline { display: grid; grid-template-columns: 52px 1fr; gap: 10px; font-size: 12.5px; padding: 7px 0; border-top: 1px solid rgba(255, 255, 255, .08); }
+.ring-panel .logline:first-child { border-top: 0; }
+.ring-panel .logline > span:first-child { font-family: var(--f-mono); color: rgba(255, 255, 255, .5); font-size: 11px; }
+.ring-panel .help-list .logline { grid-template-columns: 1fr; gap: 2px; }
+.ring-panel .help-list .logline span { color: rgba(255, 255, 255, .65); }
+.ring-panel .btn.sun { margin-top: 12px; height: 40px; padding: 0 18px; border-radius: 12px; font-weight: 650; cursor: pointer; }
+.ring-panel .acc { grid-template-columns: 1fr; }
+@media (max-width: 900px) {
+  .ring-stage { flex-direction: column; overflow: auto; max-height: 100vh; padding: 20px 0; }
+  .ring-panel { width: min(520px, 92vw); }
+}
+
+/* ------------------------------------------------------------------ access levels (the ring's panel, and the hello) */
+.acc { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.acard { position: relative; display: block; text-align: left; border-radius: 18px; border: 1px solid rgba(255, 255, 255, .1); background: rgba(255, 255, 255, .03);
+  padding: 16px; cursor: pointer; transition: .35s cubic-bezier(.16, 1, .3, 1); overflow: hidden; color: inherit; font: inherit; }
+.acard:hover { transform: translateY(-3px); border-color: rgba(255, 255, 255, .22); }
+.acard.sel { border-color: transparent; box-shadow: 0 0 0 1.5px var(--rose) inset, 0 30px 60px -30px rgba(255, 46, 126, .5); background: var(--sun-soft); }
+.acard .lvl { display: flex; gap: 4px; margin-bottom: 10px; }
+.acard .lvl i { width: 22px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .16); }
+.acard .lvl i.f { background: var(--sun); }
+.acard .acc-name { display: flex; gap: 8px; align-items: center; font-size: 17px; margin-bottom: 4px; }
+.acard .acc-name .pill { font-size: 10.5px; padding: 2px 8px; }
+.acard p { margin: 0 0 12px; font-size: 12.5px; color: rgba(255, 255, 255, .62); min-height: 36px; }
+.acard .flow { display: grid; gap: 5px; }
+.acard .flow div { display: grid; grid-template-columns: 46px 1fr; gap: 8px; align-items: center; font-size: 12px; padding: 6px 8px; border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, .08); background: rgba(0, 0, 0, .25); opacity: .45; transition: .35s cubic-bezier(.16, 1, .3, 1); }
+.acard .flow div.lit { opacity: 1; border-color: rgba(255, 255, 255, .18); transform: translateX(3px); }
+.acard .flow b { font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: rgba(255, 255, 255, .5); font-weight: 500; }
+.acard .flow b.c { color: var(--rose); }
+.promises { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+.promises span { display: inline-flex; gap: 8px; align-items: center; font-size: 12.5px; padding: 7px 12px; border-radius: 99px; color: rgba(255, 255, 255, .8);
+  border: 1px solid rgba(124, 243, 196, .35); background: rgba(124, 243, 196, .06); }
+.promises .ico { color: #7cf3c4; width: 15px; height: 15px; }
+.cello-hello { position: fixed; inset: 0; z-index: 25; display: grid; place-items: center; pointer-events: auto; background: rgba(6, 6, 10, .6);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); animation: cello-in .3s ease; }
+.hello-card { width: min(980px, 94vw); max-height: 92vh; overflow: auto; border-radius: 26px; padding: 26px; color: #f4f1ea; background: rgba(16, 12, 24, .95);
+  border: 1px solid rgba(255, 255, 255, .12); box-shadow: 0 40px 120px -30px rgba(0, 0, 0, .8); }
+.hello-card h2 { margin: 0 0 6px; font-size: clamp(20px, 2.2vw, 26px); letter-spacing: -.02em; }
+.hello-card > p { margin: 0 0 18px; color: rgba(255, 255, 255, .6); font-size: 14px; }
+.hello-later { display: block; margin: 16px auto 0; background: none; border: 0; color: rgba(255, 255, 255, .6); font: inherit; font-size: 13px; text-decoration: underline; cursor: pointer; }
+@media (max-width: 760px) { .acc { grid-template-columns: 1fr; } }
+
+/* a long message beside the orb stays on screen, whichever corner the orb is in */
+.cello-pill.long { max-width: min(360px, calc(var(--x) * 2 - 24px), calc((100vw - var(--x)) * 2 - 24px)); }
+
+/* a page with Cello's conversation docked in it (the film page): the orb rests in the corner beside its box, and the
+   work panel goes left so it never covers the conversation (a dragged orb keeps its own place) */
+#cello.page-docked { --x: calc(100vw - 58px); --y: calc(100vh - 58px); }
+#cello.page-docked .cello-desk, #cello.page-docked .cello-desk-tab { right: auto; left: 16px; top: auto; bottom: 16px; }
+#cello.page-docked[data-state="sleep"] .cello-body::after { top: auto; bottom: calc(100% - 20px); left: auto; right: 25px; transform: none; white-space: normal; width: 72px; padding: 4px 8px; text-align: center; line-height: 1.25; border-radius: 10px; } /* above the orb, inside the gutter */
+
+/* the film page's drawer is open: Cello lives in it (its orb in the drawer's head, its words in the conversation, its
+   box at the bottom), so the floating orb, its caption, pill and type box step aside; a question it asks shows in the
+   drawer, just above the box, and its work panel stays on the left */
+#cello.dock-in .cello-body, #cello.dock-in .cello-caption, #cello.dock-in .cello-pill, #cello.dock-in .cello-lc {
+  opacity: 0; visibility: hidden; pointer-events: none !important; transition: opacity .25s, visibility 0s .25s; }
+#cello.dock-in .cello-ask, #cello.dock-in.flip .cello-ask, #cello.dock-in.high .cello-ask { left: auto; right: 14px; top: auto; bottom: 150px;
+  width: min(380px, calc(var(--dockw, 400px) - 28px)); }

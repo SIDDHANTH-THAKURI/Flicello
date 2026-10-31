@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -246,7 +247,7 @@ def test_a_whole_video_through_the_web_app(studio, media, monkeypatch):
     page = client.get(f"/p/{pid}").text
     assert "How did version 1 turn out?" in page
     finals = studio.renders(studio.db.project(pid), "final")
-    assert {r["shape"] for r in finals} == {"9:16", "16:9"}
+    assert {r["shape"] for r in finals} == {"16:9"}  # one shape, picked from their landscape clips (they can ask for both)
     assert all(f["level"] != "fail" for r in finals for f in json.loads(r["findings"]))
     # its shots are numbered as it is made: a frame each, and the number of the shot playing is on the player
     strip = studio.strip_of(studio.db.project(pid), 1)
@@ -878,7 +879,8 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     page = client.get("/new").text
     assert "Just my voice" in page and "Me talking" in page
     r = client.post("/new", data={"csrf": csrf, "title": "Sleep", "shapes": "9:16", "length": 30, "kind": "voice",
-                                  "intent": "explain why sleep helps memory"}, follow_redirects=False)
+                                  "style": "labels", "intent": "explain why sleep helps memory"},
+                    follow_redirects=False)  # painted looks: a clean-labels voice film (designed ones: moments)
     pid = r.headers["location"].rsplit("/", 1)[1]
     p = studio.db.project(pid)
     assert p["kind"] == "voice" and p["music"] == "none"
@@ -925,7 +927,7 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     assert [t["what"] for t in taste].count("picked") == 1 and [t["what"] for t in taste].count("passed") == 3
     assert any(t["what"] == "changed" and t["note"] == "warmer colours" for t in taste)
     assert "picked '" + looks[0]["pitch"]["title"] in studio.profile(friend).taste_text()
-    assert "Your looks" in client.get("/style").text
+    assert "Looks I liked" in client.get("/style").text
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "no", "note": "make it brighter, sunrise colours"})
     _drain(studio)
     page = client.get(f"/p/{pid}").text
@@ -942,41 +944,101 @@ def test_a_voice_alone_becomes_an_animated_video(studio, media, monkeypatch):
     assert script["scenes"] and script["scenes"][0]["start"] == 0.0
 
 
-def test_a_talking_video_gets_callouts_and_keeps_its_own_sound(studio, media, monkeypatch):
-    from vidosuper.explainer import make as explainer_make
+def test_a_talking_video_is_designed_as_a_whole_world_and_keeps_its_own_sound(studio, media, monkeypatch):
+    """No looks to pick and no template layouts: what is said becomes a plan (the world, 2d or 3d, and each moment:
+    before, each change on its word, after), shown first; then the film is designed section by section as a whole
+    world with them in it (the first section is the sample), with their own sound."""
+    from vidosuper.ffmpeg import ffmpeg_bin
+    from vidosuper.motion import moments as mo
+    from vidosuper.motion import worlds
     from vidosuper.perceive import prep as prep_mod
-    from vidosuper.perceive.transcribe import Utterance, Word
 
-    def speech(cid, wav, model, root):
-        return _fake_speech(cid, wav, model, root)
+    monkeypatch.setattr(prep_mod, "transcribe", lambda cid, wav, model, root: _fake_speech(cid, wav, model, root))
+    planned, designed = [], []
 
-    monkeypatch.setattr(prep_mod, "transcribe", speech)
+    def plan(words, duration, ask, kind, w, h, previous=None, feedback="", **kw):
+        planned.append((kind, feedback, ask))
+        colour = "a red ball" if "red" in feedback else "a blue circle"
+        return mo.FilmDesign(look="navy and orange, flat", engine="2d", world="a deep navy space, them on the left",
+                             moments=[mo.Moment(start=0.2, end=1.6, before=colour + " beside them", after="it is bigger"),
+                                      mo.Moment(start=2.0, end=3.0, before="three stars above them",
+                                                after="the stars spin away")])
+
+    def prepare(base, section, folder, person, engine):
+        (folder / "stage").mkdir(parents=True, exist_ok=True)
+        return folder / "stage"
+
+    def design(design_, section, folder, words, ask, kind, first, bible="", reference=None, **kw):
+        designed.append([design_.moments[k].before for k in section.moments])
+        desk = folder / "desk"
+        (desk / "reviews").mkdir(parents=True, exist_ok=True)
+        (desk / "scene.html").write_text("<html>" + "x" * 300 + "</html>", encoding="utf-8")
+        (desk / "reviews" / "review-1.json").write_text(json.dumps({"score": 9, "ok": True}), encoding="utf-8")
+        return desk / "scene.html"
+
+    def render(section, folder, base, engine, library):
+        out = folder / "section.mp4"
+        subprocess.run([ffmpeg_bin(), "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=1080x1920:r=30",
+                        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", f"{section.duration:.3f}", "-c:v",
+                        "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(out)], check=True)
+        return out
+
+    monkeypatch.setattr(worlds, "prepare", prepare)
+    monkeypatch.setattr(worlds, "design", design)
+    monkeypatch.setattr(worlds, "render", render)
+    monkeypatch.setattr(mo, "plan", plan)
     friend = _friend(studio, "Joe")
     client = local_client(studio)[0]
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
     r = client.post("/new", data={"csrf": csrf, "title": "Talk", "shapes": "both", "length": 30, "kind": "talk",
-                                  "intent": "Add motion graphics on the topic I am talking about"}, follow_redirects=False)
+                                  "intent": "Make the shapes I describe come alive"}, follow_redirects=False)
     pid = r.headers["location"].rsplit("/", 1)[1]
-    assert studio.db.project(pid)["shapes"] == "9:16"
+    assert studio.db.project(pid)["shapes"] == "9:16" and studio.db.project(pid)["style"] == "designed"
     _upload(client, csrf, pid, media / "clips" / "a_stable.mp4", "clip")
     client.post(f"/p/{pid}/start", data={"csrf": csrf})
     _drain(studio)
     assert "what I heard in your video" in client.get(f"/p/{pid}").text, studio.db.all("SELECT * FROM events")
-    client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": "Why sleep matters for memory, simply"})
+    client.post(f"/p/{pid}/understood", data={"csrf": csrf, "story": "Shapes that come alive"})
     _drain(studio)
-    assert "Pick a look" in client.get(f"/p/{pid}").text, studio.db.all("SELECT * FROM events")
-    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": studio.pitches(studio.db.project(pid))[0]["id"]})
+    # the plan first, nothing built: what is seen, moment by moment, to read, change or copy
+    page = client.get(f"/p/{pid}").text
+    assert "What you&#39;ll see" in page or "What you'll see" in page, "\n".join(
+        e["message"] for e in studio.db.all("SELECT * FROM events"))
+    assert "a blue circle beside them" in page and "No words on screen" in page and "Design the first part" in page
+    assert "a deep navy space" in page and "2D, flat motion design" in page  # the world and its engine, shown first
+    assert "Moment 1 (0.2-1.6 s)" in page and not designed
+    assert planned[0][0] == "talk" and "shapes I describe" in planned[0][2]
+    client.post(f"/p/{pid}/another", data={"csrf": csrf, "reason": "make it a red ball"})
     _drain(studio)
-    assert "Looks right" in client.get(f"/p/{pid}").text, studio.db.all("SELECT * FROM events")
+    assert planned[-1][1] == "make it a red ball"  # written again from their words
+    page = client.get(f"/p/{pid}").text
+    assert "a red ball beside them" in page and "a blue circle beside them" not in page  # the old plan set aside
+    client.post(f"/p/{pid}/another", data={"csrf": csrf, "reason": "no, keep the blue circle"})
+    _drain(studio)
+    shown = [x for x in studio.pitches(studio.db.project(pid)) if not x["rejected"]]
+    assert len(shown) == 1
+    client.post(f"/p/{pid}/pick", data={"csrf": csrf, "pitch": shown[0]["id"]})
+    _drain(studio)
+    page = client.get(f"/p/{pid}").text
+    assert "Looks right" in page, "\n".join(e["message"] for e in studio.db.all("SELECT * FROM events"))
+    assert designed == [["a blue circle beside them", "three stars above them"]]  # the sample: the first section
+    sample = studio.renders(studio.db.project(pid), "sample")[0]
+    work = studio.s.users_dir / friend["id"] / "projects" / pid
+    assert (work / "out" / sample["file"]).exists()
     client.post(f"/p/{pid}/sample", data={"csrf": csrf, "verdict": "ok"})
     _drain(studio)
     finals = studio.renders(studio.db.project(pid), "final")
-    assert finals
-    work = studio.s.users_dir / friend["id"] / "projects" / pid
-    script = json.loads(studio.db.one("SELECT data FROM plans WHERE project_id=? ORDER BY id DESC", (pid,))["data"])
-    assert script["callouts"] or script["scenes"]
-    assert (work / "out" / finals[0]["file"]).exists()
+    assert finals and (work / "out" / finals[0]["file"]).exists()
+    assert len(designed) == 1  # the film is one section here: the sample is kept, nothing designed twice
+    rows = json.loads(finals[0]["findings"])
+    assert any("the whole frame designed: a world with you in it: 1 of 1" in r["detail"] and r["level"] == "ok"
+               for r in rows)
+    assert any("no words on screen" in r["detail"] and r["level"] == "ok" for r in rows)
+    info = json.loads(studio.db.project(pid)["info"])
+    assert [m["before"] for m in info["moments"]] == ["a blue circle beside them", "three stars above them"]
+    plan_row = studio.latest_plan(studio.db.project(pid))
+    assert plan_row["kind"] == "moments" and json.loads(plan_row["data"])["moments"]
 
 
 def test_a_revision_is_described_and_the_sample_starts_where_it_changed():
@@ -1044,21 +1106,44 @@ def test_a_long_step_that_keeps_moving_is_left_alone_and_one_that_stopped_is_sto
 
 def test_the_time_left_for_drawing_a_talk_comes_from_its_length_and_how_fast_talks_draw(studio):
     friend = _friend(studio, "Mo")
-    p = studio.create_project(friend, "x", "9:16", 15, "", kind="talk", style="designed")
+    p = studio.create_project(friend, "x", "9:16", 15, "", kind="talk", style="labels")
     studio.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps({"seconds": 120.0}), p["id"]))
     job = {"kind": "render", "status": "queued", "started": None, "progress": 0, "project_id": p["id"]}
-    assert studio.eta(job) == 2400  # a first guess: 20 s of drawing per second of video
-    other = studio.create_project(friend, "y", "9:16", 15, "", kind="talk", style="designed")
-    for style, took in (("designed", 1800.0), ("designed", 1500.0), ("labels", 30.0), (None, 1.0)):
+    assert studio.eta(job) == 360  # a first guess: 3 s of drawing per second of video
+    other = studio.create_project(friend, "y", "9:16", 15, "", kind="talk", style="labels")
+    for style, took in (("labels", 1800.0), ("labels", 1500.0), ("designed", 30.0), (None, 1.0)):
         studio.db.run("INSERT INTO renders(project_id, plan_id, version, kind, shape, file, seconds, render_seconds, "
                       "created, style) VALUES (?,?,?,?,?,?,?,?,?,?)", (other["id"], 1, 1, "final", "9:16", "v1.mp4", 60.0,
                                                                        took, time.time(), style))
-    assert studio.draw_rate("talk", "designed") == 30.0 and studio.draw_rate("talk", "labels") == 0.5
-    assert studio.eta(job) == 3600  # 2 minutes at 30 s a second; labels and older renders don't count
+    assert studio.draw_rate("talk", "labels") == 30.0 and studio.draw_rate("talk", "designed") == 0.5
+    assert studio.eta(job) == 3600  # 2 minutes at 30 s a second; other styles and older renders don't count
     running = {**job, "status": "running", "started": time.time() - 600, "progress": 0.02 + 0.96 * 600 / 3600}
     assert 2600 <= studio.eta(running) <= 3200  # ten minutes in, about fifty to go
     montage = studio.create_project(friend, "z", "9:16", 15, "")
     assert studio.eta({**job, "project_id": montage["id"]}) == 300  # montages: what such jobs usually take
+
+
+def test_the_time_for_designed_moments_is_what_a_moment_really_takes_times_the_moments(studio, monkeypatch):
+    from vidosuper.studio.service import MOMENT_SECONDS
+    from vidosuper.work import moments_film as mf
+
+    monkeypatch.setattr(mf, "parallel", lambda: 2)
+    friend = _friend(studio, "Di")
+    p = studio.create_project(friend, "x", "16:9", 15, "", kind="talk", style="designed")
+    studio.db.run("UPDATE projects SET info=? WHERE id=?", (json.dumps({"seconds": 47.0}), p["id"]))
+    job = {"kind": "sample", "status": "queued", "started": None, "progress": 0, "project_id": p["id"]}
+    assert studio.eta(job) == MOMENT_SECONDS  # a sample is one moment: the measured first guess, not "7 min"
+    render = {**job, "kind": "render"}
+    assert studio.eta(render) == MOMENT_SECONDS * 3  # no plan yet: about one moment per 8 s (6), two at a time
+    studio.db.run("INSERT INTO plans(project_id, kind, data, created) VALUES (?,?,?,?)",
+                  (p["id"], "moments", json.dumps({"look": "", "idea": "", "moments": [{}] * 3}), time.time()))
+    assert studio.eta(render) == MOMENT_SECONDS * 2  # the plan's 3 moments, two at a time
+    for took in (1200.0, 1500.0, 1800.0):  # designed samples measured here replace the first guess
+        studio.db.run("INSERT INTO jobs(project_id, kind, status, started, finished, params, created) "
+                      "VALUES (?,?,?,?,?,?,?)", (p["id"], "sample", "done", 0.0, took, "{}", time.time()))
+    assert studio.moment_seconds() == 1500.0
+    head = studio.typical_seconds("prepare") + studio.typical_seconds("pitch")
+    assert studio.total_estimate("talk", studio.db.project(p["id"])) == int(head + 1500 + 2 * 1500)  # sample + film
 
 
 def test_a_new_film_takes_their_own_length_cut_and_kind_and_the_ai_is_told_all_of_it(studio):
@@ -1424,7 +1509,8 @@ def test_a_voice_video_gets_the_music_made_for_it_under_the_voice(studio, media,
     _friend(studio, "Vi")
     client, csrf = _signed_in(studio, "Vi")
     r = client.post("/new", data={"csrf": csrf, "title": "Sleep", "shapes": "9:16", "length": 30, "kind": "voice",
-                                  "intent": "explain why sleep helps memory"}, follow_redirects=False)
+                                  "style": "labels", "intent": "explain why sleep helps memory"},
+                    follow_redirects=False)  # painted looks: a clean-labels voice film (designed ones: moments)
     pid = r.headers["location"].rsplit("/", 1)[1]
     client.post(f"/p/{pid}/music", data={"csrf": csrf, "choice": "made"})
     assert "Add your recording first" in client.get(f"/p/{pid}").text
@@ -1626,7 +1712,7 @@ def test_a_new_film_starts_from_their_words_and_a_cartoon_is_asked_before_it_cos
     csrf = _csrf(client.get("/", follow_redirects=True).text)
     client.post("/welcome", data={"csrf": csrf, "pace": "balanced", "sound": "music", "look": "vivid"})
     page = client.get("/new").text
-    assert 'name="describe"' in page and "Or just tell Cello" in page and "A cartoon" in page
+    assert 'name="describe"' in page and 'data-record="camera"' in page and "A cartoon from a story" in page  # examples that show, recording on the spot
     # no words at all: a film from their clips, its story found in them
     r = client.post("/new", data={"csrf": csrf, "kind": "other", "describe": "", "shapes": "9:16", "length": 30},
                     follow_redirects=False)

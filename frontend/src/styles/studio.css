@@ -298,7 +298,7 @@ details.danger-zone form { margin-top: 1rem; }
 .u-terms label { color: var(--muted); font-size: .84rem; }
 .u-terms label q { color: var(--paper-2); }
 .u-terms small { color: var(--muted); font-size: .8rem; }
-.u-grid > .panel { margin: 0; }
+.u-grid > .panel, .u-grid > .panel + .panel { margin: 0; }  /* side by side: "space between stacked cards" must not push the 2nd and 3rd down */
 .improvise-form { margin-top: 1.2rem; display: grid; gap: .7rem; justify-items: start; }
 .improvise-form .slider { width: 100%; }
 
@@ -593,24 +593,7 @@ a.allowance:hover, a.allowance:focus-visible { border-color: var(--paper-2); }
 @keyframes cello-breathe { 50% { transform: scale(1.12); box-shadow: 0 0 16px rgba(255, 150, 100, .95); } }
 @media (prefers-reduced-motion: reduce) { .cello-wake i { animation: none; } }
 
-/* inside Cello's shell the chat box goes: Cello is the conversation (its brief and people stay) */
-body.in-cello .editor .thread, body.in-cello .editor .composer, body.in-cello .editor .hands-free,
-body.in-cello .editor .editor-head, body.in-cello .editor .editor-older { display: none; }
-
-/* one screen: inside Cello a film page shows only what matters now (the clips going in, the work in progress, the
-   ideas, the video); Cello brings anything else up when they ask for it (.cello-shown) */
-body.in-cello[data-project] #main > :not(.page-head, .split, .working, .understood, .looks, .posters, .screens, #draft,
-  #confirm, .cello-shown) { display: none; }
-body.in-cello[data-project] .page-head .meta, body.in-cello[data-project] .page-head .eyebrow-s { display: none; }
-body.in-cello[data-project] .page-head .page-title { font-size: clamp(1.4rem, 2.6vw, 2rem); text-align: center; }
-body.in-cello[data-project] .page-head { justify-content: center; margin-bottom: .6rem; }
-body.in-cello[data-project] .split { display: block; max-width: 760px; margin-inline: auto; }
-body.in-cello[data-project] .split > aside:not(.cello-shown) { display: none; }
-body.in-cello[data-project] #draft ~ .screens:not(.cello-shown) { display: none; }
-body.in-cello[data-project] #draft > .change-list, body.in-cello[data-project] #draft > .help { display: none; }
-body.in-cello[data-project] .screens figcaption, body.in-cello[data-project] .screens details.more { display: none; }
-body.in-cello[data-project] .screens .device .frame video { max-height: 78vh; }
-body.in-cello[data-project] .screens .device.tall { max-width: min(46vh, 92vw); }
+/* inside Cello's shell the film page keeps its one docked conversation: Cello's voice lines arrive in it (filmpage) */
 body.in-cello .cello-shown { display: revert !important; }
 body.in-cello .cello-lit { box-shadow: 0 0 0 3px rgba(255, 190, 110, .95), 0 0 46px 8px rgba(255, 160, 80, .5) !important;
   transition: box-shadow .4s ease; }

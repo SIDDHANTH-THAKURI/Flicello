@@ -73,8 +73,24 @@ def answer(studio, user: dict, row: dict, text: str) -> dict:
     return studio.db.one("SELECT * FROM work WHERE id=?", (row["id"],))
 
 
+VERTICAL_NOTE = re.compile(r"\b(reels?|tiktok|shorts|vertical|portrait|9:16|stor(y|ies))\b", re.I)
+WIDE_NOTE = re.compile(r"\b(youtube(?! shorts)|landscape|widescreen|horizontal|16:9|wide)\b", re.I)
+
+
+def tell(studio, user: dict, project: dict, key: str, say: str) -> None:
+    """A decision Flicello made from what it can see, said once in a line (Cello says it; they can change it)."""
+    if studio.db.one("SELECT id FROM work WHERE project_id=? AND kind='system' AND key=?", (project["id"], key)):
+        return
+    now = time.time()
+    studio.db.run("INSERT INTO work(id, project_id, user_id, kind, status, key, say, created, updated) "
+                  "VALUES (?,?,?,?,?,?,?,?,?)", ("w" + secrets.token_hex(6), project["id"], user["id"], "system", "told",
+                                                 key, say, now, now))
+    studio.db.event(project["id"], say, "info")
+
+
 def after_upload(studio, user: dict, project: dict) -> None:
-    """The clips are in: ask the shape, recommending what most of them are."""
+    """The clips are in: the shape decided from them (and from what they said: 'for Reels'), said in one line.
+    Asked only on a real toss-up: an even mix of vertical and landscape, or their words against the footage."""
     project = studio.db.project(project["id"])
     if project is None or project["stage"] != "setup" or project["kind"] == "voice":
         return
@@ -84,7 +100,24 @@ def after_upload(studio, user: dict, project: dict) -> None:
     tall = sum(float(c["seconds"] or 1) for c in clips if (c["height"] or 0) > (c["width"] or 0))
     wide = sum(float(c["seconds"] or 1) for c in clips if (c["width"] or 0) >= (c["height"] or 0))
     first = "9:16" if tall >= wide else "16:9"
-    order = [first, "16:9" if first == "9:16" else "9:16", "both"]
-    what = "mostly vertical" if tall >= wide else "mostly landscape"
-    ask(studio, user, project, "shape", "Which shape should the film be?", [SHAPES[s] for s in order],
-        f"Your clips are {what}.")
+    note = " ".join([project.get("intent") or "", project.get("cut_note") or ""])
+    said = "9:16" if VERTICAL_NOTE.search(note) else "16:9" if WIDE_NOTE.search(note) else None
+    share = max(tall, wide) / max(1e-6, tall + wide)
+    if said is not None and said != first:  # they asked for one shape and the footage is the other
+        order = [said, first, "both"]
+        what = "mostly vertical" if first == "9:16" else "mostly landscape"
+        ask(studio, user, project, "shape", "Which shape should the film be?", [SHAPES[s] for s in order],
+            f"You mentioned {SHAPES[said].split(' (')[0].lower()}, but your clips are {what}.")
+        return
+    if said is None and share < 0.65:  # an even mix: a real choice
+        order = [first, "16:9" if first == "9:16" else "9:16", "both"]
+        ask(studio, user, project, "shape", "Which shape should the film be?", [SHAPES[s] for s in order],
+            "Your clips are a mix of vertical and landscape.")
+        return
+    shape = said or first
+    if project["shapes"] != shape:
+        studio.set_settings(project, shape, None)
+    choose(studio, project, "Shape", SHAPES[shape])
+    why = "as you said" if said else ("like your clips" if shape == first else "")
+    other = "landscape for YouTube" if shape == "9:16" else "vertical for Reels"
+    tell(studio, user, project, "shape", f"{SHAPES[shape].split(' (')[0]}, {why}. Say if you want it {other}, or both.")

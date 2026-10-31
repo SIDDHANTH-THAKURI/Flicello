@@ -21,6 +21,7 @@ from .brain.schemas import ProfileUpdate
 
 SEED = REPO_ROOT / "config" / "studio" / "owner_rules.yaml"
 MAX_RULES = 24
+BIN_DAYS = 30  # a removed rule can be brought back for this long
 MAX_TASTE = 40  # look choices remembered (picked, passed over, changes asked, how the video was rated)
 SCOPES = ("all", "films", "talks")  # a rule learned on a travel film ("no on-screen text") must not shape an explainer
 SCOPE_LABEL = {"films": "films from footage", "talks": "voice and talking videos"}
@@ -32,9 +33,9 @@ def scope_of(kind: str) -> str:
 
 
 def rules_for(rules: list[dict], kind: str) -> list[dict]:
-    """The rules that apply to a video of this kind (rules without a scope apply to all)."""
+    """The rules that apply to a video of this kind (rules without a scope apply to all; switched-off ones don't)."""
     scope = scope_of(kind)
-    return [r for r in rules if r.get("for", "all") in ("all", scope)]
+    return [r for r in rules if r.get("for", "all") in ("all", scope) and not r.get("off")]
 
 QUESTIONS: list[tuple[str, str, list[tuple[str, str]]]] = [
     ("pace", "How should your videos move?", [("calm", "Calm and cinematic"), ("balanced", "A mix of both"),
@@ -91,6 +92,7 @@ class Profile:
     answers: dict = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
     taste: list[dict] = field(default_factory=list)  # their looks: what they picked, passed over, changed, rated
+    bin: list[dict] = field(default_factory=list)  # removed rules, kept BIN_DAYS so they can come back
 
     @classmethod
     def load(cls, path: Path) -> "Profile":
@@ -101,14 +103,15 @@ class Profile:
             for r in rules:  # made before rules had a scope: the owner's seeded film rules are about films
                 if "for" not in r and r.get("source") == "owner" and r.get("text") in seeds:
                     r["for"] = seeds[r["text"]]
-            return cls(path, rules, data.get("answers", {}), data.get("history", []), data.get("taste", []))
+            return cls(path, rules, data.get("answers", {}), data.get("history", []), data.get("taste", []),
+                       data.get("bin", []))
         return cls(path)
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"rules": self.rules, "answers": self.answers, "history": self.history[-100:],
-                                   "taste": self.taste[-MAX_TASTE:]}, indent=1), encoding="utf-8")
+                                   "taste": self.taste[-MAX_TASTE:], "bin": self.binned()}, indent=1), encoding="utf-8")
         tmp.replace(self.path)
 
     @property
@@ -156,9 +159,47 @@ class Profile:
         return "\n".join(lines[:24])
 
     def drop(self, rid: str) -> bool:
-        before = len(self.rules)
-        self.rules = [r for r in self.rules if r["id"] != rid]
-        return len(self.rules) < before
+        """The rule taken out, into the bin (it can come back for BIN_DAYS)."""
+        found = next((r for r in self.rules if r["id"] == rid), None)
+        if found is None:
+            return False
+        self.rules.remove(found)
+        self.bin.append({**found, "binned": date.today().isoformat()})
+        return True
+
+    def binned(self) -> list[dict]:
+        """Removed rules still within BIN_DAYS, newest last."""
+        today = date.today()
+        keep = []
+        for r in self.bin:
+            try:
+                age = (today - date.fromisoformat(r.get("binned", ""))).days
+            except ValueError:
+                age = 0
+            if age <= BIN_DAYS:
+                keep.append(r)
+        return keep[-MAX_RULES:]
+
+    def restore(self, rid: str) -> bool:
+        """A removed rule brought back from the bin."""
+        found = next((r for r in self.binned() if r["id"] == rid), None)
+        if found is None:
+            return False
+        self.bin = [r for r in self.bin if r["id"] != rid]
+        if not any(r["text"].lower() == found["text"].lower() for r in self.rules):
+            self.rules.append({k: v for k, v in found.items() if k != "binned"})
+        return True
+
+    def switch(self, rid: str, on: bool) -> bool:
+        """A rule switched off (kept, not followed) or on again."""
+        found = next((r for r in self.rules if r["id"] == rid), None)
+        if found is None:
+            return False
+        if on:
+            found.pop("off", None)
+        else:
+            found["off"] = True
+        return True
 
     def set_answers(self, answers: dict[str, str], never: str = "", others: dict[str, str] | None = None) -> None:
         """Answers to the starting questions become rules (replacing earlier answer rules). Every question also takes

@@ -7,7 +7,9 @@
 //   reaches from Cello to whatever it is working on, so you see it work.
 // The phase is worked out from facts on every frame, never pushed, so it can't go stale.
 import { Orb } from './orb.js';
-import './cello.css';
+import { setupRing } from './ring.js';
+import { setupComposer } from './composer.js';
+import './bundle.css';
 
 const $ = (s, r = document) => r.querySelector(s);
 const csrf = $('meta[name="csrf"]').content;
@@ -19,8 +21,6 @@ const orb = new Orb($('#cello-orb'));
 const beam = $('#cello-beam');
 const caption = $('.cello-caption', root);
 const pill = $('.cello-pill', root);
-const menu = $('.cello-menu', root);
-const typer = $('.cello-type', root);
 const WS = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
 const PARTS = { preview: '[data-preview]', draft: '#draft', timeline: '#timeline', styles: '#styles', ready: '#ready',
   exports: '#exports', review: '#review', versions: '.screens', brief: '#editor', people: '#editor .people',
@@ -53,9 +53,14 @@ function go(src) {
   });
 }
 
+function tellPage(msg) { try { frame.contentWindow.postMessage({ cello: 'shell', ...msg }, location.origin); } catch { /* gone */ } }
+
 frame.addEventListener('load', () => {
   const d = doc();
   if (!d) return;
+  setTimeout(() => tellPage({ on: S.on }), 50);
+  root.classList.toggle('page-docked', !!d.querySelector('[data-dock]')); // the film page has Cello's conversation docked
+  if (!d.querySelector('[data-dock]')) root.classList.remove('dock-in'); // (its drawer says when it is open)
   history.replaceState(null, '', `/cello?to=${encodeURIComponent(frame.contentWindow.location.pathname + frame.contentWindow.location.search)}`);
   d.addEventListener('pointermove', (e) => { // its eyes follow you around the page, and it knows what you point at
     const r = body.getBoundingClientRect();
@@ -67,7 +72,7 @@ frame.addEventListener('load', () => {
   });
   document.title = d.title || 'Flicello';
   d.addEventListener('keydown', (e) => { if (e.key === 'Escape') stop(); });
-  d.addEventListener('pointerdown', () => { menu.hidden = true; unlock(); });
+  d.addEventListener('pointerdown', () => { unlock(); });
   d.addEventListener('click', (e) => { // other sites can't be held in the frame: they open in a tab
     const a = e.target.closest && e.target.closest('a[href]');
     if (a && a.origin !== window.location.origin) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
@@ -191,6 +196,13 @@ function onPage(args) {
     const el = find(d, what, 'button, a, summary, label, [role=button], input[type=submit], input[type=checkbox], input[type=radio]');
     if (!el) return `There is nothing called "${args.where}" to click on this page.`;
     reveal(el);
+    if (destroys(el)) { // never pressed for them: Cello shows it, the person presses it
+      d.querySelectorAll('[data-cello-pointed]').forEach((n) => n.removeAttribute('data-cello-pointed'));
+      el.setAttribute('data-cello-pointed', '');
+      point('[data-cello-pointed]', 9000);
+      return `Not pressed: "${words(el)}" deletes for good, so only they may press it. It is lit up on screen for `
+        + 'them; say so, and never try another way to delete it.';
+    }
     if (el.closest('form[data-confirm]')) el.closest('form').removeAttribute('data-confirm'); // they asked by voice: no box to tick
     el.click();
     return `Clicked "${words(el)}".`;
@@ -206,6 +218,16 @@ function onPage(args) {
     return `Typed into "${words(el) || 'the field'}".`;
   }
   return 'Say scroll, click, type or back.';
+}
+
+// what can't be undone: deleting a film, every film, clips, their style or account. Cello may take them there and
+// point; it never presses it (and never takes away the "are you sure?" box on it).
+const FOR_GOOD = /\b(delete|erase|wipe|destroy|remove (it |them |this )?for good|permanently|can.?t be undone|cannot be undone)\b/i;
+function destroys(el) {
+  const form = el.closest('form');
+  const said = [words(el), el.getAttribute('formaction') || '', form?.getAttribute('action') || '',
+    form?.dataset.confirm || '', el.dataset?.confirm || ''].join(' ');
+  return FOR_GOOD.test(said) || !!el.closest('.danger, .danger-zone, details.danger-zone');
 }
 
 function reveal(el) { // a part tucked away in the one-screen view, brought up (and every box it sits in opened)
@@ -266,6 +288,7 @@ function audio() {
 
 function play(b64) {
   if (S.cut) return; // they stopped this answer: the rest of it is dropped
+  if (localStorage.getItem('cello-text') === '1') { S.lastSound = performance.now(); return; } // text only: it writes
   const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const pcm = new Int16Array(bytes.buffer, 0, bytes.length >> 1);
   const buf = ctx.createBuffer(1, pcm.length, 24000);
@@ -293,8 +316,6 @@ function stop() { // Esc, or a tap while it talks: this answer ends here
   hush();
   S.awaiting = false;
   S.asked = 0;
-  menu.hidden = true;
-  typer.hidden = true;
 }
 
 // ---------------------------------------------------------------- ears: the mic at 16 kHz, 40 ms at a time
@@ -328,9 +349,13 @@ async function ears() {
 
 // ---------------------------------------------------------------- the log: what it heard, said and did, kept
 const book = [];
+const told = []; // this session's lines, for the ring's "What it did" (book is sent away and emptied)
 const turn = { you: '', cello: '' };
 function note(who, text) {
-  book.push({ at: Date.now() / 1000, who, text: typeof text === 'string' ? text : JSON.stringify(text) });
+  const entry = { at: Date.now() / 1000, who, text: typeof text === 'string' ? text : JSON.stringify(text) };
+  book.push(entry);
+  told.push(entry);
+  if (told.length > 120) told.splice(0, told.length - 120);
   if (book.length > 40) sendBook();
 }
 function closeTurn() { // what they said and what it answered, each as one line
@@ -420,8 +445,9 @@ function onMessage(m) {
     while (S.pending.length) say(S.pending.shift());
     if (!S.greeted) {
       S.greeted = true;
-      hidden(film() ? '(Note, not them talking: they just woke you while a film is open. Call look, then greet them in a few words and say one useful thing about where the film is.)'
-        : '(Note, not them talking: they just woke you. Greet them in a few words; you are ready to work.)');
+      const access = { advisor: 'Advisor (you look, point and suggest; they make the changes)', full: 'Full (you do the whole job and tell them after)' }[ring.access()] || 'Co-pilot (small edits at once; ask before anything that takes time)';
+      hidden(film() ? `(Note, not them talking: they just woke you while a film is open. Your access: ${access}. Call look, then greet them in a few words and say one useful thing about where the film is.)`
+        : `(Note, not them talking: they just woke you. Your access: ${access}. Greet them in a few words; you are ready to work.)`);
     }
   }
   if (m.sessionResumptionUpdate?.resumable && m.sessionResumptionUpdate.newHandle) {
@@ -461,6 +487,7 @@ function onMessage(m) {
     S.asked = performance.now();
   }
   if (sc.outputTranscription?.text) { turn.cello += sc.outputTranscription.text; line('me', sc.outputTranscription.text); }
+  if (sc.turnComplete) { comp.done(); tellPage({ turn: 'done' }); }
   if (sc.interrupted) note('event', 'they spoke over it: stopped');
   if (sc.turnComplete) closeTurn();
   if (sc.turnComplete) { S.awaiting = false; S.asked = 0; S.cut = false; S.inReply = 0; }
@@ -476,6 +503,8 @@ function afterWords(fn) { // when what it is saying has finished playing
 // what was just said, briefly, beside the orb (never a chat log)
 const said = { you: '', me: '', t: 0 };
 function line(who, text) {
+  if (who === 'you') comp.heard(text); else comp.reply(text);
+  tellPage({ line: who, text });
   if (performance.now() - said.t > 2500) { said.you = ''; said.me = ''; }
   said[who] = tail(`${said[who]}${text}`, who === 'me' ? 170 : 110);
   if (who === 'me') said.you = tail(said.you, 60);
@@ -504,11 +533,14 @@ async function tools(calls) {
   for (const fc of calls) {
     S.acting += 1;
     const name = fc.name;
-    show({ look: 'Looking', edit: 'Making the changes', style: 'Trying the style', make_it: 'Making it', export: 'Exporting',
+    const doing = ({ look: 'Looking', edit: 'Making the changes', style: 'Trying the style', make_it: 'Making it', export: 'Exporting',
       effect: 'Working on the shot', ai_clip: 'Making a clip', music: 'Remaking the music', open: 'Opening', show: 'Showing you',
       play: 'Playing', diagnose: 'Checking what broke', repair: 'Repairing', pointing: 'Looking where you point',
       page: 'On the page', upload: 'Where your clips go', new_film: 'Starting a film', build: 'Building it',
       brief: 'Noting it', find: 'Watching for it' }[name] || 'On it');
+    show(doing);
+    comp.step(doing);
+    tellPage({ doing });
     let result;
     note('tool', `${name} ${JSON.stringify(fc.args || {})}`);
     try {
@@ -722,7 +754,18 @@ function chime(up = true) {
 
 // a page inside asks for Cello (the new-film page's "Or just tell Cello")
 window.addEventListener('message', (e) => {
-  if (e.origin === location.origin && e.data && e.data.cello === 'wake' && !S.on) wake();
+  if (e.origin !== location.origin || !e.data) return;
+  if (e.data.cello === 'wake' && !S.on) wake();
+  if (e.data.cello === 'ring') { if (!S.on) wake(); else ring.open(); }
+  if (e.data.cello === 'dock') { // the film page's drawer opened or closed: while it is open Cello lives in it
+    root.classList.toggle('dock-in', !!e.data.open);
+    root.style.setProperty('--dockw', `${Math.max(0, Number(e.data.w) || 0)}px`);
+  }
+  if (e.data.cello === 'say' && e.data.text) { // typed in the film page's dock while Cello is on
+    comp.heard(String(e.data.text));
+    if (!S.on) wake();
+    say(String(e.data.text));
+  }
 });
 
 async function wake() {
@@ -747,14 +790,17 @@ async function wake() {
     await ears();
   } catch {
     show('Allow the microphone to talk to Cello. Meanwhile you can type to it.');
-    typer.hidden = false;
-    typer.t.focus();
+    comp.type();
   }
+  tellPage({ on: true });
+  await ring.load();
+  if (!ring.access()) await ring.askAccess(); // asked once, on the first hello
   connect();
 }
 
 function sleep() {
   chime(false);
+  tellPage({ on: false });
   S.on = false;
   S.dozing = false;
   root.classList.remove('dozing');
@@ -799,7 +845,7 @@ body.addEventListener('pointermove', (e) => {
 function tap() {
   if (!S.on) wake();
   else if (playing.size) stop();
-  else menu.hidden = !menu.hidden;
+  else ring.toggle();
 }
 body.addEventListener('pointerup', () => {
   if (drag && !drag.moved) tap();
@@ -818,38 +864,7 @@ function place(fx, fy) {
 }
 try { const p = JSON.parse(localStorage.getItem('cello-pos')); if (p) place(p[0], p[1]); } catch { /* default */ }
 
-menu.addEventListener('click', (e) => {
-  const what = e.target.dataset.cello;
-  menu.hidden = true;
-  if (what === 'type') { typer.hidden = false; typer.t.focus(); }
-  if (what === 'mute') {
-    S.muted = !S.muted;
-    e.target.textContent = S.muted ? 'Unmute my mic' : 'Mute my mic';
-    root.classList.toggle('muted', S.muted);
-    show(S.muted ? 'Mic off: Cello isn\u2019t listening' : 'Listening again');
-  }
-  if (what === 'off') turnOff();
-  if (what === 'rest') doze();
-  if (what === 'wakeword') {
-    const on = localStorage.getItem('cello-wake') === '0';
-    localStorage.setItem('cello-wake', on ? '1' : '0');
-    e.target.textContent = on ? 'Don\u2019t wake to my voice' : 'Wake when I say \u201cCello\u201d';
-    show(on ? 'Say \u201cCello\u201d any time to wake me (only on this computer).' : 'Only a tap wakes me now.');
-  }
-});
-typer.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const t = typer.t.value.trim();
-  if (!t) return;
-  if (S.blocked) { show(S.blocked, 30000); return; } // it can't hear or speak until Google carries the voice again
-  typer.t.value = '';
-  typer.hidden = true; // said; Cello answers out loud
-  line('you', t);
-  if (!S.on) wake();
-  say(t);
-});
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') stop(); });
-typer.t.addEventListener('blur', () => { if (!typer.t.value.trim()) setTimeout(() => { typer.hidden = true; }, 150); });
 
 // ---------------------------------------------------------------- every frame: the phase from the facts
 const bins = new Uint8Array(128);
@@ -883,6 +898,7 @@ function tick(now) {
   if (S.mic > 0.025) S.heard = now;
   orb.phase = phase;
   root.dataset.state = phase;
+  comp.phase(phase, now);
   if (speaking) { orb.bands = outBands; orb.level = Math.min(1, S.out * 2.4); } else if (phase === 'hearing') {
     orb.bands = bands(micAn).map((x) => x * 0.7);
     orb.level = Math.min(1, S.mic * 9);
@@ -915,7 +931,7 @@ window.addEventListener('keydown', unlock, true);
 const desk = $('.cello-desk', root);
 const deskTab = $('[data-desk-open]', root);
 const askCard = $('.cello-ask', root);
-const seenAsk = { id: '' };
+const seenAsk = { id: '', later: '' }; // later: a question they put off (it waits behind Cello's work tab)
 let folded = sessionStorage.getItem('cello-desk') === 'folded';
 
 function ago(t, now) {
@@ -946,7 +962,9 @@ async function answer(id, text, picked) {
 }
 
 function drawAsk(w) {
-  if (!w) { askCard.hidden = true; seenAsk.id = ''; return; }
+  deskTab.classList.toggle('waiting', !!w && seenAsk.later === w.id);
+  if (!w) { askCard.hidden = true; seenAsk.id = ''; seenAsk.later = ''; return; }
+  if (seenAsk.later === w.id) { askCard.hidden = true; deskTab.hidden = false; deskTab.textContent = 'A question is waiting'; return; }
   if (seenAsk.id === w.id && !askCard.hidden) return;
   seenAsk.id = w.id;
   $('.ask-lead', askCard).textContent = w.say || '';
@@ -1002,15 +1020,34 @@ function drawDesk(state) {
   (state.choices || []).forEach((c) => { dl.append(el('dt', '', c.what), el('dd', '', c.value)); });
   choiceBox.hidden = !(state.choices || []).length;
   const anything = live.length || done.length || (state.choices || []).length;
-  desk.hidden = !anything || folded;
-  deskTab.hidden = !anything || !folded;
+  // on the film page the film's facts are in its tabs and the conversation is docked: the desk opens only while its
+  // hands are working
+  const fold = folded || (root.classList.contains('page-docked') && !live.length);
+  desk.hidden = !anything || fold;
+  deskTab.hidden = (!anything || !fold) && !seenAsk.later; // a question put off keeps its tab
   root.classList.toggle('desk-on', !desk.hidden);
   drawAsk(asking);
   S.handsBusy = live.some((w) => w.status === 'running');
 }
 
 $('[data-desk-fold]', desk).addEventListener('click', () => { folded = true; sessionStorage.setItem('cello-desk', 'folded'); desk.hidden = true; deskTab.hidden = false; });
-deskTab.addEventListener('click', () => { folded = false; sessionStorage.removeItem('cello-desk'); deskTab.hidden = true; desk.hidden = false; });
+deskTab.addEventListener('click', () => {
+  if (seenAsk.later) { // the question they put off comes back
+    seenAsk.later = '';
+    seenAsk.id = '';
+    deskTab.classList.remove('waiting');
+    deskTab.textContent = 'Cello’s work';
+  }
+  folded = false; sessionStorage.removeItem('cello-desk'); deskTab.hidden = true; desk.hidden = false;
+});
+$('[data-ask-later]', askCard).addEventListener('click', () => { // not now: the work behind it waits for the answer
+  seenAsk.later = seenAsk.id;
+  askCard.hidden = true;
+  deskTab.hidden = false;
+  deskTab.classList.add('waiting');
+  deskTab.textContent = 'A question is waiting';
+  show('It waits behind “A question is waiting”. The work it belongs to waits too.', 5000);
+});
 
 // what Cello's hands did on the screen (a film opened, a draft on its way), shown as it happens, voice on or off
 const hands = { since: 0, wait: '' };
@@ -1036,3 +1073,50 @@ async function deskLoop() {
   setTimeout(deskLoop, 2500);
 }
 deskLoop();
+
+// ---------------------------------------------------------------- the ring around the orb, and the type box
+function mute() {
+  S.muted = !S.muted;
+  root.classList.toggle('muted', S.muted);
+  show(S.muted ? 'Mic off: Cello isn\u2019t listening' : 'Listening again');
+}
+function restart() { // a fresh line and a fresh mind; the page and the film stay
+  show('Restarting\u2026');
+  sleep();
+  S.handle = '';
+  sessionStorage.removeItem('cello-handle');
+  S.greeted = false;
+  setTimeout(wake, 600);
+}
+async function stopWork() {
+  stop();
+  try {
+    const r = await fetch(`/api/work/state?pid=${film() || ''}&since=1e12`, { credentials: 'same-origin' });
+    const j = await r.json();
+    const live = (j.work || []).filter((w) => w.status === 'running' || w.status === 'queued' || w.status === 'asking');
+    for (const w of live) {
+      await fetch('/api/work/stop', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf }, body: JSON.stringify({ id: w.id }) });
+    }
+    show(live.length ? `Stopped ${live.length === 1 ? 'the task' : `${live.length} tasks`}.` : 'Nothing was running.');
+  } catch { show('Couldn\u2019t reach the work to stop it.'); }
+}
+async function record() {
+  let d = doc();
+  let b = d && d.querySelector('[data-record]');
+  if (!b) { await go('/new'); d = doc(); b = d && d.querySelector('[data-record="camera"]'); }
+  if (b) b.click(); else show('Recording opens from a film or the new-film page.');
+}
+function theme() {
+  const t = doc() && doc().querySelector('[data-theme-toggle]');
+  if (t) t.click();
+}
+function where() {
+  try {
+    const d = doc();
+    return { stage: d?.body?.dataset.stage || '', kind: d?.body?.dataset.kind || '', page: frame.contentWindow.location.pathname };
+  } catch { return { stage: '', kind: '', page: '/' }; }
+}
+const comp = setupComposer({ say: (t) => { if (!S.on) wake(); say(t); }, mute, where });
+const ring = setupRing({ S, orb, csrf, show, hidden, doze, turnOff, restart, stopWork, record, theme, mute,
+  type: () => comp.type(), typing: () => comp.typing(), book: () => told });

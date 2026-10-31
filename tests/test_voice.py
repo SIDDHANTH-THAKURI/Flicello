@@ -121,6 +121,64 @@ def test_it_speaks_as_it_writes_stops_when_spoken_over_and_runs_tools_on_the_pag
     asyncio.run(run())
 
 
+def test_it_keeps_answering_when_queued_messages_get_one_reply(monkeypatch):
+    """Claude Code answers messages that queue up while it works in ONE reply. Counting messages against replies
+    drifted and every later reply was dropped as "spoken over" (Cello went silent for good, 2026-10-29)."""
+    monkeypatch.setattr(voice, "Mind", FakeMind)
+    monkeypatch.setattr(voice, "speak", lambda s: np.zeros(int(0.05 * 24000), np.int16))
+    sent = []
+
+    async def run():
+        async def send(msg):
+            sent.append(msg)
+
+        def spoken():
+            return [m["serverContent"]["outputTranscription"]["text"] for m in sent
+                    if "outputTranscription" in m.get("serverContent", {})]
+
+        live = voice.Live("http://127.0.0.1:1", send, asyncio.get_running_loop())
+        live.text("Write about the sea.")
+        live.text("(Note: they picked Landscape.)")  # queued while it works
+        live.text("Did you watch the clip?")
+        live.mind.on_text("The sea is wide.")
+        live.mind.on_done()  # one reply for the first
+        live.mind.on_text("Yes, I watched it.")
+        live.mind.on_done()  # ONE reply for the two queued ones
+        await asyncio.sleep(0.3)
+        assert spoken() == ["The sea is wide. ", "Yes, I watched it. "] and not live.busy
+        # quiet now: they speak, and it is not taken for speaking over a reply that will never end
+        interrupts = live.mind.interrupts
+        live.ears.on_start()
+        assert live.mind.interrupts == interrupts and not live.drop
+        live.text("Hello.")
+        live.mind.on_text("Hi there.")
+        live.mind.on_done()
+        await asyncio.sleep(0.3)
+        assert spoken()[-1] == "Hi there. "
+        # spoken over mid-reply: that reply stops, the next is heard
+        live.text("Make it hype.")
+        live.mind.on_text("Sure, I'll make")
+        live.ears.on_start()
+        assert live.mind.interrupts == interrupts + 1 and live.drop
+        live.text("Actually make it calm.")
+        live.mind.on_text(" it hype.")
+        live.mind.on_done()  # the reply they spoke over ends ("error_during_execution")
+        assert not live.drop and live.awaiting  # what they said since is still to be answered
+        live.mind.on_text("Calm it is.")
+        live.mind.on_done()
+        await asyncio.sleep(0.3)
+        assert spoken()[-1] == "Calm it is. " and not any("hype." in t for t in spoken()) and not live.busy
+        live.close()
+
+    asyncio.run(run())
+
+
+def test_scraps_of_noise_are_not_heard_as_speech():
+    assert voice.noise("Выйдь, шепчу.", "ru", 0.6) and voice.noise("次の動画でお会いしましょう", "ja", 0.7)
+    assert not voice.noise("Make it two minutes long", "en", 0.98)
+    assert not voice.noise("Hola, haz el video más largo por favor ahora", "es", 0.97)  # a real sentence is kept
+
+
 def test_its_name_wakes_it_only_when_it_is_called_by_it():
     assert voice.woken("Cello.") == (True, "")
     assert voice.woken("Hey Cello, cut shot three.") == (True, "cut shot three.")

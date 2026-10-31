@@ -85,7 +85,7 @@ body.edit-page {
 .ed-label { display: flex; align-items: center; padding-left: .7rem; font-size: .68rem; text-transform: uppercase; letter-spacing: .1em;
   color: var(--faint); font-weight: 700; border-bottom: 1px solid var(--line); }
 .ed-label.ruler { border-bottom-color: var(--line-2); }
-.ed-scroll { overflow-x: auto; overflow-y: hidden; outline: none; scrollbar-width: thin; }
+.ed-scroll { overflow-x: auto; overflow-y: hidden; outline: none; }
 .ed-canvas { position: relative; min-width: 100%; }
 .ed-ruler { display: block; cursor: col-resize; border-bottom: 1px solid var(--line-2); }
 .ed-row { position: relative; border-bottom: 1px solid var(--line); }

@@ -3,14 +3,16 @@
 {% set active = 'films' %}
 {% block title %}{{ p.title }} · {{ app_name }}{% endblock %}
 {% block body_attrs %} data-project="{{ p.id }}" data-stage="{{ p.stage }}" data-busy="{{ 1 if p.stage in BUSY else 0 }}" data-chunk="{{ chunk }}" data-shapes="{{ p.shapes }}" data-kind="{{ p.kind }}"{% endblock %}
+{% block main_class %}page filmwide{% endblock %}
+{% block foot %}{% endblock %}
 {% block content %}
 {% set posters = posters|default([]) %}{% set ideas_left = ideas_left|default(0) %}{% set sample_tries_left = sample_tries_left|default(0) %}{% set polish_left = polish_left|default(0) %}{% set clip_thumbs = clip_thumbs|default([]) %}
 {% set busy = p.stage in BUSY %}
 {% if p.kind == 'montage' %}
   {% set steps = [('setup', 'Clips'), ('preparing', 'Watching'), ('understood', 'Under­stood'), ('choose', 'Story'), ('review', 'Sample'), ('done', 'Film')] %}
   {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'pitching': 3, 'choose': 3, 'sampling': 4, 'review': 4, 'rendering': 5, 'revising': 5, 'reading': 5, 'confirm': 5, 'done': 5} %}
-{% elif looks %}
-  {% set steps = [('setup', 'Your ' ~ ('recording' if p.kind == 'voice' else 'video')), ('preparing', 'Listening'), ('understood', 'Under­stood'), ('choose', 'Look'), ('review', 'Sample'), ('done', 'Film')] %}
+{% elif looks or p.style == 'designed' %}
+  {% set steps = [('setup', 'Your ' ~ ('recording' if p.kind == 'voice' else 'video')), ('preparing', 'Listening'), ('understood', 'Under­stood'), ('choose', 'Look' if looks else 'Plan'), ('review', 'Sample'), ('done', 'Film')] %}
   {% set at = {'setup': 0, 'preparing': 1, 'understood': 2, 'pitching': 3, 'choose': 3, 'sampling': 4, 'review': 4, 'rendering': 5, 'revising': 5, 'reading': 5, 'confirm': 5, 'done': 5} %}
 {% else %}
   {% set steps = [('setup', 'Your ' ~ ('recording' if p.kind == 'voice' else 'video')), ('preparing', 'Listening'), ('understood', 'Under­stood'), ('review', 'Sample'), ('done', 'Film')] %}
@@ -18,24 +20,68 @@
 {% endif %}
 {% set here = at.get(p.stage, -1) %}
 
-<a class="crumbs" href="/">← Your films</a>
-<header class="page-head">
-  <div>
-    <p class="eyebrow-s rise">{% if looks and p.stage == 'choose' %}Pick a look{% elif looks and p.stage == 'pitching' %}Painting another look{% else %}{{ STAGES.get(p.stage, p.stage) }}{% endif %}</p>
-    <h1 class="page-title rise d1">{{ p.title }}</h1>
-    <div class="meta rise d2">
-      {% if p.kind == 'talk' %}<span>Talking video</span><span>{{ 'Designer animations' if p.style == 'designed' else 'Clean labels' }}</span>
-      {% elif p.kind == 'voice' %}<span>Voice to animation</span><span>{{ p.shapes|shapes }}</span>
-      {% else %}<span>{{ p.shapes|shapes }}</span><span>{{ p.length|span }}</span>{% endif %}
-      {% if p.song and p.kind == 'montage' %}<span>♪ {{ p.song }}</span>{% endif %}
-      {% if p.intent %}<span><q>{{ p.intent }}</q></span>{% endif %}
-      {% if p.kind != 'talk' %}{% if p.stage == 'setup' %}<a class="meta-edit" href="#settings-edit">Change</a>
-      {% elif 'setup' in backs and p.stage not in BUSY %}<a class="meta-edit" href="#back-zone">Change</a>{% endif %}{% endif %}
-    </div>
+{% macro more_zone() %}
+{% if 'setup' in backs and p.stage not in BUSY %}
+<section class="panel gap-top back-zone" id="back-zone">
+  <h2>Change something?</h2>
+  <div class="choices">
+    <form method="post" action="/p/{{ p.id }}/back" data-confirm="Go back to the {{ 'clips' if p.kind == 'montage' else ('recording' if p.kind == 'voice' else 'video') }} and settings? Your uploads stay, but the story ideas and samples made so far are cleared." data-confirm-yes="Go back"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="to" value="setup">
+      <button class="btn" type="submit">Back to {{ 'clips' if p.kind == 'montage' else 'your ' ~ ('recording' if p.kind == 'voice' else 'video') }} and settings</button></form>
+  </div>
+  <p class="help">Your uploads stay. Add or remove {{ 'clips' if p.kind == 'montage' else 'files' }}, change the music or the length, then start again: what's already been measured is reused.</p>
+</section>
+{% endif %}
+<details class="report-zone" id="report" {% if p.stage == 'failed' %}open{% endif %}>
+  <summary>Something not right? Report a problem</summary>
+  <form method="post" action="/p/{{ p.id }}/report">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="field"><span>What went wrong, or what did you expect?</span>
+      <textarea name="note" rows="3" maxlength="1500" required placeholder="It's been stuck on the same step for 20 minutes / the music cuts off / the text is hard to read"></textarea></label>
+    <p class="help">We'll see this video's steps and settings with your note, so you don't need to explain those. One report per video an hour is plenty: we read every one.</p>
+    <button class="btn" type="submit">Send report</button>
+  </form>
+</details>
+<details class="danger-zone">
+  <summary>Delete this film</summary>
+  <form method="post" action="/p/{{ p.id }}/delete" data-confirm="Delete &ldquo;{{ p.title }}&rdquo; with all its clips and versions? This can't be undone." data-confirm-yes="Delete it" data-confirm-danger>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="tick"><input type="checkbox" name="sure" value="yes" required><span><b>Yes, delete it with all its clips and versions</b><small>This can't be undone.</small></span></label>
+    <button class="btn danger gap-top" type="submit">Delete</button>
+  </form>
+</details>
+{% endmacro %}
+{% set film_made = p.stage in ('done', 'confirm') and latest %}
+{% set wv0 = (work.version if work else p.version) %}
+<div class="filmpage" data-filmpage>
+<header class="fp-top">
+  <a class="fp-back" href="/" aria-label="Your films" title="Your films"><svg class="ico"><use href="#i-back"/></svg></a>
+  <div class="fp-title">
+    <h1>{{ p.title }}</h1>
+    <span class="fp-sub mono">{% if film_made %}v{{ wv0 }} · {{ latest[0].seconds|mmss }} · {{ latest[0].shape }}{% else %}{% if looks and p.stage == 'choose' %}Pick a look{% elif looks and p.stage == 'pitching' %}Painting another look{% elif p.kind != 'montage' and p.style == 'designed' and p.stage == 'choose' %}Your plan{% elif p.kind != 'montage' and p.style == 'designed' and p.stage == 'pitching' %}Writing the plan{% else %}{{ STAGES.get(p.stage, p.stage) }}{% endif %}{% endif %}</span>
+  </div>
+  <span class="grow"></span>
+  {% if ready %}<button type="button" class="pill {{ 'ok' if ready.score >= 80 else ('warn' if ready.score >= 60 else 'bad') }} fp-ready" data-tab-go="ready"><span class="dot"></span>Ready to post {{ (ready.score / 10)|round|int }}/10</button>{% endif %}
+  {% if versions_all|length > 1 %}<button type="button" class="btn sm ghost" data-tab-go="versions">Versions</button>{% endif %}
+  {% if exports %}<button type="button" class="btn sm sun" data-tab-go="share">Export</button>{% endif %}
+  <div class="seg fp-mode" role="group" aria-label="Who works this page">
+    <button type="button" data-mode="cello" aria-pressed="true" title="Cello does the work; you talk to it">Cello</button>
+    <button type="button" data-mode="both" aria-pressed="false" title="Cello, and every action as a button">Both</button>
+    <button type="button" data-mode="manual" aria-pressed="false" title="Every action as a button; Cello rests">Manual</button>
   </div>
 </header>
-
-{% include "_editor.html" %}
+<div class="fp-main" data-fp-main>
+<div class="fp-work" data-fp-work>
+{% if not film_made %}
+<div class="meta rise">
+  {% if p.kind == 'talk' %}<span>Talking video</span><span>{{ 'Designer animations' if p.style == 'designed' else 'Clean labels' }}</span>
+  {% elif p.kind == 'voice' %}<span>Voice to animation</span><span>{{ p.shapes|shapes }}</span>
+  {% else %}<span>{{ p.shapes|shapes }}</span><span>{{ p.length|span }}</span>{% endif %}
+  {% if p.song and p.kind == 'montage' %}<span>♪ {{ p.song }}</span>{% endif %}
+  {% if p.intent %}<span><q>{{ p.intent }}</q></span>{% endif %}
+  {% if p.kind != 'talk' %}{% if p.stage == 'setup' %}<a class="meta-edit" href="#settings-edit">Change</a>
+  {% elif 'setup' in backs and p.stage not in BUSY %}<a class="meta-edit" href="#back-zone">Change</a>{% endif %}{% endif %}
+</div>
+{% endif %}
 {% if p.stage == 'setup' and p.kind != 'talk' %}
 <details class="panel settings-edit rise d2" id="settings-edit">
   <summary>Change the shape{% if p.kind == 'montage' %} or the length{% endif %}</summary>
@@ -64,7 +110,7 @@
 </details>
 {% endif %}
 
-{% if here >= 0 %}
+{% if here >= 0 and not film_made %}
 <ol class="track rise d2" aria-label="Progress">
   {% for key, label in steps %}
   <li class="{{ 'past' if loop.index0 < here else ('now' ~ (' busy' if busy else '') if loop.index0 == here else '') }}">
@@ -91,6 +137,7 @@
         <b>{% if p.song %}{{ p.song }}{% else %}Choose your recording{% endif %}</b>
         <small>{% if p.song %}Tap to change it{% else %}mp3, m4a, wav and more{% endif %}</small>
       </label>
+      <div class="rec-row"><span class="hint">Or record it now:</span><button type="button" class="rec" data-record="voice"><span class="r"></span>Voice memo</button></div>
       <ul class="files" id="song-list"></ul>
     </section>
     {% else %}
@@ -103,6 +150,11 @@
         <b>{% if p.kind == 'talk' %}Choose your video{% else %}Drop your clips here{% endif %}</b>
         <small>or tap to choose · big clips are made lighter on your device first, so they send faster · resumes if your connection drops</small>
       </label>
+      {% if p.kind == 'talk' %}{% set keeps = info and info.keep_pauses %}
+      <form method="post" action="/p/{{ p.id }}/pauses" class="trow gap-top"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="keep" value="{{ '0' if keeps else '1' }}">
+        <span><b>Cut on my words</b> · the long pauses and lone &ldquo;um&rdquo;s between what I say come out</span>
+        <button class="sw-btn" type="submit" role="switch" aria-checked="{{ 'false' if keeps else 'true' }}" aria-label="Cut my pauses"></button></form>{% endif %}
+      <div class="rec-row"><span class="hint">Or record it now:</span><button type="button" class="rec" data-record="camera"><svg class="ico s"><use href="#i-cam"/></svg>Film me</button>{% if p.kind != 'talk' %}<button type="button" class="rec" data-record="screen"><svg class="ico s"><use href="#i-screen"/></svg>Record screen</button>{% endif %}</div>
       <ul class="files" id="clip-list">
         {% for c in clips %}
         <li data-clip="{{ c.id }}" class="ok clip-row">
@@ -279,6 +331,7 @@
   <div class="meter{% if not job or job.status == 'queued' %} waiting{% endif %}" id="meter"><span id="bar" data-progress="{{ job.progress if job else 0 }}"></span></div>
   <p id="job-msg" class="msg">{% if job and job.status == 'queued' %}{{ queued_note or 'Waiting for its turn…' }}{% else %}{{ job.message if job else '' }}{% endif %}</p>
   <p id="job-eta" class="eta">{% if eta %}{{ eta|eta }} left{% endif %}</p>
+  {% if p.kind != 'montage' and p.style == 'designed' %}<figure id="peek" class="peek" hidden><img alt="The designer's newest frame"><figcaption>What the designer is looking at right now</figcaption></figure>{% endif %}
   <ol id="steps" class="steps" aria-label="What it has done so far">
     {% for st in joblog %}<li class="{{ 'now' if st.now else 'done' }}"><span>{{ st.m }}</span><time>{{ st.s|ago_s }}</time></li>{% endfor %}
   </ol>
@@ -480,6 +533,47 @@
   {% else %}<p class="help">That's all the looks this film can have: pick one above. To start over, go back to your {{ 'recording' if p.kind == 'voice' else 'video' }} and settings below.</p>{% endif %}
 </section>
 
+{# ------------------------------------------------------------------ the plan of moments (designed talk / voice) #}
+{% elif p.stage == 'choose' and pitches and (pitches|rejectattr('rejected')|list) and (pitches|rejectattr('rejected')|first).pitch.moments is defined %}
+{% set item = pitches|rejectattr('rejected')|first %}
+{% set d = item.pitch %}
+<p class="page-sub rise d2">What I'd make from your words, moment by moment. Nothing is built until you say so: read it, change anything, then build.</p>
+<section class="panel rise moment-plan">
+  <h2>What you'll see <small class="count">{{ d.moments|length }} moment{{ '' if d.moments|length == 1 else 's' }}</small></h2>
+  {% if d.idea %}<p class="lead-s">{{ d.idea }}</p>{% endif %}
+  {% if d.world %}<p class="help"><b>The world{% if d.engine %} ({{ '3D, made in Blender' if d.engine == '3d' else '2D, flat motion design' }}){% endif %}:</b> {{ d.world }}</p>{% endif %}
+  <p class="help"><b>The look:</b> {{ d.look }}</p>
+  {% if d.engine %}<p class="help muted">Want it the other way? Say &ldquo;make it {{ '2D' if d.engine == '3d' else '3D' }}&rdquo; under Change the plan.</p>{% endif %}
+  <ol class="moments">
+    {% for m in d.moments %}
+    <li class="moment">
+      <span class="m-time">{{ m.start|mmss }} to {{ m.end|mmss }}</span>
+      <p><b>Starts</b> {{ m.before }}</p>
+      {% for c in m.changes %}<p><b>Then</b> {{ c }}</p>{% endfor %}
+      <p><b>Ends</b> {{ m.after }}</p>
+      <p class="muted">{% if m.text %}Words on screen: &ldquo;{{ m.text }}&rdquo;{% else %}No words on screen{% endif %}</p>
+    </li>
+    {% endfor %}
+  </ol>
+  <form method="post" action="/p/{{ p.id }}/pick" data-confirm="Design the first part? It is designed as a whole world with you in it, and you see frames of it while it works. You see it finished before the rest is made." data-confirm-yes="Design it">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pitch" value="{{ item.id }}">
+    <button class="btn-sun wide" type="submit"><span>Design the first part</span></button>
+  </form>
+  <details class="more"><summary>The whole plan as a prompt (to copy)</summary>
+    <textarea class="plan-copy" readonly rows="12" aria-label="The whole plan as a prompt">{{ d.prompt }}</textarea>
+  </details>
+</section>
+<section class="panel gap-top rise">
+  <h2>Change the plan <small class="count">{{ ideas_left }} more time{{ '' if ideas_left == 1 else 's' }}</small></h2>
+  {% if ideas_left > 0 %}
+  <form method="post" action="/p/{{ p.id }}/another">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="field"><span>What should be different?</span><textarea name="reason" rows="2" maxlength="300" required placeholder="The circle should start blue / the stars come in on 'stars' / nothing at the start"></textarea></label>
+    <button class="btn" type="submit">Write the plan again</button>
+  </form>
+  {% else %}<p class="help">That's as many plans as this film can have: build this one, then change it by talking to Cello.</p>{% endif %}
+</section>
+
 {# ------------------------------------------------------------------ choose a story #}
 {% elif p.stage == 'choose' %}
 {% if info and info.notes %}<section class="panel notice rise">{% for n in info.notes %}<p class="lead-s">{{ n }}</p>{% endfor %}</section>{% endif %}
@@ -616,117 +710,61 @@
 </section>
 {% endif %}
 
-{# ------------------------------------------------------------------ done: the version they work on, its numbered shots, changes #}
+{# ------------------------------------------------------------------ the made film: player, timeline, tabs #}
 {% elif p.stage in ('done', 'confirm') %}
 {% set wv = work.version if work else p.version %}
 {% set can_change = revisions_left is none or revisions_left > 0 %}
+{% set r0 = latest[0] if latest else none %}
+{% set moments = (info.moments if info and info.moments else []) %}
+<section class="fp-film{{ ' tall' if latest and latest[0].shape == '9:16' else '' }}" data-film>
+<div class="fp-stage">
 {% if p.stage == 'done' and (draft or drafting) %}
-<section class="panel draft-card rise d2" id="draft"{% if drafting %} data-reload-when-done{% endif %}>
-  <div class="draft-head">
-    <h2>{% if drafting %}Making your draft&hellip;{% else %}Your draft{% endif %}</h2>
-    <span class="v-tag">instant preview &middot; not made yet</span>
+<section class="fp-draft" id="draft"{% if drafting %} data-reload-when-done{% endif %}>
+  <div class="fp-draft-head">
+    <span class="pill new">{% if drafting %}Making your draft&hellip;{% else %}Your draft{% endif %}</span>
+    <span class="hint">plays at once · not made yet</span>
+    <span class="grow"></span>
+    {% if draft %}
+    <form method="post" action="/p/{{ p.id }}/draft/discard"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn sm ghost" type="submit">Discard</button></form>
+    <form method="post" action="/p/{{ p.id }}/draft/make"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn sm sun" type="submit"{% if not can_change %} disabled{% endif %}>Make it · about {{ [1, (render_eta / 60)|round|int]|max }} min</button></form>
+    {% endif %}
   </div>
   {% if draft %}
   <div class="pv" data-preview="{{ p.id }}" data-which="draft"></div>
-  <ul class="change-list">{% for line in draft.said %}<li>{{ line }}</li>{% endfor %}</ul>
-  <div class="choices draft-acts">
-    <form method="post" action="/p/{{ p.id }}/draft/make"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn-sun" type="submit"{% if not can_change %} disabled{% endif %}><span>Make it &middot; about {{ [1, (render_eta / 60)|round|int]|max }} min</span></button></form>
-    <form method="post" action="/p/{{ p.id }}/draft/discard"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn quiet" type="submit">Discard</button></form>
-  </div>
-  <p class="help">This plays your change straight away from light copies of your clips. &ldquo;Make it&rdquo; renders it in full quality as a new version{% if revisions_left is not none %} (it uses one of your {{ revisions_left }} changes){% endif %}; every shot you didn't name stays exactly as it was.</p>
+  <details class="more"><summary>What changes ({{ draft.said|length }})</summary><ul class="change-list">{% for line in draft.said %}<li>{{ line }}</li>{% endfor %}</ul>
+  <p class="help">It plays from light copies of your clips. &ldquo;Make it&rdquo; renders it in full quality as a new version{% if revisions_left is not none %} (it uses one of your {{ revisions_left }} changes){% endif %}; every shot you didn't name stays exactly as it was.</p></details>
   {% else %}
   <p class="help">Changing only the shots you named: it plays here in a few seconds.</p>
   {% endif %}
 </section>
 {% endif %}
-{% if p.stage == 'done' %}
-<section class="panel review-share rise d2" id="review">
-  <div class="draft-head"><h2>Review</h2><span class="v-tag">a private link for a client or a teammate</span></div>
-  {% for r in review_links %}
-  <div class="review-link"><code>{{ site_url|default('') }}/r/{{ r.token }}</code> <span class="help">version {{ r.version }}</span>
-    <form method="post" action="/p/{{ p.id }}/review/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="token" value="{{ r.token }}"><button class="link" type="submit">Switch off</button></form></div>
-  {% endfor %}
-  {% if not review_links or review_links[0].version != wv %}
-  <form method="post" action="/p/{{ p.id }}/review"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit">Make a review link for version {{ wv }}</button></form>
-  {% endif %}
-  {% if review_notes %}
-  <ol class="review-notes">
-    {% for n in review_notes %}
-    <li class="{{ 'done' if n.done }}"><span class="v-tag">v{{ n.version }} &middot; {{ n.at|mmss }}</span> <b>{{ n.name or 'Someone' }}</b> {{ n.text }}
-      {% if not n.done %}<form method="post" action="/p/{{ p.id }}/notes/{{ n.id }}/done"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link" type="submit">Done</button></form>{% endif %}</li>
-    {% endfor %}
-  </ol>
-  <p class="help">Cello reads these notes too: ask it to make them ("do the client's notes").</p>
-  {% endif %}
-</section>
-{% endif %}
-{% if exports %}
-<section class="panel exports-card rise d2" id="exports">
-  <div class="draft-head"><h2>Export</h2><span class="v-tag">version {{ wv }}</span></div>
-  <div class="export-grid">
-    {% for x in exports %}
-    {% if x.file %}<a class="btn" href="/m/{{ p.id }}/out/{{ x.file }}?dl=1">{{ x.name }} &darr;</a>
-    {% else %}<form method="post" action="/p/{{ p.id }}/export"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ x.kind }}"><button class="btn quiet" type="submit"{% if job %} disabled{% endif %}>{{ x.name }}</button></form>{% endif %}
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
-{% if ready %}
-<section class="panel ready-card rise d2" id="ready">
-  <div class="draft-head"><h2>Ready to post? <span class="ready-score {{ 'good' if ready.score >= 80 else 'mid' if ready.score >= 60 else 'low' }}">{{ ready.score }}/100</span></h2><span class="v-tag">{{ ready.verdict }}</span></div>
-  <ul class="ready-parts">
-    {% for part in ready.parts %}
-    <li>
-      <span class="ready-name">{{ part.name }}</span>
-      <span class="ready-bar"><i class="w{{ (part.score * 10)|round|int }}"></i></span>
-      <span class="ready-why">{{ part.why }}</span>
-      {% if part.fix and part.score < 0.8 %}<form method="post" action="/p/{{ p.id }}/fix"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="part" value="{{ part.id }}"><button class="btn btn-sun" type="submit"{% if drafting %} disabled{% endif %}><span>{{ part.fix_says }}</span></button></form>{% endif %}
-    </li>
-    {% endfor %}
-  </ul>
-  <p class="help">Measured on this version: what holds people in a feed. Each fix plays as a draft in seconds.</p>
-</section>
-{% endif %}
-{% if style_cards %}
-<section class="panel styles-card rise d2" id="styles">
-  <div class="draft-head"><h2>Edit styles</h2><span class="v-tag">your film in each, in seconds</span></div>
-  <div class="style-grid">
-    {% for st in style_cards %}
-    <form class="style-tile{% if st.on %} on{% endif %}{% if st.trying %} trying{% endif %}" method="post" action="/p/{{ p.id }}/style">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="style" value="{{ st.id }}">
-      <div class="style-sample {{ 'tall' if look_shape == '9:16' else 'wide' }} look-{{ st.preview.look }}" data-style-preview="{{ st.preview|tojson|forceescape }}"{% if strip and strip.cards and strip.cards[0].thumb %} data-still="/m/{{ p.id }}/stills/{{ strip.cards[0].thumb }}"{% endif %}></div>
-      <b>{{ st.name }}</b>
-      <p>{{ st.says }}</p>
-      <button class="btn{% if not st.on %} btn-sun{% endif %}" type="submit"{% if st.on or drafting %} disabled{% endif %}><span>{% if st.on %}This version{% elif st.trying %}In your draft{% else %}Try it{% endif %}</span></button>
-    </form>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
-{% if p.stage == 'done' and p.kind == 'montage' %}
-<section class="panel timeline-card rise d2" id="timeline">
-  <div class="draft-head"><h2>Timeline</h2><span class="v-tag">trim, split and move shots &middot; speed, framing and sound &middot; graphics &middot; the music</span></div>
-  <p class="help">Every cut by hand, on {{ 'your draft' if draft else 'version ' ~ wv }}: each change plays at once, and undo takes it back.</p>
-  <a class="btn-sun" href="/p/{{ p.id }}/edit"><span>Open the editor</span></a>
-</section>
-{% endif %}
-<div class="screens rise d2">
-  {% for r in latest %}
-  <figure class="device {{ 'tall' if r.shape == '9:16' else 'wide' }}"{% if shot_times %} data-shots="{{ shot_times }}"{% endif %}>
-    {% set still = r.file|replace('.mp4', '.jpg') %}
-    <div class="frame"><video src="/m/{{ p.id }}/out/{{ r.file }}" controls playsinline preload="metadata"{% if still in posters %} poster="/m/{{ p.id }}/out/{{ still }}"{% endif %}></video>{% if shot_times %}<span class="shot-badge" hidden></span>{% endif %}</div>
-    <figcaption>Version {{ wv }} · {{ r.shape }} · {{ r.seconds|mmss }} · <a class="btn" href="/m/{{ p.id }}/out/{{ r.file }}?dl=1">Download</a></figcaption>
-    {% if is_owner %}
-    <details class="more"><summary>Checks</summary><ul class="beats">
-      {% for f in r.findings|fromjson %}<li><b>{{ f.level|upper }}</b> {{ f.check }}: {{ f.detail }}</li>{% endfor %}
-    </ul></details>
-    {% endif %}
-  </figure>
-  {% endfor %}
+{% if r0 and not draft %}
+{% set still = r0.file|replace('.mp4', '.jpg') %}
+<div class="fp-player {{ 'tall' if r0.shape == '9:16' else 'wide' }}" data-player{% if shot_times %} data-shots="{{ shot_times }}"{% endif %}>
+  <video src="/m/{{ p.id }}/out/{{ r0.file }}" playsinline preload="metadata"{% if still in posters %} poster="/m/{{ p.id }}/out/{{ still }}"{% endif %} data-film-video></video>
+  {% if shot_times %}<span class="shot-badge" hidden></span>{% endif %}
+  <div class="ptip" data-ptip><svg class="ico s"><use href="#i-point"/></svg>Click the film to point at something</div>
+  <div class="pctl"><button type="button" data-play aria-label="Play or pause"><svg class="ico"><use href="#i-play"/></svg></button><span class="tc" data-tc>0:00 / {{ r0.seconds|mmss }}</span></div>
+  {% if latest|length > 1 %}<div class="pshape seg" role="group" aria-label="Shape">{% for r in latest %}<button type="button" data-src="/m/{{ p.id }}/out/{{ r.file }}" aria-pressed="{{ 'true' if loop.first else 'false' }}">{{ r.shape }}</button>{% endfor %}</div>{% endif %}
 </div>
-{% if work and work.version != p.version %}<p class="help center rise d2">You're working on version {{ work.version }}. The newer versions are still in the list below: nothing is deleted.</p>{% endif %}
-{% if p.error and p.stage == 'done' %}<p class="film-note rise d2">{{ p.error }}</p>{% endif %}
-
+<div class="fp-tl" data-tl data-duration="{{ r0.seconds }}" data-wave="/api/p/{{ p.id }}/wave?file={{ r0.file|urlencode }}" role="group" aria-label="Timeline: tap to jump">
+  <canvas data-wave-canvas aria-hidden="true"></canvas>
+  {% if strip and strip.cards %}{% for c in strip.cards %}<button type="button" class="mb c{{ loop.index0 % 5 }}" data-start="{{ c.start }}" data-end="{{ c.end }}" title="Shot {{ c.n }}: {{ c.what|noids|truncate(60) }}">{{ c.n }}</button>{% endfor %}
+  {% elif moments %}{% for m in moments %}<button type="button" class="mb c{{ loop.index0 % 5 }}" data-start="{{ m.start }}" data-end="{{ m.end }}" title="{{ m.before|truncate(70) }}">{{ loop.index }}</button>{% endfor %}{% endif %}
+  <i class="ph" data-ph></i>
+</div>
+<div class="fp-actions" data-manual>
+  {% if p.kind == 'montage' %}<a class="btn sm" href="/p/{{ p.id }}/edit"><svg class="ico s"><use href="#i-scissors"/></svg>Edit by hand</a>{% endif %}
+  <button type="button" class="btn sm" data-tab-go="{{ 'shots' if strip and strip.cards else 'plan' }}">{{ 'Change shots' if strip and strip.cards else 'The moments' }}</button>
+  {% if style_cards %}<button type="button" class="btn sm" data-tab-go="look">Try a style</button>{% endif %}
+  <button type="button" class="btn sm" data-tab-go="more">Say what to change</button>
+  {% if exports %}<button type="button" class="btn sm sun" data-tab-go="share">Export</button>{% endif %}
+</div>
+{% if versions_all|length > 1 and work and work.version != p.version %}<p class="help">You're working on version {{ work.version }}. The newer versions are in Versions: nothing is deleted.</p>{% endif %}
+{% if p.error and p.stage == 'done' %}<p class="film-note">{{ p.error }}</p>{% endif %}
+{% endif %}
+</div>
+<div class="fp-side">
 {% if p.stage == 'confirm' and pending %}
 <section class="panel gap-top rise d3 confirm-card" id="confirm">
   <h2>Here's what I'll change in version {{ pending.base }}</h2>
@@ -761,6 +799,21 @@
     <button class="btn" type="submit">Back to the film</button></form>
 </section>
 {% endif %}
+
+<div class="tabs" role="tablist" data-tabs="tab" aria-label="Your film">
+  {% if strip and strip.cards %}<button role="tab" type="button" data-t="shots">Shots <span class="count">{{ strip.cards|length }}</span></button>
+  {% elif moments %}<button role="tab" type="button" data-t="plan">Moments <span class="count">{{ moments|length }}</span></button>{% endif %}
+  {% if style_cards %}<button role="tab" type="button" data-t="look">Look</button>{% endif %}
+  {% if beats or p.song %}<button role="tab" type="button" data-t="sound">Sound</button>{% endif %}
+  {% if ready %}<button role="tab" type="button" data-t="ready">Ready to post <span class="count {{ 'ok' if ready.score >= 80 else '' }}">{{ (ready.score / 10)|round|int }}</span></button>{% endif %}
+  <button role="tab" type="button" data-t="share">Share{% if review_notes %} <span class="count">{{ review_notes|rejectattr('done')|list|length }}</span>{% endif %}</button>
+  {% if versions_all|length > 1 %}<button role="tab" type="button" data-t="versions">Versions <span class="count">{{ versions_all|length }}</span></button>{% endif %}
+  {% if spec_items or people %}<button role="tab" type="button" data-t="brief">Brief</button>{% endif %}
+  <button role="tab" type="button" data-t="more">More</button>
+</div>
+<div class="pane">
+  {% if strip and strip.cards %}
+  <div class="tabpanel" data-p="shots" data-of="tab">
 {% if work and work.changes %}
 <section class="panel gap-top rise d3 changed-card">
   <h2>What changed in version {{ work.version }}{% if work.base %} <small class="muted">(made from version {{ work.base }})</small>{% endif %}</h2>
@@ -768,7 +821,6 @@
   <p class="help">Every other shot is exactly as it was.</p>
 </section>
 {% endif %}
-
 {% if strip and strip.cards %}
 <section class="panel gap-top storyboard shot-strip rise d2" id="shots">
   <h2>The shots of version {{ wv }}</h2>
@@ -816,8 +868,132 @@
 {% elif work and job and job.kind == 'strip' %}
 <p class="help center gap-top" data-reload-when-done>Numbering the shots of version {{ wv }}: a few seconds.</p>
 {% endif %}
-
-
+  </div>
+  {% elif moments %}
+  <div class="tabpanel" data-p="plan" data-of="tab">
+    {% set cut = info.tightened if info and info.tightened and not info.keep_pauses else none %}
+    {% if p.kind == 'talk' %}<form method="post" action="/p/{{ p.id }}/pauses" class="trow cut-row"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <span>{% if cut %}<b>Cut on your words</b> · {{ cut.pauses }} pause{{ 's' if cut.pauses != 1 }}{% if cut.fillers %} and {{ cut.fillers }} lone &ldquo;um&rdquo;{{ 's' if cut.fillers != 1 }}{% endif %} taken out, {{ cut['from']|mmss }} &rarr; {{ cut.to|mmss }}{% elif info and info.keep_pauses %}<b>Your pauses stay in</b> · every moment as you recorded it{% else %}<b>Cut on your words</b> · nothing long enough to take out{% endif %}</span>
+      <input type="hidden" name="keep" value="{{ '0' if info and info.keep_pauses else '1' }}"><button class="btn sm ghost" type="submit">{{ 'Cut my pauses again' if info and info.keep_pauses else 'Keep my pauses' }}</button></form>
+      <p class="hint">Changes the next version.</p>{% endif %}
+    {% if talk_words %}<div class="words" data-words>{% for w in talk_words %}<span data-t="{{ w[0] }}"{% if w[3] %} class="key"{% endif %}>{{ w[2] }}</span> {% endfor %}</div>{% endif %}
+{% if work and work.changes %}
+<section class="panel gap-top rise d3 changed-card">
+  <h2>What changed in version {{ work.version }}{% if work.base %} <small class="muted">(made from version {{ work.base }})</small>{% endif %}</h2>
+  <ul class="beats">{% for line in work.changes %}<li>{{ line }}</li>{% endfor %}</ul>
+  <p class="help">Every other shot is exactly as it was.</p>
+</section>
+{% endif %}
+    <div class="mrows">
+    {% for m in moments %}
+    <button type="button" class="mrow" data-start="{{ m.start }}" data-end="{{ m.end }}">
+      <span class="n c{{ loop.index0 % 5 }}">{{ loop.index }}</span>
+      <span class="when">{{ m.start|mmss }}–{{ m.end|mmss }}</span>
+      <span class="what"><b>{{ m.before }}</b>{% for c in m.changes %} <span class="arrow">→</span> {{ c }}{% endfor %}{% if m.after %} <span class="arrow">→</span> {{ m.after }}{% endif %}</span>
+      <i class="fill" aria-hidden="true"></i>
+    </button>
+    {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if style_cards %}<div class="tabpanel" data-p="look" data-of="tab" hidden>
+{% if style_cards %}
+<section class="panel styles-card rise d2" id="styles">
+  <div class="draft-head"><h2>Edit styles</h2><span class="v-tag">your film in each, in seconds</span></div>
+  <div class="style-grid">
+    {% for st in style_cards %}
+    <form class="style-tile{% if st.on %} on{% endif %}{% if st.trying %} trying{% endif %}" method="post" action="/p/{{ p.id }}/style">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="style" value="{{ st.id }}">
+      <div class="style-sample {{ 'tall' if look_shape == '9:16' else 'wide' }} look-{{ st.preview.look }}" data-style-preview="{{ st.preview|tojson|forceescape }}"{% if strip and strip.cards and strip.cards[0].thumb %} data-still="/m/{{ p.id }}/stills/{{ strip.cards[0].thumb }}"{% endif %}></div>
+      <b>{{ st.name }}</b>
+      <p>{{ st.says }}</p>
+      <button class="btn{% if not st.on %} btn-sun{% endif %}" type="submit"{% if st.on or drafting %} disabled{% endif %}><span>{% if st.on %}This version{% elif st.trying %}In your draft{% else %}Try it{% endif %}</span></button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+  </div>{% endif %}
+  {% if beats or p.song %}<div class="tabpanel" data-p="sound" data-of="tab" hidden>
+    {% if beats %}{{ beat_block(p, csrf, beats, beats_left, can_compose, track_seconds, voice=p.kind == 'voice') }}
+    {% elif p.song %}<div class="trow"><span>♪ {{ p.song }}</span><span class="pill opt">{{ 'your recording' if p.kind == 'voice' else 'your song' }}</span></div>{% endif %}
+    <p class="hint gap-top">Or tell Cello: “make the music calmer from 0:20”, “no music”, “louder at the end”.</p>
+  </div>{% endif %}
+  {% if ready %}<div class="tabpanel" data-p="ready" data-of="tab" hidden>
+{% if ready %}
+<section class="panel ready-card rise d2" id="ready">
+  <div class="draft-head"><h2>Ready to post? <span class="ready-score {{ 'good' if ready.score >= 80 else 'mid' if ready.score >= 60 else 'low' }}">{{ ready.score }}/100</span></h2><span class="v-tag">{{ ready.verdict }}</span></div>
+  <ul class="ready-parts">
+    {% for part in ready.parts %}
+    <li>
+      <span class="ready-name">{{ part.name }}</span>
+      <span class="ready-bar"><i class="w{{ (part.score * 10)|round|int }}"></i></span>
+      <span class="ready-why">{{ part.why }}</span>
+      {% if part.fix and part.score < 0.8 %}<form method="post" action="/p/{{ p.id }}/fix"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="part" value="{{ part.id }}"><button class="btn btn-sun" type="submit"{% if drafting %} disabled{% endif %}><span>{{ part.fix_says }}</span></button></form>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="help">Measured on this version: what holds people in a feed. Each fix plays as a draft in seconds.</p>
+</section>
+{% endif %}
+  </div>{% endif %}
+  <div class="tabpanel" data-p="share" data-of="tab" hidden>
+{% if exports %}
+<section class="panel exports-card rise d2" id="exports">
+  <div class="draft-head"><h2>Export</h2><span class="v-tag">version {{ wv }}</span></div>
+  <div class="export-grid">
+    {% for x in exports %}
+    {% if x.file %}<a class="btn" href="/m/{{ p.id }}/out/{{ x.file }}?dl=1">{{ x.name }} &darr;</a>
+    {% else %}<form method="post" action="/p/{{ p.id }}/export"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ x.kind }}"><button class="btn quiet" type="submit"{% if job %} disabled{% endif %}>{{ x.name }}</button></form>{% endif %}
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% if p.stage == 'done' %}
+<section class="panel review-share rise d2" id="review">
+  <div class="draft-head"><h2>Review</h2><span class="v-tag">a private link for a client or a teammate</span></div>
+  {% for r in review_links %}
+  <div class="review-link"><code>{{ site_url|default('') }}/r/{{ r.token }}</code> <span class="help">version {{ r.version }}</span>
+    <form method="post" action="/p/{{ p.id }}/review/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="token" value="{{ r.token }}"><button class="link" type="submit">Switch off</button></form></div>
+  {% endfor %}
+  {% if not review_links or review_links[0].version != wv %}
+  <form method="post" action="/p/{{ p.id }}/review"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit">Make a review link for version {{ wv }}</button></form>
+  {% endif %}
+  {% if review_notes %}
+  <ol class="review-notes">
+    {% for n in review_notes %}
+    <li class="{{ 'done' if n.done }}"><span class="v-tag">v{{ n.version }} &middot; {{ n.at|mmss }}</span> <b>{{ n.name or 'Someone' }}</b> {{ n.text }}
+      {% if not n.done %}<form method="post" action="/p/{{ p.id }}/notes/{{ n.id }}/done"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link" type="submit">Done</button></form>{% endif %}</li>
+    {% endfor %}
+  </ol>
+  <p class="help">Cello reads these notes too: ask it to make them ("do the client's notes").</p>
+  {% endif %}
+</section>
+{% endif %}
+    {% if r0 %}<div class="trow gap-top"><span>Version {{ wv }} · {{ r0.shape }} · {{ r0.seconds|mmss }}</span><a class="btn sm" href="/m/{{ p.id }}/out/{{ r0.file }}?dl=1">Download</a></div>{% endif %}
+    {% if is_owner and r0 %}<details class="more gap-top"><summary>Checks</summary><ul class="beats">{% for f in r0.findings|fromjson %}<li><b>{{ f.level|upper }}</b> {{ f.check }}: {{ f.detail }}</li>{% endfor %}</ul></details>{% endif %}
+  </div>
+  {% if versions_all|length > 1 %}<div class="tabpanel" data-p="versions" data-of="tab" hidden>
+{% if versions_all|length > 1 %}
+<section class="panel gap-top" id="versions"><h2>All versions</h2><div class="rows versions-list">
+  {% for v in versions_all %}
+  <div class="{{ 'is-work' if work and v.version == work.version else '' }}">
+    <span class="k">Version {{ v.version }}{% if v.liked %} · you liked it {{ v.liked }}/10{% endif %}{% if v.base %} · made from {{ v.base }}{% endif %}</span>
+    <span class="v-acts">
+      {% for f in v.files %}<a class="btn" href="/m/{{ p.id }}/out/{{ f.file }}">Watch{% if v.files|length > 1 %} {{ f.shape }}{% endif %}</a>{% endfor %}
+      {% if work and v.version == work.version %}<span class="v-tag">working on it</span>
+      {% elif p.stage == 'done' %}<form method="post" action="/p/{{ p.id }}/continue" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ v.version }}"><button class="btn" type="submit">Work on this one</button></form>{% endif %}
+    </span>
+    {% if v.changes %}<details class="more"><summary>What changed</summary><ul class="beats">{% for line in v.changes %}<li>{{ line }}</li>{% endfor %}</ul></details>{% endif %}
+  </div>
+  {% endfor %}
+</div></section>
+{% endif %}
+  </div>{% endif %}
+  {% if spec_items or people %}<div class="tabpanel" data-p="brief" data-of="tab" hidden>
+    {% include "_brief.html" %}
+  </div>{% endif %}
+  <div class="tabpanel" data-p="more" data-of="tab" hidden>
 {% if p.stage == 'done' %}
 <section class="panel gap-top rise d3" id="change">
   <h2>Change something</h2>
@@ -856,22 +1032,11 @@
 <p class="help center gap-top rise d3">You rated version {{ wv }} {{ rated.liked }}/10. Thanks: your style profile has learned from it.</p>
 {% endif %}
 {% endif %}
-
-{% if versions_all|length > 1 %}
-<section class="panel gap-top" id="versions"><h2>All versions</h2><div class="rows versions-list">
-  {% for v in versions_all %}
-  <div class="{{ 'is-work' if work and v.version == work.version else '' }}">
-    <span class="k">Version {{ v.version }}{% if v.liked %} · you liked it {{ v.liked }}/10{% endif %}{% if v.base %} · made from {{ v.base }}{% endif %}</span>
-    <span class="v-acts">
-      {% for f in v.files %}<a class="btn" href="/m/{{ p.id }}/out/{{ f.file }}">Watch{% if v.files|length > 1 %} {{ f.shape }}{% endif %}</a>{% endfor %}
-      {% if work and v.version == work.version %}<span class="v-tag">working on it</span>
-      {% elif p.stage == 'done' %}<form method="post" action="/p/{{ p.id }}/continue" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ v.version }}"><button class="btn" type="submit">Work on this one</button></form>{% endif %}
-    </span>
-    {% if v.changes %}<details class="more"><summary>What changed</summary><ul class="beats">{% for line in v.changes %}<li>{{ line }}</li>{% endfor %}</ul></details>{% endif %}
+    {{ more_zone() }}
   </div>
-  {% endfor %}
-</div></section>
-{% endif %}
+</div>
+</div>
+</section>
 
 {% elif p.stage == 'paused' %}
 <section class="working paused-card rise d2"><h2>Paused</h2><p class="msg">{{ p.note or "Waiting for the owner." }}</p>
@@ -889,34 +1054,20 @@
 </section>
 {% endif %}
 
-{% if 'setup' in backs and p.stage not in BUSY %}
-<section class="panel gap-top back-zone" id="back-zone">
-  <h2>Change something?</h2>
-  <div class="choices">
-    <form method="post" action="/p/{{ p.id }}/back" data-confirm="Go back to the {{ 'clips' if p.kind == 'montage' else ('recording' if p.kind == 'voice' else 'video') }} and settings? Your uploads stay, but the story ideas and samples made so far are cleared." data-confirm-yes="Go back"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="to" value="setup">
-      <button class="btn" type="submit">Back to {{ 'clips' if p.kind == 'montage' else 'your ' ~ ('recording' if p.kind == 'voice' else 'video') }} and settings</button></form>
-  </div>
-  <p class="help">Your uploads stay. Add or remove {{ 'clips' if p.kind == 'montage' else 'files' }}, change the music or the length, then start again: what's already been measured is reused.</p>
-</section>
-{% endif %}
-
-<details class="report-zone" id="report" {% if p.stage == 'failed' %}open{% endif %}>
-  <summary>Something not right? Report a problem</summary>
-  <form method="post" action="/p/{{ p.id }}/report">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="field"><span>What went wrong, or what did you expect?</span>
-      <textarea name="note" rows="3" maxlength="1500" required placeholder="It's been stuck on the same step for 20 minutes / the music cuts off / the text is hard to read"></textarea></label>
-    <p class="help">We'll see this video's steps and settings with your note, so you don't need to explain those. One report per video an hour is plenty: we read every one.</p>
-    <button class="btn" type="submit">Send report</button>
-  </form>
-</details>
-
-<details class="danger-zone">
-  <summary>Delete this film</summary>
-  <form method="post" action="/p/{{ p.id }}/delete" data-confirm="Delete &ldquo;{{ p.title }}&rdquo; with all its clips and versions? This can't be undone." data-confirm-yes="Delete it" data-confirm-danger>
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label class="tick"><input type="checkbox" name="sure" value="yes" required><span><b>Yes, delete it with all its clips and versions</b><small>This can't be undone.</small></span></label>
-    <button class="btn danger gap-top" type="submit">Delete</button>
-  </form>
-</details>
+{% if not film_made and (spec_items or people) %}<section class="panel gap-top">{% include "_brief.html" %}</section>{% endif %}
+{% if not film_made %}{{ more_zone() }}{% endif %}
+</div>{# the work column #}
+</div>{# fp-main #}
+{# Cello's drawer: held to the window's right edge. Drag its edge to make it wider, close it to a tab, pull the tab
+   (or press Alt+C) to bring it back. On a phone it is a sheet you pull up. #}
+<aside class="cello-dock" data-dock aria-label="Cello">
+  <div class="dock-edge" data-dock-edge role="separator" aria-orientation="vertical" aria-label="Drag to resize Cello" title="Drag to resize · double-click to reset" tabindex="0"></div>
+  <div class="grab" data-dock-grab aria-hidden="true"><i></i></div>
+  {% include "_editor.html" %}
+</aside>
+<button type="button" class="dock-tab" data-dock-tab hidden title="Bring Cello back (Alt+C)" aria-label="Bring Cello back">
+  <span class="dock-tab-orb" aria-hidden="true"></span><span class="dock-tab-word">Cello</span><svg class="ico s" aria-hidden="true"><use href="#i-back"/></svg>
+</button>
+</div>{# filmpage #}
+{% if p.stage == 'setup' %}{% include "_recorder.html" %}{% endif %}
 {% endblock %}

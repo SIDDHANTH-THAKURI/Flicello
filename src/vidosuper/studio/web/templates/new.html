@@ -1,43 +1,52 @@
 {% extends "shell.html" %}
 {% set active = 'films' %}
 {% block title %}New film · {{ app_name }}{% endblock %}
-{% block main_class %}page narrow{% endblock %}
+{% block main_class %}page{% endblock %}
 {% block content %}
 {# `form`: what they sent, when it comes back with a problem to fix (nothing they typed is lost) #}
 {% set f = form|default({}) %}
 {% set kind_pick = f.get('kind', 'other') %}{% set len_pick = f.get('length', '30')|string %}
+<div class="newfilm" data-newfilm>
 <a class="crumbs" href="/">← Your films</a>
-<header class="page-head">
-  <div>
-    <p class="eyebrow-s rise">New film</p>
-    <h1 class="page-title rise d1">What are we <em class="sun-text">making?</em></h1>
-    <p class="page-sub rise d2">Say it in your own words. Flicello works out how to make it, and nothing here is fixed: change anything later, just by asking.</p>
-  </div>
-</header>
+<h1 class="nf-title rise">What are we <em>making?</em></h1>
 {% if error %}<div class="error-box" role="alert">{{ error }}</div>{% endif %}
 {% if cartoon_ask %}
 <div class="confirm-box rise" role="alert">
   <p><b>This sounds like a cartoon.</b> {{ cartoon_ask }}</p>
 </div>
 {% endif %}
-<form method="post" action="/new" id="new-form" class="rise d2">
+<form method="post" action="/new" id="new-form" class="rise d1">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="draft" value="{{ f.get('draft', '') }}" data-draft>
   {% if cartoon_ask %}<input type="hidden" name="confirm" value="cartoon">{% endif %}
-  <div class="say-box">
-    <textarea name="describe" rows="3" maxlength="900" autofocus aria-label="What are we making?"
-      placeholder="My trip to Sydney, cut fast on the beat / me explaining my recipe with the steps on screen / a cartoon about a cat who wants to fly">{{ f.get('describe') or f.get('intent', '') }}</textarea>
-    <div class="say-chips" aria-label="Ideas">
-      <button type="button" class="chip" data-say="A film from my clips, cut on the beat of a song">From my clips</button>
-      <button type="button" class="chip" data-say="Me talking to camera, with motion graphics on my words">Me talking</button>
-      <button type="button" class="chip" data-say="My voice memo as an animated video">Just my voice</button>
-      <button type="button" class="chip" data-say="A cartoon about ">A cartoon</button>
+  <div class="say">
+    <textarea name="describe" rows="2" maxlength="900" autofocus aria-label="What are we making?" data-say-box>{{ f.get('describe') or f.get('intent', '') }}</textarea>
+    <div class="ghost-ph" data-ghost aria-hidden="true"></div>
+    <div class="say-foot">
+      <button type="button" class="rec" data-record="camera"><svg class="ico s"><use href="#i-cam"/></svg>Film me</button>
+      <button type="button" class="rec" data-record="screen"><svg class="ico s"><use href="#i-screen"/></svg>Record screen</button>
+      <button type="button" class="rec" data-record="voice"><span class="r"></span>Voice memo</button>
+      <span class="grow"></span>
+      <button type="button" class="icon-btn" data-dictate title="Say it instead of typing" aria-label="Say it" hidden><svg class="ico"><use href="#i-mic"/></svg></button>
+      <button class="btn sun big-start" type="submit">{{ 'Make the cartoon' if cartoon_ask else 'Start' }}</button>
     </div>
-    <div class="say-row">
-      <button class="btn-sun" type="submit"><span>{{ 'Make the cartoon' if cartoon_ask else 'Start' }}</span></button>
-      <button type="button" class="btn-ghost" data-tell-cello>Or just tell Cello</button>
-    </div>
-    <small class="help">Empty is fine too: add your clips and Flicello finds the story in them.</small>
   </div>
+  <label class="dropzone" data-dropzone>
+    <input type="file" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm" multiple data-drop-input>
+    <span class="strip" data-strip></span>
+    <span class="grow" data-drop-text>Drop clips anywhere here, or <u>choose them</u>. Empty is fine too: tell me what you want, or record it.</span>
+  </label>
+  <div class="suggest" data-suggest hidden>
+    <div><small data-suggest-from>From the clips you just dropped</small><div class="sug-text" data-suggest-text></div></div>
+    <button type="button" class="btn sm sun" data-suggest-use>Use this</button>
+  </div>
+  <div class="examples">
+    <button type="button" class="ex" data-say="A talk where everything I describe appears beside me as I say it"><span class="prev"><canvas class="mini" data-kind="words"></canvas></span><span class="txt"><b>Your words come alive</b><small>Talk to camera; the things you describe appear and move as you say them.</small><span class="use">“a white circle slowly turning orange…”</span></span></button>
+    <button type="button" class="ex" data-say="Sydney in 30 seconds, cut on the beat of music made for it"><span class="prev"><canvas class="mini" data-kind="trip"></canvas></span><span class="txt"><b>A trip, on the beat</b><small>Drop a day's clips; the best moments cut to music made for them.</small><span class="use">“Sydney in 30 seconds”</span></span></button>
+    <button type="button" class="ex" data-say="A cartoon about a kid whose drawings come alive on her dad's truck"><span class="prev"><canvas class="mini" data-kind="toon"></canvas></span><span class="txt"><b>A cartoon from a story</b><small>Tell the story; it's drawn, animated and voiced, shot like a film.</small><span class="use">“a kid whose drawings come alive”</span></span></button>
+    <button type="button" class="ex" data-say="Turn my voice memo about why sleep makes you smarter into a designed animation"><span class="prev"><canvas class="mini" data-kind="voice"></canvas></span><span class="txt"><b>Just your voice</b><small>A voice memo becomes a fully designed animation, moment by moment.</small><span class="use">“why sleep makes you smarter”</span></span></button>
+  </div>
+  <p class="hint nf-note">No kind, shape or length to pick: it's worked out from what you say and drop, and said back to you in one line. Want to choose yourself? Open the details below.</p>
 
   <details class="more"{% if f.get('kind') not in (None, 'other') %} open{% endif %}>
   <summary>Choose the details yourself <small class="muted">(optional)</small></summary>
@@ -124,4 +133,6 @@
 
   </details>
 </form>
+</div>
+{% include "_recorder.html" %}
 {% endblock %}

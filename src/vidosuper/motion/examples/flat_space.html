@@ -1,0 +1,178 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+  2D, in the spirit of flat science-animation channels (original design): deep navy space, flat shapes with two-tone
+  shading and a crisp highlight, glow as stepped flat rings, springy motion, grain. He is cut out and stands in it.
+  Words (edited clip): circle 1.16, appears 1.62, center 2.52, slowly 3.24, expands 3.66; cut 4.60; three 4.78,
+  squares 6.58, rotate 7.12, around 7.82, clockwise 9.06.
+  Palette: #070b1f (space), #10183d (cloud), #4fc3ff (circle), #a6ecff (rim), #ff8a2a / #d9531a / #ffc27a (squares).
+-->
+<style>
+  html, body { margin: 0; background: transparent; }
+  #stage { position: absolute; inset: 0; overflow: hidden; transform-origin: 38% 55%; }
+  .behind { position: absolute; inset: 0; }
+  /* him: a little smaller and to the left, his body fading into the space at the bottom (no hard edge) */
+  #person { transform: translate(-330px, 70px) scale(.86); transform-origin: 50% 100%;
+    -webkit-mask-image: linear-gradient(to top, transparent 0%, #000 14%); mask-image: linear-gradient(to top, transparent 0%, #000 14%); }
+  .layer { position: absolute; inset: 0; }
+  #space { background: radial-gradient(120% 90% at 62% 40%, #111a44 0%, #0a0f2a 45%, #050816 100%); }
+  .cloud { position: absolute; border-radius: 50%; filter: blur(60px); }
+  .spark { position: absolute; width: 14px; height: 14px; margin: -7px; }
+  .spark::before, .spark::after { content: ""; position: absolute; left: 50%; top: 50%; background: #dff6ff; border-radius: 2px; transform: translate(-50%, -50%); }
+  .spark::before { width: 2px; height: 14px; }
+  .spark::after { width: 14px; height: 2px; }
+  .dot { position: absolute; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: #9fb8ff; }
+  #light { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: screen; opacity: 0;
+    background: radial-gradient(34% 46% at 70% 46%, rgba(79,195,255,.42), rgba(79,195,255,.12) 45%, rgba(0,0,0,0) 72%); }
+  #grain { position: absolute; inset: -50px; pointer-events: none; opacity: .07; mix-blend-mode: overlay; }
+  #vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(85% 80% at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,10,.55) 100%); }
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="9.9" data-width="1920" data-height="1080">
+  <div id="stage" class="clip" data-start="0" data-duration="9.9">
+    <div class="behind">
+      <div class="layer" id="space"></div>
+      <div class="layer" id="far"></div>
+      <div class="layer" id="near"></div>
+      <svg class="layer" id="art" viewBox="0 0 1920 1080" width="1920" height="1080">
+        <defs>
+          <clipPath id="disc-clip"><circle cx="0" cy="0" r="150"/></clipPath>
+          <clipPath id="sq-clip"><rect x="-34" y="-34" width="68" height="68" rx="14"/></clipPath>
+        </defs>
+        <g id="world">
+          <!-- trails behind the squares -->
+          <g id="trails" opacity="0"></g>
+          <!-- the circle: stepped flat glow rings, body, shade, rim, highlight -->
+          <g id="circle" transform="translate(1340 500)">
+            <g id="halo">
+              <circle r="300" fill="#4fc3ff" opacity=".035"/>
+              <circle r="250" fill="#4fc3ff" opacity=".05"/>
+              <circle r="208" fill="#4fc3ff" opacity=".08"/>
+              <circle r="176" fill="#4fc3ff" opacity=".12"/>
+            </g>
+            <g id="body">
+              <circle r="150" fill="#3fa9f5"/>
+              <g clip-path="url(#disc-clip)">
+                <circle cx="46" cy="52" r="150" fill="#2b7fd6"/>
+                <circle cx="-30" cy="-34" r="112" fill="#5fd0ff"/>
+                <circle id="core" r="64" fill="#c9f4ff" opacity=".85"/>
+                <circle r="38" fill="#ffffff" opacity=".9"/>
+              </g>
+              <circle r="150" fill="none" stroke="#a6ecff" stroke-width="7"/>
+              <ellipse cx="-62" cy="-82" rx="34" ry="17" fill="#ffffff" opacity=".8" transform="rotate(-38 -62 -82)"/>
+              <circle id="ring2" r="186" fill="none" stroke="#a6ecff" stroke-width="3" stroke-dasharray="18 22" opacity=".55"/>
+            </g>
+            <g id="birth"></g>
+            <g id="orbit"></g>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <div id="light"></div>
+    <svg id="grain" viewBox="0 0 2020 1180" width="2020" height="1180"><filter id="n"><feTurbulence id="turb" type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="1"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>
+    <div id="vignette"></div>
+  </div>
+</div>
+<script type="application/json" id="beats">[{"t": 1.2, "what": "a point of light is born in the centre of the space"}, {"t": 1.7, "what": "it pops open into a glowing blue circle"}, {"t": 3.4, "what": "it slowly expands"}, {"t": 4.6, "what": "cut to a new framing"}, {"t": 6.6, "what": "three orange squares pop in around it"}, {"t": 7.2, "what": "they orbit clockwise"}]</script>
+<script type="application/json" id="sound">[{"t": 1.15, "sound": "a tiny bright twinkle", "gain": -18}, {"t": 1.62, "sound": "a soft round pop with a shimmer", "gain": -14}, {"t": 3.3, "sound": "a low airy swell rising slowly", "gain": -20}, {"t": 6.55, "sound": "three quick soft clicks, one per square", "gain": -16}, {"t": 7.1, "sound": "a gentle whoosh circling", "gain": -19}]</script>
+<script>
+  const NS = "http://www.w3.org/2000/svg";
+  const W = 1920, H = 1080;
+  const rand = (s => () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; })(11);
+  const T = { circle: 1.16, appears: 1.62, slowly: 3.24, cut: 4.60, squares: 6.58, rotate: 7.12, end: 9.9 };
+  const tl = gsap.timeline({ paused: true });
+
+  // the space: soft colour clouds, far dots, near sparkles (two depths: they drift at different speeds)
+  const far = document.getElementById("far"), near = document.getElementById("near");
+  [["#1b2a6b", 900, 600, 1250, 300, .55], ["#3a1a5e", 700, 520, 300, 880, .4], ["#0f3b6b", 640, 460, 1700, 900, .45]].forEach(([c, w, h, x, y, o]) => {
+    const d = document.createElement("div"); d.className = "cloud";
+    Object.assign(d.style, { width: w + "px", height: h + "px", left: (x - w / 2) + "px", top: (y - h / 2) + "px", background: c, opacity: o });
+    far.appendChild(d);
+  });
+  const dots = [], sparks = [];
+  for (let i = 0; i < 90; i++) { const d = document.createElement("div"); d.className = "dot"; d.style.left = rand() * W + "px"; d.style.top = rand() * H + "px"; d.style.opacity = .25 + rand() * .5; const s = .5 + rand(); d.style.transform = `scale(${s})`; far.appendChild(d); dots.push(d); }
+  for (let i = 0; i < 16; i++) { const d = document.createElement("div"); d.className = "spark"; d.style.left = (300 + rand() * 1600) + "px"; d.style.top = (40 + rand() * 900) + "px"; near.appendChild(d); sparks.push(d); }
+
+  // the space is there from the start, quietly alive
+  tl.fromTo(far, { x: 0 }, { x: -40, duration: T.end, ease: "none" }, 0);
+  tl.fromTo(near, { x: 0 }, { x: -110, duration: T.end, ease: "none" }, 0);
+  sparks.forEach((s, i) => {
+    const at = rand() * 8, k = .4 + rand() * .7;
+    tl.fromTo(s, { scale: 0, opacity: 0, rotation: 0 }, { scale: k, opacity: .9, rotation: 45, duration: .5, ease: "power2.out" }, at);
+    tl.to(s, { scale: 0, opacity: 0, duration: .7, ease: "power2.in" }, at + .5 + rand() * .8);
+  });
+
+  // the circle is born: a point of light on "circle", four little sparks fly out, it pops open on "appears"
+  const circle = document.getElementById("circle"), body = document.getElementById("body"), halo = document.getElementById("halo");
+  const birth = document.getElementById("birth");
+  const seed = document.createElementNS(NS, "circle"); seed.setAttribute("r", "10"); seed.setAttribute("fill", "#ffffff"); birth.appendChild(seed);
+  const seedGlow = document.createElementNS(NS, "circle"); seedGlow.setAttribute("r", "30"); seedGlow.setAttribute("fill", "#a6ecff"); seedGlow.setAttribute("opacity", ".35"); birth.appendChild(seedGlow);
+  tl.fromTo([seed, seedGlow], { scale: 0, transformOrigin: "50% 50%" }, { scale: 1, duration: .22, ease: "back.out(3)" }, T.circle - .05);
+  tl.to(seedGlow, { scale: 1.6, opacity: .15, duration: .3, yoyo: true, repeat: 1, ease: "sine.inOut" }, T.circle + .12);
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * Math.PI * 2 + .3, ln = document.createElementNS(NS, "line");
+    ln.setAttribute("x1", 0); ln.setAttribute("y1", 0); ln.setAttribute("x2", 0); ln.setAttribute("y2", 0);
+    ln.setAttribute("stroke", "#dff6ff"); ln.setAttribute("stroke-width", "5"); ln.setAttribute("stroke-linecap", "round"); birth.appendChild(ln);
+    const r0 = 40, r1 = 120 + 40 * (i % 2);
+    tl.fromTo(ln, { attr: { x1: Math.cos(a) * r0, y1: Math.sin(a) * r0, x2: Math.cos(a) * r0, y2: Math.sin(a) * r0 }, opacity: 1 },
+      { attr: { x1: Math.cos(a) * r1 * .7, y1: Math.sin(a) * r1 * .7, x2: Math.cos(a) * r1, y2: Math.sin(a) * r1 }, opacity: 0, duration: .45, ease: "power3.out" }, T.appears - .02);
+  }
+  tl.to([seed, seedGlow], { scale: 0, duration: .12, ease: "power2.in" }, T.appears);
+  tl.fromTo(body, { scale: 0, transformOrigin: "50% 50%" }, { scale: 1, duration: .62, ease: "elastic.out(1, 0.55)" }, T.appears - .04);
+  tl.fromTo(halo, { scale: 0, opacity: 0, transformOrigin: "50% 50%" }, { scale: 1, opacity: 1, duration: .8, ease: "power3.out" }, T.appears + .02);
+  tl.fromTo("#ring2", { rotation: 0, transformOrigin: "50% 50%" }, { rotation: 140, duration: T.end - T.appears, ease: "none" }, T.appears);
+  // the flat glow breathes in steps
+  Array.from(halo.children).forEach((c, i) => tl.fromTo(c, { scale: 1, transformOrigin: "50% 50%" }, { scale: 1.06, duration: .9, yoyo: true, repeat: 7, ease: "sine.inOut" }, T.appears + .7 + i * .12));
+  tl.fromTo("#core", { scale: .85, transformOrigin: "50% 50%" }, { scale: 1.12, duration: .7, yoyo: true, repeat: 9, ease: "sine.inOut" }, T.appears + .4);
+
+  // it slowly expands from "slowly", and keeps growing a little after the cut
+  tl.fromTo(circle, { scale: 1, svgOrigin: "1340 500" }, { scale: 1.42, duration: T.cut - T.slowly, ease: "power1.inOut" }, T.slowly);
+  tl.to(circle, { scale: 1.55, duration: T.end - T.cut, ease: "sine.out" }, T.cut);
+  tl.fromTo("#light", { opacity: 0 }, { opacity: 1, duration: .6, ease: "power2.out" }, T.appears);
+
+  // three small orange squares: pop in at 12, 4 and 8 o'clock on "squares", then orbit clockwise from "rotate"
+  const orbit = document.getElementById("orbit"), trails = document.getElementById("trails");
+  const R = 255;
+  for (let i = 0; i < 3; i++) {
+    const a0 = -90 + 120 * i, g = document.createElementNS(NS, "g");
+    g.setAttribute("transform", `rotate(${a0}) translate(${R} 0) rotate(${-a0})`);
+    const sq = document.createElementNS(NS, "g"); g.appendChild(sq);
+    sq.innerHTML = `<rect x="-34" y="-34" width="68" height="68" rx="14" fill="#ff8a2a"/>
+      <g clip-path="url(#sq-clip)"><polygon points="34,-34 34,34 -34,34" fill="#d9531a"/><rect x="-34" y="-34" width="68" height="18" fill="#ffc27a" opacity=".55"/></g>
+      <rect x="-34" y="-34" width="68" height="68" rx="14" fill="none" stroke="#ffd9a8" stroke-width="3" opacity=".7"/>`;
+    orbit.appendChild(g);
+    const born = T.squares + i * .09;
+    tl.fromTo(sq, { scale: 0, rotation: -40, transformOrigin: "50% 50%" }, { scale: 1, rotation: 0, duration: .55, ease: "back.out(2.6)" }, born);
+    tl.fromTo(sq, { rotation: 0 }, { rotation: 300 + 40 * i, duration: T.end - T.rotate, ease: "power1.in" }, T.rotate);
+  }
+  // clockwise on screen = increasing SVG rotation; eases up to about one turn every 3 s
+  tl.fromTo(orbit, { rotation: 0, svgOrigin: "0 0" }, { rotation: 30, duration: .8, ease: "power2.in" }, T.rotate);
+  tl.to(orbit, { rotation: 30 + 360 * (T.end - T.rotate - .8) / 3, duration: T.end - T.rotate - .8, ease: "none" }, T.rotate + .8);
+  // flat motion trails: arcs that follow each square once they move
+  for (let i = 0; i < 3; i++) {
+    const p = document.createElementNS(NS, "path");
+    const a0 = (-90 + 120 * i - 38) * Math.PI / 180, a1 = (-90 + 120 * i - 6) * Math.PI / 180;
+    p.setAttribute("d", `M ${Math.cos(a0) * R} ${Math.sin(a0) * R} A ${R} ${R} 0 0 1 ${Math.cos(a1) * R} ${Math.sin(a1) * R}`);
+    p.setAttribute("fill", "none"); p.setAttribute("stroke", "#ffb066"); p.setAttribute("stroke-width", "10"); p.setAttribute("stroke-linecap", "round"); p.setAttribute("opacity", ".35");
+    orbit.insertBefore(p, orbit.firstChild);
+    tl.fromTo(p, { opacity: 0 }, { opacity: .35, duration: .5 }, T.rotate + .4);
+  }
+
+  // the camera: a slow push, a hard cut to a closer, lower framing on the pause, a drift after it
+  const stage = document.getElementById("stage");
+  tl.fromTo(stage, { scale: 1.04, x: 0, y: 0 }, { scale: 1.1, x: -20, y: 6, duration: T.cut, ease: "sine.inOut" }, 0);
+  tl.set(stage, { scale: 1.13, x: -120, y: 20 }, T.cut);
+  tl.to(stage, { scale: 1.16, x: -140, y: 22, duration: T.end - T.cut, ease: "sine.out" }, T.cut);
+
+  // grain that moves every frame (seeded), like film
+  const turb = document.getElementById("turb"), grain = document.getElementById("grain"), gstate = { k: 0 };
+  tl.to(gstate, { k: 297, duration: T.end, ease: "none", onUpdate: () => { const k = Math.floor(gstate.k); turb.setAttribute("seed", String(1 + k % 50)); grain.style.transform = `translate(${-(k * 37) % 50}px, ${-(k * 53) % 50}px)`; } }, 0);
+
+  window.__timelines = window.__timelines || {};
+  window.__timelines["main"] = tl;
+</script>
+</body>
+</html>

@@ -290,6 +290,17 @@ function progress(pid) {
     say();
     drawSteps();
   }, 1000);
+  // the designer's newest frame while it designs the world (a talk or voice film): fetched every 10 s, shown once
+  // there is one
+  const fig = $('#peek');
+  let peekAt = 0;
+  const peek = () => {
+    if (!fig || Date.now() - peekAt < 10000) return;
+    peekAt = Date.now();
+    const img = new Image();
+    img.onload = () => { fig.querySelector('img').src = img.src; fig.hidden = false; };
+    img.src = `/api/p/${pid}/peek?t=${peekAt}`;
+  };
   const poll = async () => {
     try {
       const st = await api('GET', `/api/p/${pid}/status`);
@@ -309,6 +320,7 @@ function progress(pid) {
       steps = st.steps || [];
       stepsAt = Date.now();
       drawSteps();
+      peek();
     } catch (err) {
       misses += 1;
       if (err.status === 401) { window.location.href = '/signin'; return; }
@@ -333,21 +345,6 @@ function newFilm() {
   };
   $$('input[name="kind"]', form).forEach((r) => r.addEventListener('change', apply));
   apply();
-  // the words come first: an idea chip starts the sentence; Cello is one tap away
-  const say = form.querySelector('textarea[name="describe"]');
-  $$('[data-say]', form).forEach((chip) => chip.addEventListener('click', () => {
-    say.value = chip.dataset.say;
-    say.focus();
-    say.setSelectionRange(say.value.length, say.value.length);
-    if (/cartoon/i.test(chip.dataset.say)) { const c = form.querySelector('input[name="kind"][value="cartoon"]'); if (c) { c.checked = true; apply(); } }
-  }));
-  const tell = form.querySelector('[data-tell-cello]');
-  if (tell) {
-    tell.addEventListener('click', () => {
-      if (window.parent !== window) window.parent.postMessage({ cello: 'wake' }, location.origin); // inside Cello: wake it
-      else location.href = '/cello?to=/new';
-    });
-  }
   // fields shown only for one choice (data-when="length=custom")
   const when = () => $$('[data-when]', form).forEach((el) => {
     const [name, value] = el.dataset.when.split('=');
@@ -446,7 +443,7 @@ function swatches() {  // a look's colours (set from script: the page allows no 
 // that shot's card lights up, and tapping a card's frame plays the film from that shot. The numbers are the ones a
 // change names ("swap 9 and 10"), so nobody has to count cuts by eye.
 function shotNumbers() {
-  const figs = document.querySelectorAll('figure[data-shots]');
+  const figs = document.querySelectorAll('figure[data-shots], [data-player][data-shots]');
   if (!figs.length) return;
   const cards = new Map([...document.querySelectorAll('.shot-strip [data-shot]')].map((el) => [el.dataset.shot, el]));
   const videos = [];
@@ -579,18 +576,19 @@ export function studio() {
   }
 }());
 
-// Connect (local Flicello): the setup prompt copied, keys kept on this machine and tested, the brain chosen, Blender
+// Connect (local Flicello): the setup prompt copied, keys kept on this machine and tested, the brain chosen, Blender,
+// and Fix it for me: the page follows each step of a fix and the proof after it
 (function connectPage() {
   const copy = $('[data-connect-copy]');
   if (!copy) return;
   copy.addEventListener('click', async () => {
     const text = ($('[data-connect-prompt]') || {}).textContent || '';
     try { await navigator.clipboard.writeText(text); copy.querySelector('span').textContent = 'Copied: paste it into Claude Code'; }
-    catch { copy.querySelector('span').textContent = 'Select the prompt and copy it'; }
+    catch { copy.querySelector('span').textContent = 'Open the prompt and copy it'; }
   });
-  const said = (form, ok, text) => {
-    const out = form.querySelector('.connect-out');
-    if (out) { out.textContent = text; out.className = `connect-out ${ok ? 'good' : 'bad'}`; }
+  const said = (box, ok, text) => {
+    const out = box.querySelector('.connect-out');
+    if (out) { out.textContent = text; out.className = `connect-out hint ${ok ? 'good' : 'err'}`; }
   };
   $$('[data-connect-key]').forEach((form) => form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -609,9 +607,11 @@ export function studio() {
     try { const r = await api('POST', '/api/connect/test', { service: btn.dataset.connectTest }); said(form, r.ok, r.detail); }
     catch (err) { said(form, false, err.message); }
   }));
-  $$('[data-connect-brain]').forEach((radio) => radio.addEventListener('change', async () => {
-    const box = radio.closest('.connect-brain');
-    try { const r = await api('POST', '/api/connect/settings', { brain: radio.value }); said(box, true, r.detail); }
+  $$('[data-connect-brain]').forEach((b) => b.addEventListener('click', async () => {
+    const seg = b.closest('.connect-brain');
+    seg.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
+    const box = seg.parentElement;
+    try { const r = await api('POST', '/api/connect/settings', { brain: b.dataset.connectBrain }); said(box, true, r.detail); }
     catch (err) { said(box, false, err.message); }
   }));
   const blender = $('[data-connect-blender]');
@@ -623,4 +623,50 @@ export function studio() {
       setTimeout(() => window.location.reload(), 1200);
     } catch (err) { said(blender, false, err.message); }
   });
+  // Fix it for me
+  const drawFix = (box, st) => {
+    box.textContent = '';
+    for (const step of st.steps) {
+      const d = document.createElement('div');
+      d.className = 'step';
+      const mark = document.createElement('span');
+      mark.className = step.state === 'ok' ? 'ok' : '';
+      if (step.state === 'now') { mark.className = 'spin'; } else { mark.textContent = { ok: '✓', bad: '✗', wait: '·' }[step.state] || '·'; }
+      const t = document.createElement('span');
+      t.textContent = step.says + (step.detail ? `: ${step.detail}` : '');
+      d.append(mark, t);
+      box.append(d);
+    }
+    if (st.done) {
+      const end = document.createElement('div');
+      end.className = 'step';
+      end.innerHTML = '<b></b>';
+      end.querySelector('b').textContent = st.detail;
+      box.append(end);
+      box.classList.toggle('good', st.ok);
+    }
+  };
+  $$('[data-fix]').forEach((btn) => btn.addEventListener('click', async () => {
+    const row = btn.closest('.crow');
+    const box = row.querySelector('[data-fix-box]') || row.querySelector('div');
+    btn.disabled = true;
+    btn.textContent = 'Fixing…';
+    try {
+      let st = await api('POST', '/api/connect/fix', { item: btn.dataset.fix });
+      drawFix(box, st);
+      while (!st.done) {
+        await new Promise((r) => setTimeout(r, 1200));
+        st = await api('GET', `/api/connect/fix?item=${encodeURIComponent(btn.dataset.fix)}`);
+        drawFix(box, st);
+      }
+      btn.textContent = st.ok ? 'Fixed' : 'Try again';
+      btn.disabled = st.ok;
+      if (st.ok) { row.classList.remove('bad'); row.classList.add('ok'); setTimeout(() => window.location.reload(), 2500); }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Try again';
+      box.textContent = err.message;
+    }
+  }));
 }());
+export { uploadFile, api };

@@ -23,14 +23,15 @@ class Key:
 
 
 KEYS = (
-    Key("GEMINI_API_KEY", "Gemini", "Cello's live voice, watching your footage with its sound, and painting when "
-        "this machine can't paint itself", "https://aistudio.google.com/apikey", True),
+    Key("GEMINI_API_KEY", "Gemini (optional)", "a faster online voice for Cello, and watching footage and painting "
+        "when this machine has no GPU for them", "https://aistudio.google.com/apikey", False),
     Key("ELEVENLABS_API_KEY", "ElevenLabs (optional)", "music and sound effects when this machine can't make them "
         "itself", "https://elevenlabs.io/app/settings/api-keys", False),
     Key("ANTHROPIC_API_KEY", "Anthropic API (optional)", "only if you'd rather pay per use than use your Claude Code plan",
         "https://console.anthropic.com/settings/keys", False),
-    Key("HF_API_KEY_ID", "Higgsfield key id (optional)", "AI video generation", "https://higgsfield.ai", False),
-    Key("HF_API_KEY_SECRET", "Higgsfield secret (optional)", "AI video generation", "https://higgsfield.ai", False),
+    Key("HIGGSFIELD_API_KEY", "Higgsfield (optional)", "shots made from your words when this machine can't make "
+        "them, paid from your Higgsfield balance; paste the whole key as the console shows it (id:secret)",
+        "https://higgsfield.ai", False),
 )
 NAMES = {k.name for k in KEYS}
 
@@ -75,6 +76,8 @@ def save(name: str, value: str, home: Path) -> str:
     if name not in NAMES:
         raise ValueError(f"{name} is not a key Flicello uses")
     value = value.strip()
+    if name == "HIGGSFIELD_API_KEY" and value and ":" not in value:
+        raise ValueError("Paste the whole Higgsfield key: its id and its secret, joined by a colon (id:secret)")
     kr = _keyring()
     where = "file"
     if kr is not None:

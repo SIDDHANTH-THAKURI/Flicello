@@ -1,0 +1,30 @@
+{# Record on the spot: film yourself, the screen, or a voice memo, in the browser; a 3-2-1, a live level, several
+   takes; "use this take" puts it straight into the film. Opened by any [data-record="camera|screen|voice"]. #}
+<dialog class="recorder" id="recorder" aria-label="Record">
+  <div class="recbox">
+    <div class="cam" data-cam>
+      <video data-cam-video muted playsinline></video>
+      <video data-take-video playsinline hidden></video>
+      <div class="vwave" data-vwave aria-hidden="true"></div>
+      <div class="live"><span class="r"></span><span data-rec-t>READY</span></div>
+      <div class="level" data-level aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="count" data-count aria-live="assertive"></div>
+      <p class="cam-note" data-cam-note hidden></p>
+      <div class="controls">
+        <button type="button" class="sidebtn" data-flip title="Flip camera" aria-label="Flip camera"><svg class="ico"><use href="#i-flip"/></svg></button>
+        <button type="button" class="bigrec" data-bigrec title="Record (3, 2, 1, then it records)" aria-label="Record"><i></i></button>
+        <button type="button" class="sidebtn" data-rec-close title="Close" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
+      </div>
+    </div>
+    <div class="takes">
+      <div class="seg" data-rec-mode role="group" aria-label="What to record">
+        <button type="button" aria-pressed="true" data-v="camera">Camera</button>
+        <button type="button" aria-pressed="false" data-v="screen">Screen</button>
+        <button type="button" aria-pressed="false" data-v="voice">Voice</button>
+      </div>
+      <div class="take-list" data-take-list><p class="hint" data-no-takes>No takes yet. Press the red button: 3, 2, 1, then it records.</p></div>
+      <button type="button" class="btn sun wide" data-use-take disabled>Use this take</button>
+      <p class="hint">It goes straight into your film: as a clip, the talk, or the voice. Your browser asks for the camera and microphone once; nothing leaves this computer except into your film.</p>
+    </div>
+  </div>
+</dialog>

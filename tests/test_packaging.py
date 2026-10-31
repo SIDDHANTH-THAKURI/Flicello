@@ -18,6 +18,8 @@ VIA = {"markupsafe": "jinja2", "starlette": "fastapi"}
 # Installed on their own with `pip install --no-deps` (by the launchers, or the setup prompt): declared, kokoro-onnx
 # would pull in a second onnxruntime and Stable Audio 3 its own PyTorch build.
 LAUNCHED = {"kokoro_onnx", "stable_audio_3"}
+# Only exist inside another program that runs the file: Blender's own Python (motion/blender_kit.py).
+LAUNCHED |= {"bpy"}
 
 
 def _canon(name: str) -> str:

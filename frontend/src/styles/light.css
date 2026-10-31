@@ -364,11 +364,11 @@
 [data-theme="light"] .allowance { background: linear-gradient(180deg, rgba(255, 255, 255, .95), rgba(255, 238, 230, .9)); border-color: rgba(242, 85, 42, .22); color: #6b3a35; }
 
 /* secondary buttons and chips: warm paper, a rose edge when touched */
-[data-theme="light"] .btn:not(.btn-sun):not(.danger):not(.quiet):not(.danger-go) {
+[data-theme="light"] .btn:not(.btn-sun):not(.sun):not(.danger):not(.quiet):not(.danger-go) {
   background: linear-gradient(180deg, #ffffff, #fff6f0); border-color: rgba(236, 31, 110, .18);
   box-shadow: 0 1px 0 #fff inset, 0 6px 16px -10px rgba(194, 65, 12, .38);
 }
-[data-theme="light"] .btn:not(.btn-sun):not(.danger):not(.quiet):not(.danger-go):hover {
+[data-theme="light"] .btn:not(.btn-sun):not(.sun):not(.danger):not(.quiet):not(.danger-go):hover {
   background: linear-gradient(180deg, #ffffff, #ffedf4); border-color: rgba(236, 31, 110, .45); box-shadow: 0 10px 22px -12px rgba(236, 31, 110, .5);
 }
 [data-theme="light"] .choice > span { background: linear-gradient(180deg, #ffffff, #fff8f3); border-color: rgba(194, 65, 12, .15); }

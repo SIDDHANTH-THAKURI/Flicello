@@ -40,7 +40,7 @@ def test_the_connect_page_shows_everything(local_studio, monkeypatch):
     client = TestClient(create_app(local_studio), base_url="http://127.0.0.1:8765", client=("127.0.0.1", 50000))
     r = client.get("/connect")
     assert r.status_code == 200
-    for words in ("This computer", "Set up with Claude Code", "Your keys", "Gemini", "ElevenLabs", "AI models",
+    for words in ("This computer", "Set everything up with Claude Code", "Keys", "Gemini", "ElevenLabs", "Models",
                   "connect --json"):
         assert words in r.text, words
 

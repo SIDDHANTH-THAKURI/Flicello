@@ -59,9 +59,12 @@ Run `bash fl help` once to see every command and its arguments. The main ones:
    `fl plan` for what the edit tool can't say; `fl cartoon` when they want an animated film (a cartoon, an animation of a story, a story with no footage);
    `fl scene` for anything visual they describe (a thing that moves,
    wings, a world, a transformation, a designed title sequence): designed motion graphics are always designed,
-   never captions, stickers, emoji or a template standing in. Captions and titles are for words. A change in
-   words (`fl tool change`) is another AI reading their words and waits for their OK: use it only for a voice
-   film (made as scenes), where edits can't reach. When changes already wait for their OK (`fl state` says so):
+   never captions, stickers, emoji or a template standing in. Captions and titles are for words, and only when
+   they ask for words. A change in words (`fl tool change`) is another AI reading their words: use it for a voice
+   or talking film (`fl state` says kind voice or talk), where edits and `fl scene` can't reach. Those films are
+   made of designed moments planned from what they say (before, each change on its word, after); a change
+   re-plans the moments it touches from their words and redesigns only those. Pass their words in full, with the
+   moment (seconds) when you know it. When changes already wait for their OK (`fl state` says so):
    if they are what they asked for, make them (`bash fl tool step '{"action": "confirm_change"}'`, a full render);
    if not, drop them (`cancel_change`) and do it yourself.
 4. Check, with your own eyes: a draft made with `fl tool edit` or `fl plan set` comes back with stills of where it

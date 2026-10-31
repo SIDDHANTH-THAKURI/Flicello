@@ -1,0 +1,12 @@
+/* Scrollbars, everywhere: a thin rounded thumb in the theme's own ink, no track, no arrow buttons; it brightens
+   while you hold it. Chrome and Safari use the ::-webkit-scrollbar parts; Firefox the standard properties. */
+:root { --sb: color-mix(in srgb, var(--muted, #9b98a4) 42%, transparent); --sb-hi: color-mix(in srgb, var(--muted, #9b98a4) 75%, transparent); }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--sb) transparent; }
+}
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb { background: var(--sb); border-radius: 99px; border: 3px solid transparent; background-clip: padding-box; min-height: 40px; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--sb-hi); border-width: 2px; }
+::-webkit-scrollbar-thumb:active { background-color: var(--rose, #ff2e7e); border-width: 2px; }

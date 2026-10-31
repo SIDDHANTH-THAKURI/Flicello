@@ -11,7 +11,8 @@
   {{ vite("cello") }}
 </head>
 <body class="cello-shell" data-owner="{{ 1 if is_owner else 0 }}">
-  <iframe id="cello-app" src="{{ to }}" title="{{ app_name }}" allow="autoplay; fullscreen"></iframe>
+  {% include "_icons.html" %}
+  <iframe id="cello-app" src="{{ to }}" title="{{ app_name }}" allow="autoplay; fullscreen; camera; microphone; display-capture"></iframe>
   <div id="cello" data-state="sleep" aria-live="polite">
     <canvas id="cello-beam" aria-hidden="true"></canvas>
     <div class="cello-body" role="button" tabindex="0" aria-label="Cello: tap to wake, tap again to sleep">
@@ -19,7 +20,13 @@
     </div>
     <div class="cello-caption" aria-hidden="true"><span class="you"></span><span class="me"></span></div>
     <div class="cello-pill" hidden></div>
-    <form class="cello-type" hidden><input name="t" autocomplete="off" placeholder="Type to Cello, then Enter" aria-label="Type to Cello"></form>
+    <div class="cello-lc" hidden aria-live="polite">
+      <div class="lc-panel">
+        <div class="status" data-lc-status><span data-s="listen">listening</span><i></i><span data-s="heard">heard</span><i></i><span data-s="think">thinking</span><i></i><span data-s="done">done</span></div>
+        <div class="lc-body" data-lc-body></div>
+        <div class="comp-foot"><div class="chips" data-lc-chips></div><span class="kbd">⏎ send · ⇧⏎ new line</span><button type="button" class="icon-btn" data-lc-mic title="Mic on or off" aria-label="Mic on or off"><svg class="ico"><use href="#i-mic"/></svg></button><button type="button" class="icon-btn sun" data-lc-send title="Type, or send" aria-label="Type, or send"><svg class="ico"><use href="#i-send"/></svg></button></div>
+      </div>
+    </div>
     <aside class="cello-desk" hidden aria-label="What Cello is doing">
       <header><b>Cello</b><button type="button" class="cello-desk-fold" data-desk-fold aria-label="Fold">&#8211;</button></header>
       <section class="desk-now" hidden></section>
@@ -28,17 +35,32 @@
     </aside>
     <button type="button" class="cello-desk-tab" data-desk-open hidden>Cello&#8217;s work</button>
     <div class="cello-ask" role="dialog" aria-live="assertive" hidden>
+      <button type="button" class="ask-later" data-ask-later title="Keep it for later: it waits in Cello's work">Later</button>
       <p class="ask-lead"></p>
       <p class="ask-q"></p>
       <div class="ask-options"></div>
       <form class="ask-own"><input name="t" autocomplete="off" placeholder="Or say it in your words" aria-label="Your answer"></form>
     </div>
-    <div class="cello-menu" hidden>
-      <button type="button" data-cello="type">Type instead</button>
-      <button type="button" data-cello="mute">Mute my mic</button>
-      <button type="button" data-cello="rest">Rest (wake me by name)</button>
-      <button type="button" data-cello="wakeword">Don&#8217;t wake to my voice</button>
-      <button type="button" data-cello="off">Turn Cello off</button>
+    <div class="cello-ring" hidden>
+      <div class="ring-veil" data-ring-close></div>
+      <div class="ring-stage">
+        <div class="ring-wrap">
+          <div class="ring closed" data-ring>
+            <div class="halo"></div><div class="halo2"></div><div class="sweep"></div>
+            <div class="center"><canvas id="ring-orb" title="Tap to close" aria-label="Close"></canvas><b data-ring-title>Listening</b><small data-ring-small></small></div>
+          </div>
+          <div class="saying">Or say <b data-ring-say></b></div>
+        </div>
+        <div class="ring-panel sub" data-ring-panel hidden></div>
+      </div>
+    </div>
+    <div class="cello-hello" hidden role="dialog" aria-label="How much should Cello do on its own?">
+      <div class="hello-card">
+        <h2>Hi, I'm Cello. How much should I do on my own?</h2>
+        <p>Here's what each one means when you say “make the ball bigger”. Change it any time: “take full control”, “check with me”.</p>
+        <div data-hello-cards></div>
+        <button type="button" class="hello-later" data-hello-later>Decide later (co-pilot until then)</button>
+      </div>
     </div>
   </div>
 </body>

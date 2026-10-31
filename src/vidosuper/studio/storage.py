@@ -8,6 +8,7 @@ video, or a real song, within the length limits) before it joins the project; an
 from __future__ import annotations
 
 import os
+import subprocess
 import re
 import secrets
 import shutil
@@ -21,7 +22,7 @@ from .pipeline import Workdir, folder_bytes
 from .settings import StudioSettings
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".mts", ".m2ts", ".3gp", ".webm"}
-AUDIO_EXT = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"}
+AUDIO_EXT = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".webm"}  # .webm: a voice memo recorded in the browser
 SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 
 
@@ -157,6 +158,8 @@ def _probe(path: Path, kind: str, s: StudioSettings) -> dict:
         raise UploadError("That file couldn't be read.") from exc
     streams = info.get("streams") or []
     duration = float((info.get("format") or {}).get("duration") or 0.0)
+    if duration <= 0 and path.suffix.lower() in (".webm", ".part"):  # recorded in the browser: written without its length
+        duration = _fix_length(path) or 0.0
     if kind == "clip":
         video = next((st for st in streams if st.get("codec_type") == "video"
                       and st.get("disposition", {}).get("attached_pic") != 1), None)
@@ -176,6 +179,29 @@ def _probe(path: Path, kind: str, s: StudioSettings) -> dict:
     if not 5.0 <= duration <= s.limits.song_seconds:
         raise UploadError(f"Songs can be 5 s to {s.limits.song_seconds / 60:.0f} minutes long.")
     return {"seconds": duration}
+
+
+def _fix_length(path: Path) -> float | None:
+    """A take recorded in the browser (MediaRecorder) has no length written in it: copied once into a file that has
+    one (nothing re-encoded), put in its place, and that length returned."""
+    from ..ffmpeg import ffmpeg_bin
+
+    fixed = path.with_name(path.name + ".fixed.mkv")
+    try:
+        done = subprocess.run([ffmpeg_bin(), "-y", "-loglevel", "error", "-i", str(path), "-c", "copy", "-f", "matroska",
+                               str(fixed)], capture_output=True, timeout=300)
+        if done.returncode != 0 or not fixed.exists():
+            return None
+        info = ffprobe_json(fixed, timeout=30)
+        seconds = float((info.get("format") or {}).get("duration") or 0.0)
+        if seconds <= 0:
+            return None
+        os.replace(fixed, path)
+        return seconds
+    except Exception:  # noqa: BLE001 - unreadable: the length check says so
+        return None
+    finally:
+        fixed.unlink(missing_ok=True)
 
 
 def cancel_upload(db: DB, s: StudioSettings, up: dict) -> None:

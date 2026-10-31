@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("VIDO_CELLO_WARM", "0")  # no studio a test starts loads Whisper and Kokoro
+os.environ.setdefault("VIDO_RENDERER_CHECK", "0")  # Connect's check doesn't start a browser in every test
 
 from vidosuper.config import load_config
 from vidosuper.devtools import make_synthetic_clips

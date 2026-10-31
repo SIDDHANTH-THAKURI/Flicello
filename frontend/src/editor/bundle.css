@@ -1,0 +1,6 @@
+/* The editor: one file, so nothing is split out and reordered. */
+@import '../styles/tokens.css';
+@import '../styles/scroll.css';
+@import '../styles/studio.css'; /* the player's own styles */
+@import '../styles/light.css';
+@import './editor.css';

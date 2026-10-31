@@ -133,6 +133,8 @@ class Config(_Strict):
     def models_root(self) -> Path:
         if self.analysis.models_dir != "auto":
             return Path(self.analysis.models_dir).expanduser()
+        if os.environ.get("VIDO_MODELS_DIR"):  # the same folder every other model uses (a pod's volume, say)
+            return Path(os.environ["VIDO_MODELS_DIR"]).expanduser()
         return self.workspace_root / "models"
 
 

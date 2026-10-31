@@ -306,7 +306,7 @@ def test_a_film_made_by_talking_to_your_editor(studio, media, monkeypatch):
                     follow_redirects=False)
     pid = r.headers["location"].rsplit("/", 1)[1]
     page = client.get(f"/p/{pid}").text
-    assert "Cello" in page and "your editor for this film" in page and "The brief" in page
+    assert "Cello" in page and "your editor" in page and "The brief" in page
     for name in ("a_stable.mp4", "c_pan.mp4", "f_portrait60.mov"):
         _upload(client, csrf, pid, media / "clips" / name, "clip")
     _upload(client, csrf, pid, media / "music.wav", "song")
@@ -405,3 +405,43 @@ def test_a_film_made_by_talking_to_your_editor(studio, media, monkeypatch):
     assert any(x["text"] == "swap 1 and 2" for x in talk)
     client.post(f"/p/{pid}/delete", data={"csrf": csrf, "sure": "yes"})
     assert not studio.db.all("SELECT id FROM messages WHERE project_id=?", (pid,))
+
+
+def test_a_creative_request_goes_to_claude_code_not_the_menu_of_fixed_changes(studio, monkeypatch):
+    from vidosuper.work import sessions
+
+    assert agent.creative_request("make the shapes I describe real animations")
+    assert agent.creative_request("add a trip montage at the end")
+    assert not agent.creative_request("what does the music do at the end?")
+    assert not agent.creative_request("thanks")
+    friend = _friend(studio, "Ana")
+    p = studio.create_project(friend, "x", "9:16", 15, "")
+    studio.db.run("UPDATE projects SET stage='done', version=1 WHERE id=?", (p["id"],))
+    monkeypatch.setattr(studio, "work_version", lambda project: 1)
+    monkeypatch.setattr(sessions, "available", lambda: True)
+    monkeypatch.setattr(studio.s, "owner_brain", "claude_code")
+    started = []
+
+    def start(user, project, request):
+        started.append(request)
+        wid = "w1"
+        studio.db.run("INSERT INTO work(id, project_id, user_id, status, request, created, updated) "
+                      "VALUES (?,?,?,?,?,?,?)", (wid, project["id"], user["id"], "running", request, 1.0, 1.0))
+        return studio.db.one("SELECT * FROM work WHERE id=?", (wid,))
+
+    monkeypatch.setattr(studio.work, "start", start)
+    monkeypatch.setattr(studio, "editor_brain", lambda project, user: pytest.fail("the fixed-menu editor was asked"))
+    studio.talk(friend, studio.db.project(p["id"]), "make the red ball bounce off my head when I say bounce")
+    assert started == ["make the red ball bounce off my head when I say bounce"]
+    last = agent.thread(studio.db, p["id"])[-1]
+    assert "my hands (Claude Code)" in last["body"]["text"] and "w1" in studio.work.from_page
+    # its question comes back to the page, and the answer typed there goes to it
+    studio.work._tell_page(studio.db.one("SELECT * FROM work WHERE id='w1'"), "question", "", "Which ball, the red one?",
+                           ["The red one", "Both"])
+    assert agent.thread(studio.db, p["id"])[-1]["body"]["text"] == "Which ball, the red one?"
+    studio.db.run("UPDATE work SET status='asking' WHERE id='w1'")
+    answered = []
+    monkeypatch.setattr(studio.work, "answer", lambda user, wid, text: answered.append((wid, text)))
+    studio.db.run("UPDATE messages SET created=0")
+    studio.talk(friend, studio.db.project(p["id"]), "the red one")
+    assert answered == [("w1", "the red one")]

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -164,9 +165,21 @@ def _whisper():
 
 
 def hear(audio: np.ndarray) -> str:
-    """What was said in a stretch of 16 kHz float audio."""
-    segments, _ = _whisper().transcribe(audio, vad_filter=True, beam_size=5, condition_on_previous_text=False)
-    return " ".join(s.text.strip() for s in segments).strip()
+    """What was said in a stretch of 16 kHz float audio. A short scrap Whisper takes for another language, and
+    isn't sure of, is noise (Cello's own voice leaking back from speakers was heard as Russian and Japanese and
+    cut its replies): it counts as nothing."""
+    segments, info = _whisper().transcribe(audio, vad_filter=True, beam_size=5, condition_on_previous_text=False)
+    said = " ".join(s.text.strip() for s in segments).strip()
+    if said and noise(said, getattr(info, "language", "en"), float(getattr(info, "language_probability", 1.0))):
+        return ""
+    return said
+
+
+def noise(said: str, language: str, sure: float) -> bool:
+    """A scrap of sound, not something said to Cello: a few words in another language, or anything Whisper is
+    barely sure of."""
+    words = len(said.split())
+    return (language != "en" and words <= 4 and sure < 0.95) or sure < 0.4
 
 
 class Ears:
@@ -272,7 +285,7 @@ class Mind:
                 elif ev.get("type") == "content_block_start" and (ev.get("content_block") or {}).get("type") == "text":
                     self.on_text(" ")  # a new block of words after a tool: they don't run into the last ones
             elif kind == "result":
-                if e.get("is_error") and re.search(r"(session|usage|weekly) limit|hit your limit",
+                if e.get("is_error") and re.search(r"(session|usage|weekly|5-hour) limit|hit your (\S+ )?limit",
                                                    str(e.get("result") or ""), re.I):
                     self.on_error("the Claude plan's limit is reached")
                 self.on_done()
@@ -312,9 +325,15 @@ class Live:
         self.send, self.loop = send, loop
         self.pending: dict[str, asyncio.Future] = {}
         self.turn_text = ""
-        self.sent = 0  # turns given to the mind
-        self.finished = 0  # turns it has ended
-        self.cut_upto = 0  # they spoke over these turns: what is left of them is dropped
+        # Whether the mind is busy, never a count of turns: Claude Code answers several messages that queue up while
+        # it works (their words and Flicello's notes) in one reply, so a count of messages against replies drifts and
+        # every later reply looked "spoken over" and was dropped (Cello went silent for good).
+        self.awaiting = False  # something was said to it and its reply hasn't ended
+        self.streaming = False  # its words are arriving
+        self.drop = False  # they spoke over the reply being written: the rest of it is dropped until it ends
+        self.drop_at = 0.0
+        self.said_since_drop = False
+        self.epoch = 0  # goes up each time they speak over it: a sentence made for an older epoch isn't played
         self.talking = 0  # sentences being spoken
         self.done = False
         self.dozing = False  # asleep, listening only for its name
@@ -339,37 +358,46 @@ class Live:
     def _say(self, text: str) -> None:
         if self.note_next:
             text, self.note_next = f"{self.note_next}\n{text}", ""
-        self.sent += 1
+        self.awaiting = True
+        if self.drop:
+            self.said_since_drop = True
         self.mind.say(text)
 
     @property
+    def busy(self) -> bool:
+        return self.awaiting or self.streaming
+
+    @property
     def cut(self) -> bool:
-        """The turn being written (or spoken) is one they spoke over."""
-        return self.finished + 1 <= self.cut_upto
+        """The reply being written is one they spoke over (a stuck drop lets go after 10 s: the mind may have been
+        idle when it was interrupted, and then no end of a reply ever comes)."""
+        if self.drop and time.monotonic() - self.drop_at > 10:
+            self.drop = False
+        return self.drop
 
     def doze(self, on: bool) -> None:
         """Asleep (only its name wakes it) or awake again (woken by a tap)."""
         was, self.dozing = self.dozing, bool(on)
         if on:
-            self._started_cut()
+            self._cut_off()
         elif was:
             self.note_next = "(Note, not them talking: you're awake again: a tap or their typing woke you.)"
 
-    def _started_cut(self) -> None:
-        self.cut_upto = self.sent
+    def _cut_off(self) -> None:
+        """Whatever it is saying stops now; a reply still being written is stopped and its rest dropped."""
+        self.epoch += 1
         self.turn_text = ""
-        self.mind.interrupt()
+        if self.busy:
+            self.drop, self.drop_at, self.said_since_drop = True, time.monotonic(), False
+            self.mind.interrupt()
         self.loop.call_soon_threadsafe(self._drain_mouth)
 
     def _started(self) -> None:
         if self.dozing:
             return
-        if self.talking or self.turn_text or self.sent > self.finished:  # they spoke over it
-            self.cut_upto = self.sent
-            self.turn_text = ""
-            self.mind.interrupt()
+        if self.talking or self.turn_text or self.busy or not self.mouth.empty():  # they spoke over it
+            self._cut_off()
             self._emit({"serverContent": {"interrupted": True}})
-            self.loop.call_soon_threadsafe(self._drain_mouth)
 
     def _heard(self, stretch: np.ndarray) -> None:
         def work():
@@ -397,19 +425,29 @@ class Live:
 
     # what it says
     def _text(self, delta: str) -> None:
+        self.streaming = True
         if self.cut:
             return
         self.turn_text += delta
         done, self.turn_text = sentences(self.turn_text)
+        epoch = self.epoch
         for s in done:
-            self.loop.call_soon_threadsafe(self.mouth.put_nowait, s)
+            self.loop.call_soon_threadsafe(self.mouth.put_nowait, (epoch, s))
 
     def _turn_done(self) -> None:
-        rest = [] if self.cut else sentences(self.turn_text, final=True)[0]
+        """A reply ended (one reply may answer several messages that queued up)."""
+        dropped = self.cut
+        rest = [] if dropped else sentences(self.turn_text, final=True)[0]
         self.turn_text = ""
-        self.finished += 1
+        self.streaming = False
+        if dropped:  # the reply they spoke over has ended; anything said since is still to be answered
+            self.drop = False
+            self.awaiting = self.said_since_drop
+        else:
+            self.awaiting = False
+        epoch = self.epoch
         for s in rest:
-            self.loop.call_soon_threadsafe(self.mouth.put_nowait, s)
+            self.loop.call_soon_threadsafe(self.mouth.put_nowait, (epoch, s))
         self.loop.call_soon_threadsafe(self.mouth.put_nowait, None)  # the turn's end, after its last words
 
     def _failed(self, why: str) -> None:
@@ -422,11 +460,12 @@ class Live:
 
     async def _speak_loop(self) -> None:
         while not self.done:
-            s = await self.mouth.get()
-            if s is None:
+            item = await self.mouth.get()
+            if item is None:
                 await self.send({"serverContent": {"turnComplete": True}})
                 continue
-            if self.cut:
+            epoch, s = item
+            if epoch != self.epoch:  # written before they spoke over it
                 continue
             self.talking += 1
             try:
@@ -436,7 +475,7 @@ class Live:
                 self.talking -= 1
                 continue
             self.talking -= 1
-            if self.cut:
+            if epoch != self.epoch:  # they spoke while it was being voiced
                 continue
             await self.send({"serverContent": {
                 "modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm;rate=24000",

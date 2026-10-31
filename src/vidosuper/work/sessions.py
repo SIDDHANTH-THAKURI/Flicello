@@ -70,6 +70,7 @@ class Sessions:
         self.procs: dict[str, subprocess.Popen] = {}
         self.lock = threading.Lock()
         self.screen: list[tuple[float, str, dict]] = []  # what the agent did on their screen: (when, person, ui)
+        self.from_page: set[str] = set()  # work asked for in the film page's conversation: its answer goes back there
         self.recovered = self._recover()
 
     def _recover(self) -> int:
@@ -229,8 +230,30 @@ class Sessions:
                ("asking" if status == "question" else status, " ".join(say.split())[:1000], question, options,
                 result.get("session_id") or session, time.time(), wid))
         log.info("work %s %s in %.0fs", wid, status, time.time() - t0)
+        if wid in self.from_page and row["project_id"]:
+            self._tell_page(row, status, say, question, said.get("options") or [])
         if status != "question":
             self._next(row)
+
+    def _tell_page(self, row: dict, status: str, say: str, question: str | None, options: list[str]) -> None:
+        """The answer to a request made in the film page's conversation, said there too (a question with its
+        answers as taps: tapping one answers the desk)."""
+        from ..studio import agent
+
+        film = self.studio.db.project(row["project_id"])
+        if film is None:
+            return
+        if status != "question":
+            self.from_page.discard(row["id"])
+        text = say or ("Done." if status == "done" else "I couldn't finish that.")
+        if status == "question" and question:
+            text = f"{say} {question}".strip() if say and say != question else question
+        try:
+            agent.post(self.studio.db, film, "editor", "text", {"text": " ".join(text.split())[:1200], "cards": [],
+                                                                "work": row["id"],
+                                                                "options": options[:4] if status == "question" else []})
+        except Exception:  # noqa: BLE001 - Cello still tells them
+            log.warning("couldn't post work %s to the film page", row["id"], exc_info=True)
 
     def _next(self, row: dict) -> None:
         """The next request waiting for this film's session."""

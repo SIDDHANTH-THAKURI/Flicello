@@ -1,0 +1,208 @@
+/* The film page: your film and Cello, side by side, on one screen. The work column scrolls on its own; Cello's
+   conversation is a drawer held to the window's right edge (resize it by its edge, close it to a tab, pull it back),
+   its type box always at the bottom. On a phone the conversation is a sheet you pull up. */
+
+.page.filmwide { max-width: 1520px; padding: .9rem clamp(.75rem, 2vw, 1.4rem) 0; display: flex; flex-direction: column; }
+.filmpage { --dock: 380px; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.fp-main, .fp-work, .fp-stage, .fp-side { min-width: 0; }
+
+/* ------------------------------------------------------------------ the top bar */
+.fp-top { display: flex; align-items: center; gap: 12px; padding: 4px 2px 12px; flex-wrap: wrap; }
+.fp-back { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; border: 1px solid var(--line-2); background: var(--card); color: var(--paper); flex: none; }
+.fp-back:hover { border-color: var(--rose); }
+.fp-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.fp-title h1 { margin: 0; font-size: clamp(1.15rem, 1rem + .6vw, 1.5rem); letter-spacing: -.02em; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
+.fp-sub { font-size: .74rem; color: var(--muted); white-space: nowrap; }
+.fp-top .grow { flex: 1; }
+.fp-top .pill { cursor: pointer; background: none; font: inherit; font-size: .75rem; }
+.fp-mode button { font-size: .76rem; padding: 5px 11px; }
+
+/* ------------------------------------------------------------------ two columns */
+.fp-main { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0; flex: none; min-height: 420px;
+  height: calc(100vh - 140px); height: calc(100svh - 140px); border: 1px solid var(--line-2); border-radius: 20px; overflow: hidden;
+  background: color-mix(in srgb, var(--ink-1) 94%, transparent); box-shadow: var(--shadow-l); transition: grid-template-columns .6s var(--ease-out); }
+.fp-work { overflow: auto; padding: 16px 18px 28px; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.fp-work > .panel, .fp-work > section, .fp-work > form, .fp-work > details { margin-top: 0; }
+.fp-work .meta { margin-top: 0; }
+.fp-work .track { margin: 4px 0 8px; }
+
+/* ------------------------------------------------------------------ the player and its timeline */
+.fp-film { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.fp-work > * { min-width: 0; max-width: 100%; flex-shrink: 0; }
+.fp-side .pane, .fp-side .tabpanel { min-width: 0; }
+.fp-stage, .fp-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* a vertical film: the player on the left, its tabs beside it, all on one screen */
+.fp-film.tall { display: grid; grid-template-columns: minmax(240px, 34%) minmax(0, 1fr); gap: 18px; align-items: start; }
+.fp-film.tall .fp-stage { position: sticky; top: 0; }
+.fp-film.tall .fp-player.tall { width: auto; max-width: 100%; height: calc(100vh - 330px); height: calc(100svh - 330px); min-height: 320px; max-height: none; aspect-ratio: 9 / 16; margin: 0 auto; }
+.fp-film.tall .fp-side .tabs { margin-top: 0; }
+@media (max-width: 1000px) { .fp-film.tall { display: flex; align-items: stretch; } .fp-film.tall .fp-stage { position: static; } .fp-film.tall .fp-player.tall { width: auto; height: min(64vh, 720px); } }
+.fp-player { position: relative; border-radius: 14px; overflow: hidden; background: #0d0a12; box-shadow: 0 20px 50px -24px rgba(0, 0, 0, .7); cursor: crosshair; flex: none; }
+.fp-player.wide { aspect-ratio: 16 / 9; }
+.fp-player.tall { aspect-ratio: 9 / 16; max-height: min(64vh, 720px); margin: 0 auto; width: auto; height: min(64vh, 720px); }
+.fp-player video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #0d0a12; }
+.fp-player .shot-badge { position: absolute; left: 12px; top: 12px; z-index: 2; }
+.ptip { position: absolute; right: 12px; top: 12px; z-index: 2; font-size: .72rem; padding: 5px 10px; border-radius: 99px; background: rgba(0, 0, 0, .45); color: rgba(255, 255, 255, .88);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); pointer-events: none; transition: opacity .4s; display: flex; gap: 6px; align-items: center; }
+.ptip.gone { opacity: 0; }
+.pctl { position: absolute; left: 12px; bottom: 12px; z-index: 2; display: flex; gap: 8px; align-items: center; }
+.pctl button { width: 36px; height: 36px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .55); color: #fff; display: grid; place-items: center; cursor: pointer; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.pctl .tc { font-family: var(--f-mono); font-size: .72rem; color: rgba(255, 255, 255, .92); background: rgba(0, 0, 0, .5); padding: 5px 9px; border-radius: 99px; }
+.pshape { position: absolute; right: 12px; bottom: 12px; z-index: 2; background: rgba(0, 0, 0, .45); border-color: rgba(255, 255, 255, .2); }
+.pshape button { color: rgba(255, 255, 255, .75); }
+.fp-player .pin { position: absolute; z-index: 3; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: #fff; pointer-events: none;
+  box-shadow: 0 0 0 4px rgba(255, 46, 126, .55), 0 6px 20px rgba(0, 0, 0, .5); animation: ui-rise .3s var(--ease-spring); }
+.fp-player .pin::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid #fff; animation: fp-ripple 1.6s var(--ease-out) infinite; }
+@keyframes fp-ripple { to { transform: scale(3.2); opacity: 0; } }
+.fp-player .pop { position: absolute; z-index: 4; transform: translate(-50%, 18px); padding: 10px; border-radius: 14px; background: rgba(14, 12, 20, .86); color: #fff; cursor: default;
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, .14); display: grid; gap: 8px; min-width: 240px; animation: ui-rise .35s var(--ease-out); }
+.fp-player .pop small { font-family: var(--f-mono); font-size: .68rem; color: rgba(255, 255, 255, .62); }
+.fp-player .pop .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fp-player .pop .chip { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .18); color: #fff; }
+.fp-player .pop .chip.own { border-style: dashed; }
+.fp-tl { position: relative; height: 54px; border-radius: 12px; background: var(--card-hi); border: 1px solid var(--line); overflow: hidden; cursor: pointer; flex: none; }
+.fp-tl canvas { position: absolute; left: 0; right: 0; bottom: 2px; width: 100%; height: 28px; pointer-events: none; }
+.fp-tl .mb { position: absolute; top: 5px; height: 17px; border: 0; border-radius: 6px; font: 600 .62rem var(--f-mono); display: flex; align-items: center; padding: 0 6px; color: #170c12;
+  overflow: hidden; white-space: nowrap; cursor: pointer; transition: box-shadow .3s, filter .3s; min-width: 4px; }
+.fp-tl .mb.cur { box-shadow: 0 0 0 1.5px var(--paper), 0 0 16px rgba(255, 255, 255, .35); }
+.fp-tl .ph { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--paper); box-shadow: 0 0 10px var(--paper); pointer-events: none; left: 0; }
+.mb.c0, .mrow .n.c0 { background: #ff4a2e; }
+.mb.c1, .mrow .n.c1 { background: #2f6bff; color: #fff; }
+.mb.c2, .mrow .n.c2 { background: #ff7a1a; }
+.mb.c3, .mrow .n.c3 { background: #ffd36b; }
+.mb.c4, .mrow .n.c4 { background: #ff2e7e; color: #fff; }
+.fp-actions { display: none; flex-wrap: wrap; gap: 8px; }
+.mode-both .fp-actions, .mode-manual .fp-actions { display: flex; animation: ui-rise .4s var(--ease-out); }
+.fp-draft { border-color: color-mix(in srgb, var(--rose) 40%, transparent); }
+
+/* ------------------------------------------------------------------ tabs and what is in them */
+.fp-film .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; margin-top: 4px; position: sticky; top: -16px; z-index: 5; background: var(--ink-1); padding-top: 4px; }
+[data-theme="light"] .fp-film .tabs { background: #fffdfb; }
+.fp-film .tabs button { border: 0; background: none; padding: 9px 12px; font: inherit; font-size: .84rem; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; }
+.fp-film .tabs button:hover { color: var(--paper); }
+.fp-film .tabs button[aria-selected="true"] { color: var(--paper); border-bottom: 2px solid; border-image: var(--sun) 1; }
+.fp-film .tabs .count { font-family: var(--f-mono); font-size: .62rem; padding: 1px 6px; border-radius: 99px; background: var(--card-hi); color: var(--muted); }
+.fp-film .tabs .count.ok { color: var(--keep); }
+.fp-film .pane > .tabpanel > .panel { margin-top: 10px; }
+.fp-film .pane .panel { box-shadow: none; }
+.words { display: flex; flex-wrap: wrap; gap: 2px 4px; font-size: 1rem; line-height: 1.6; margin: 10px 0 12px; }
+.words span { color: var(--faint); transition: color .25s, background .25s; padding: 0 3px; border-radius: 5px; cursor: pointer; }
+.words span.past { color: var(--paper-2); }
+.words span.now { color: var(--paper); background: var(--sun-soft); }
+.words span.key { box-shadow: inset 0 -2px 0 var(--rose); }
+.mrows { display: grid; gap: 7px; margin-top: 8px; }
+.mrow { position: relative; display: grid; grid-template-columns: 24px 82px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 12px; text-align: left;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--card); font: inherit; font-size: .84rem; color: var(--paper); overflow: hidden; cursor: pointer; transition: border-color .3s, background .3s; }
+.mrow:hover { border-color: var(--line-2); }
+.mrow .n { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; font: 700 .68rem var(--f-mono); color: #170c12; }
+.mrow .when { font-family: var(--f-mono); font-size: .7rem; color: var(--muted); }
+.mrow .what b { font-weight: 600; }
+.mrow .arrow { color: var(--muted); }
+.mrow .fill { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--sun); width: 0; }
+.mrow.cur { border-color: var(--line-2); background: var(--card-hi); }
+
+/* ------------------------------------------------------------------ Cello's dock: one conversation, its box always at the bottom */
+.cello-dock { border-left: 1px solid var(--line); background: var(--glass); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); display: flex; flex-direction: column; min-height: 0; }
+.cello-dock .grab { display: none; }
+.cello-dock .editor { display: flex; flex-direction: column; min-height: 0; flex: 1; margin: 0; padding: 0; border: 0; background: none; box-shadow: none; border-radius: 0; animation: none; }
+.cello-dock .dock-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.cello-dock .dock-orb { width: 30px; height: 30px; border-radius: 50%; flex: none; background: radial-gradient(circle at 35% 30%, #fff6e0, #ffb347 30%, #ff2e7e 65%, #8f5bff); box-shadow: 0 0 18px rgba(255, 46, 126, .45); animation: dock-breathe 3.6s ease-in-out infinite; }
+.cello-on .cello-dock .dock-orb { animation-duration: 1.4s; box-shadow: 0 0 24px rgba(255, 179, 71, .7); }
+@keyframes dock-breathe { 50% { transform: scale(1.08); } }
+.cello-dock .who { flex: 1; line-height: 1.2; min-width: 0; }
+.cello-dock .who b { font-size: .9rem; }
+.cello-dock .who small { display: block; font-size: .72rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cello-dock .waiting { font-size: .7rem; padding: 3px 8px; border-radius: 99px; border: 0; background: var(--sun); color: var(--on-sun); font-weight: 600; cursor: pointer; }
+.cello-dock .convo { flex: 1; min-height: 0; overflow: auto; padding: 14px; scroll-behavior: smooth; }
+.cello-dock .thread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.cello-dock .m { max-width: 94%; padding: 9px 12px; border-radius: 14px; line-height: 1.45; font-size: .84rem; animation: ui-rise .35s var(--ease-out); }
+.cello-dock .m p { margin: 0; }
+.cello-dock .m-editor { background: var(--card-hi); border: 1px solid var(--line); border-top-left-radius: 4px; align-self: flex-start; }
+.cello-dock .m-you { align-self: flex-end; background: var(--paper); color: var(--ink); border-top-right-radius: 4px; }
+.cello-dock .m-voice.m-editor { border-color: color-mix(in srgb, var(--rose) 35%, transparent); }
+.cello-dock .m-voice p::before { content: "🎙 "; font-size: .72em; opacity: .55; }
+.cello-dock .m-checkin { background: var(--sun-soft); }
+.cello-dock .m-trouble { border-color: color-mix(in srgb, var(--cut) 40%, transparent); }
+.cello-dock .m-card { margin-top: 8px; padding: 10px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--rose) 40%, transparent); background: var(--sun-soft); }
+.cello-dock .m-taps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cello-dock .m-taps form { margin: 0; }
+.cello-dock .m-taps .btn, .cello-dock .m-taps .btn-sun { height: 30px; padding: 0 11px; border-radius: 9px; font-size: .76rem; }
+.cello-dock .m-spec, .cello-dock .m-checks { margin: 6px 0 0; padding-left: 1rem; font-size: .78rem; }
+.cello-dock .editor-older { margin-bottom: 10px; font-size: .8rem; }
+.cello-dock .editor-older summary { cursor: pointer; color: var(--muted); }
+.cello-dock .composer { margin: 10px 12px 12px; padding: 10px 8px 8px 14px; display: flex; flex-direction: column; align-items: stretch; gap: 6px; flex: none; border-radius: 18px; border: 1px solid var(--line-2); background: var(--ink-2);
+  box-shadow: 0 0 0 4px rgba(255, 46, 126, .06); transition: box-shadow .3s, border-color .3s; }
+.cello-dock .composer:focus-within { border-color: color-mix(in srgb, var(--rose) 60%, transparent); box-shadow: 0 0 0 5px rgba(255, 46, 126, .12); }
+.cello-dock .composer textarea { flex: none; width: 100%; min-width: 0; border: 0; background: none; outline: 0; resize: none; font: inherit; font-size: .86rem; padding: 2px 6px 0 0; color: var(--paper); min-height: 24px; max-height: 160px; line-height: 1.45; }
+.cello-dock .composer-bar { display: flex; align-items: center; gap: 6px; }
+.cello-dock .composer-bar .icon-btn { width: 34px; height: 34px; border-radius: 10px; }
+.cello-dock .composer-hint { flex: 1; min-width: 0; font-size: .68rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .3s; }
+.cello-dock .composer:focus-within .composer-hint { opacity: .8; }
+.cello-dock .composer textarea, .cello-dock .composer textarea:focus { border: 0; box-shadow: none; border-radius: 0; background: none; } /* the box is the composer, not the field */
+.cello-dock .composer textarea::placeholder { color: var(--muted); }
+.cello-dock .composer .help { display: none; }
+.cello-dock .composer-note { margin: 0 12px 8px; font-size: .78rem; color: var(--cut); }
+.cello-dock .dots { display: inline-flex; gap: 4px; padding: 4px 2px; }
+.cello-dock .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: dock-bob 1s ease-in-out infinite; }
+.cello-dock .dots i:nth-child(2) { animation-delay: .15s; } .cello-dock .dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes dock-bob { 50% { transform: translateY(-5px); background: var(--rose); } }
+
+/* ------------------------------------------------------------------ the drawer, held to the window's right edge */
+.dock-edge, .dock-tab { display: none; }
+@media (min-width: 861px) {
+  html.has-dock #main.filmwide { max-width: none; margin-left: 0; margin-right: 0; padding-right: calc(var(--dockw, 400px) + clamp(.75rem, 1.6vw, 1.2rem));
+    transition: padding-right .45s var(--ease-out); }
+  html.has-dock.dock-shut #main.filmwide { padding-right: 104px; } /* a gutter for the tab and Cello's resting orb */
+  .cello-dock { position: fixed; top: var(--dock-top, 0px); right: 0; bottom: 0; width: var(--dockw, 400px); z-index: 25; border-left: 1px solid var(--line-2);
+    background: color-mix(in srgb, var(--ink-1) 90%, transparent); box-shadow: -34px 0 70px -44px rgba(0, 0, 0, .7);
+    transition: transform .45s var(--ease-out), opacity .25s; }
+  html.dock-shut .cello-dock { transform: translateX(calc(100% + 30px)); box-shadow: none; }
+  html.dock-closing .cello-dock { opacity: .5; }
+  html.dock-dragging, html.dock-dragging * { cursor: col-resize !important; user-select: none; }
+  html.dock-dragging .cello-dock, html.dock-dragging #main.filmwide { transition: none; }
+  .dock-edge { display: block; position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; z-index: 3; cursor: col-resize; touch-action: none; outline: 0; }
+  .dock-edge::after { content: ""; position: absolute; left: 4px; top: 0; bottom: 0; width: 2px; border-radius: 2px; background: transparent; transition: background .2s; }
+  .dock-edge:hover::after, .dock-edge:focus-visible::after, html.dock-dragging .dock-edge::after { background: var(--rose); }
+  .dock-edge::before { content: ""; position: absolute; left: 2px; top: 50%; width: 6px; height: 40px; margin-top: -20px; border-radius: 3px; background: var(--line-2); transition: background .2s; }
+  .dock-edge:hover::before, html.dock-dragging .dock-edge::before { background: var(--rose); }
+  .dock-close svg { transform: scaleX(-1); }
+  .dock-tab { position: fixed; right: 0; top: 50%; z-index: 25; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 9px 10px 8px;
+    border: 1px solid var(--line-2); border-right: 0; border-radius: 16px 0 0 16px; background: var(--card-hi); color: var(--paper); cursor: grab; touch-action: none;
+    font: inherit; box-shadow: -14px 0 40px -18px rgba(0, 0, 0, .6); transform: translateY(-50%); transition: padding .25s var(--ease-out), border-color .25s;
+    animation: dock-tab-in .45s var(--ease-out); }
+  .dock-tab[hidden] { display: none; }
+  .dock-tab:hover, .dock-tab:focus-visible { padding-right: 14px; border-color: var(--rose); outline: 0; }
+  .dock-tab:active { cursor: grabbing; }
+  .dock-tab-orb { width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff6e0, #ffb347 30%, #ff2e7e 65%, #8f5bff);
+    box-shadow: 0 0 16px rgba(255, 46, 126, .45); animation: dock-breathe 3.6s ease-in-out infinite; }
+  .dock-tab-word { writing-mode: vertical-rl; transform: rotate(180deg); font-size: .74rem; font-weight: 600; letter-spacing: .08em; }
+  .dock-tab .ico { color: var(--muted); }
+  @keyframes dock-tab-in { from { transform: translate(100%, -50%); } }
+}
+
+/* ------------------------------------------------------------------ a narrower screen, and the phone's sheet */
+@media (max-width: 860px) {
+  .page.filmwide { padding: .5rem .5rem 0; }
+  .fp-main { display: block; height: auto; border: 0; border-radius: 0; background: none; box-shadow: none; overflow: visible; }
+  .fp-work { overflow: visible; padding: 0 0 240px; }
+  .fp-mode { display: none; }
+  .fp-title h1 { max-width: 60vw; }
+  .cello-dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; height: 200px; border-left: 0; border-top: 1px solid var(--line-2); border-radius: 22px 22px 0 0;
+    box-shadow: 0 -20px 60px -20px rgba(0, 0, 0, .55); transition: height .5s var(--ease-out); }
+  .dock-open .cello-dock { height: 78vh; height: 78svh; }
+  .cello-dock .grab { display: block; padding: 8px 0 2px; cursor: grab; flex: none; }
+  .cello-dock .grab i { display: block; width: 40px; height: 5px; border-radius: 3px; background: var(--line-2); margin: 0 auto; }
+  .dock-close { display: none; }
+}
+
+/* a draft: it plays in the player's place, with its two choices on it */
+.fp-draft { display: flex; flex-direction: column; gap: 8px; border-radius: 14px; padding: 10px; border: 1px solid color-mix(in srgb, var(--rose) 40%, transparent); background: var(--sun-soft); }
+.fp-draft-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fp-draft-head .grow { flex: 1; }
+.fp-draft-head form { margin: 0; }
+.fp-draft .pv { border-radius: 10px; overflow: hidden; }
+.fp-draft details.more { font-size: .82rem; }
+.fp-draft .change-list { margin: 6px 0 0; padding-left: 1.1rem; }
+
+/* record it now, beside the place clips go */
+.rec-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
