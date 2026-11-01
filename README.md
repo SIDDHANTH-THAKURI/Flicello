@@ -42,17 +42,18 @@ Your footage never leaves your computer except as the parts a step sends to a se
 |---|---|
 | 🎬 **Edits from your clips** | Cello watches your footage with its sound, finds the moments, pitches a story and cuts it on the music's beats and hits, in any style (cinematic, hype, travel, documentary) and shape (9:16, 16:9, 4:5, square). |
 | 🗣️ **Talking videos, cut on your words** | Every word timed by Whisper. Pauses and "um"s go, cuts never land mid-word, captions land on the syllable. |
-| ✨ **Motion graphics, designed for the moment** *(experimental)* | No templates: Claude designs each scene as code (HyperFrames + GSAP) for what you're saying, paints real assets on your GPU, cuts you out cleanly so things can go behind you, checks its own frames and passes a strict review. |
+| ✨ **Motion graphics, designed for the moment** *(experimental)* | No templates: each moment is planned from what you say (or on the music's beats, in a clip film), then Claude designs the whole frame for it, flat in 2D (HyperFrames + GSAP) or in 3D (Blender), with you cut out and standing in it. It looks at its own frames, takes one deep review, and fixes what it found. Your notes on a moment change only that moment. |
 | 🎵 **Music made for your cut** | An original track at your film's length and tempo, made on your GPU (ACE-Step 1.5). The drop lands on your best shot; a stretch can be remade in place. |
 | 💥 **A sound on every hit** | Each sound effect generated from its description (Stable Audio 3) and placed on its frame. |
 | 🐾 **Cartoons** *(experimental)* | Tell it a story and get an animated film: Claude directs, a real animation engine makes the motion. [Four ways](#cartoons-four-ways). |
 | ✂️ **A real editor** | A timeline with trim, split, ripple, keyframes, speed, levels, ducking and undo. Cello and you work on the same timeline. |
-| 💬 **Cello, out loud** | Point at the screen and say what you want. Cello sees what you see, does it, and tells you what changed. Whisper hears you, Claude thinks with Cello's tools, Kokoro speaks; talk over it and it stops. |
+| 💬 **Cello, out loud** | Point at the screen and say what you want. Cello sees what you see, fills in any page for you, does it, and tells you what changed. Whisper hears you, Claude thinks with Cello's tools, Kokoro speaks; talk over it and it stops; if it ever gets stuck it restarts itself and picks up where it was. You choose how much it may do: Advisor (it points, you click), Co-pilot or Full. It never deletes for good and never types your keys. |
 | 📦 **Exports** | MP4 in every shape, captions (SRT), ProRes, GIF, a thumbnail, MP3, and project files for Final Cut (FCPXML), Premiere and Resolve (EDL). |
 | ✅ **Checks** | A ready-to-post score and an honest AI viewer's review before you publish. |
 
 Everything is asked for in plain words ("shot 3 out", "make the ending calmer", "captions in karaoke style") and
-shown as an instant draft before anything is rendered. Every version is kept.
+shown as an instant draft before anything is rendered. Every version is kept. Before an AI shot or a new stretch of
+music is made, you see the exact prompt it would send, change it if you like, and send it yourself.
 
 <p align="center">
   <img src="site/media/og.jpg" alt="The studio: Cello cuts the jump onto the drop at 0:08" width="100%">
@@ -102,6 +103,7 @@ limit, everything finished is kept.
 | Music | your GPU | [ACE-Step 1.5 XL](https://github.com/ace-step/ACE-Step-1.5) |
 | Sound effects | your GPU (or CPU) | [Stable Audio 3 Small-SFX](https://huggingface.co/stabilityai/stable-audio-3-small-sfx) |
 | Cartoon motion | your GPU, or any machine | [Wan 2.2 I2V](https://github.com/Wan-Video/Wan2.2), [AniSora V3.2](https://github.com/bilibili/index-anisora), [Blender](https://www.blender.org), or drawn in code |
+| 3D motion graphics | your GPU | [Blender](https://www.blender.org) (EEVEE), with free CC0 models, skies and surfaces from [Poly Haven](https://polyhaven.com) and [ambientCG](https://ambientcg.com), fetched when a scene uses them |
 | Cut-outs, depth, object removal, upscaling | your GPU or CPU | BiRefNet, MODNet, Depth Anything V2, LaMa, Real-ESRGAN (ONNX) |
 | Speech | your machine | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) |
 | Cello's voice | your machine | Whisper + Claude + [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) |
@@ -109,6 +111,10 @@ limit, everything finished is kept.
 Optional services, if you'd rather: **Gemini** (watches footage with sound; Cello's live voice), **ElevenLabs**
 (music and sound effects), **Higgsfield** (AI-generated shots), the **Anthropic API** instead of your plan. Keys stay
 in your computer's keychain and are never sent anywhere but their own service.
+
+You pick who does each job on the Connect page: the Claude model for talking, editing, designing and watching
+(stronger models make better films and use more of your plan), and which painter, video model, cartoon engine and
+music maker to use. "Best here" lets Flicello choose what your machine can run.
 
 ## Built for powerful machines
 
@@ -161,8 +167,9 @@ connect. The models on your GPU cost nothing per use. Flicello itself is free.
 
 ## Under the hood
 
-Python (FastAPI) and a Vite front end; FFmpeg for video; HyperFrames + GSAP for designed scenes; diffusers for the
-painter and the video models; ONNX Runtime for cut-outs, depth, object removal and upscaling; Blender for rigs; Claude
+Python (FastAPI) and a Vite front end; FFmpeg for video; HyperFrames + GSAP for 2D scenes and Blender for 3D ones
+(each with its own kit of finished parts); diffusers for the painter and the video models; ONNX Runtime for cut-outs,
+depth, object removal and upscaling; Blender for rigs; Claude
 Code agent sessions ("desks") for creative work, each with its own small set of commands. The command line and the
 older tools: [docs/vidosuper-cli.md](docs/vidosuper-cli.md).
 
@@ -198,6 +205,8 @@ Flicello stands on the work of many open projects. Thank you to everyone who bui
 - [HyperFrames](https://github.com/heygen-com/hyperframes) by HeyGen (Apache-2.0) and [GSAP](https://gsap.com):
   designed scenes rendered frame by frame.
 - [Blender](https://www.blender.org) (GPL): rigs and 3D.
+- [Poly Haven](https://polyhaven.com) and [ambientCG](https://ambientcg.com) (CC0): the free models, skies and
+  surfaces 3D scenes can use, downloaded only when a scene asks for them.
 - [Diffusers](https://github.com/huggingface/diffusers), [Transformers](https://github.com/huggingface/transformers)
   and the [Hugging Face Hub](https://huggingface.co) (Apache-2.0); [PyTorch](https://pytorch.org) (BSD-3-Clause);
   [ONNX Runtime](https://onnxruntime.ai) (MIT).

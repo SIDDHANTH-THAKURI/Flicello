@@ -31,6 +31,7 @@ machine by the setup prompt (the Connect page).
 | [GSAP](https://gsap.com) | the animation in designed scenes (written by Claude) | Webflow's GSAP Standard "No Charge" licence (see below) |
 | [FFmpeg](https://ffmpeg.org) | everything video and audio | LGPL/GPL (installed by you) |
 | [Blender](https://www.blender.org) (optional) | rigged characters and 3D in cartoons and scenes | GPL (installed by you; Flicello only runs it) |
+| [Poly Haven](https://polyhaven.com) and [ambientCG](https://ambientcg.com) | free models, skies (HDRIs) and surfaces a 3D scene may use, downloaded only when it asks for one | CC0 (public domain); no account, nothing sent but the request |
 | [ONNX Runtime](https://onnxruntime.ai) | running the models on your GPU or CPU | MIT |
 | [PyTorch](https://pytorch.org), [Diffusers](https://github.com/huggingface/diffusers) (optional) | running the painter, the music maker and the video models | BSD-3-Clause, Apache-2.0 |
 | [stable-audio-3](https://github.com/Stability-AI/stable-audio-3) (optional, the `sound` extra) | running Stable Audio 3 | MIT |
