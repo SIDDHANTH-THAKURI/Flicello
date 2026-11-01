@@ -365,7 +365,7 @@ def _ask_claude_code(system: str, content: list[dict], task: str, timeout: float
             f"answer (exactly what you would reply, including any ```html block) to the file {out} with the Write "
             "tool, and reply only DONE.")
         (folder / "system.md").write_text(system, encoding="utf-8")
-        cmd = [claude_exe(), "-p", "--output-format", "json", "--model", model, "--system-prompt-file",
+        cmd = [claude_exe(), "-p", "--output-format", "json", "--model", model or design_model(), "--system-prompt-file",
                str(folder / "system.md"), "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config",
                "--max-budget-usd", "25", "--tools", "Read,Write", "--allowedTools", "Read(./**)", "Write(./**)",
                "--add-dir", str(folder)]
@@ -519,7 +519,7 @@ def desk(brief: Brief, video: Path, folder: Path, previous: str | None = None, p
               .replace("- Reply with the whole document in one ```html block and nothing after it.",
                        "- Write the whole document to scene.html.")) + "\n\n# Your desk\n" + DESK
     (folder / "system.md").write_text(system, encoding="utf-8")
-    cmd = [claude_exe(), "-p", "--output-format", "json", "--model", model or design_model(), "--system-prompt-file",
+    cmd = [claude_exe(), "-p", "--output-format", "json", "--model", design_model(), "--system-prompt-file",
            str(folder / "system.md"), "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config",
            "--max-budget-usd", "40", "--tools", "Read,Write,Edit,Bash", "--allowedTools", "Read(./**)", "Write(./**)", "Edit(./**)",
            "Bash(bash look:*)", "Bash(bash paint:*)", "Bash(bash review:*)"]  # its own desk folder only

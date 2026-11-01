@@ -390,3 +390,26 @@ def test_the_library_is_searched_by_whole_words_names_first(monkeypatch, capsys)
     assert assets.main(["find", "spaceship"]) == 0 and "Nothing in the library matches" in capsys.readouterr().out
     assets.main(["find", "barrel"])
     assert "Barrel_01" in capsys.readouterr().out
+
+
+def test_the_director_and_the_designer_always_get_a_model_the_one_chosen_for_design(monkeypatch):
+    """A review called claude with no model at all (None) after models became choosable per job: it crashed and the
+    scene went out unreviewed."""
+    from vidosuper import local
+    from vidosuper.motion import scenes
+
+    seen = []
+
+    def fake(cmd, prompt, folder, **kw):
+        seen.append(cmd[cmd.index("--model") + 1])
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(local, "run_claude", fake)
+    monkeypatch.setattr(scenes, "run_claude", fake, raising=False)
+    monkeypatch.delenv("VIDO_DESIGN_MODEL", raising=False)
+    for chosen in (None, "claude-sonnet-5-5"):
+        if chosen:
+            monkeypatch.setenv("VIDO_DESIGN_MODEL", chosen)
+        with pytest.raises(RuntimeError):
+            scenes._ask_claude_code("system", [{"type": "text", "text": "look"}], "review")
+    assert seen == ["claude-opus-5-5", "claude-sonnet-5-5"]
