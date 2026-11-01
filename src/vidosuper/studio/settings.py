@@ -110,6 +110,10 @@ class StudioSettings(_Strict):
                                                  "gemini (Gemini Live with their key).")
     cello_model: str = Field("", description="The Claude model Cello thinks with in conversation (empty: the default, "
                                              "fast).")
+    cello_speed: float = Field(1.0, description="How fast Cello speaks with this machine's voice (0.7 to 1.5).")
+    jobs: dict[str, str] = Field(default_factory=dict, description="Who does each job (local/jobs.py): a Claude model "
+                                                                    "per kind of thinking, and the painter, video "
+                                                                    "model, cartoon engine and music maker.")
 
     @property
     def db_path(self) -> Path:
@@ -209,6 +213,11 @@ def load_settings(home: Path | None = None, overrides: dict | None = None) -> St
         os.environ["VIDO_CELLO_VOICE_MODE"] = settings.cello_voice
     if settings.cello_model and not os.environ.get("VIDO_CELLO_MODEL"):
         os.environ["VIDO_CELLO_MODEL"] = settings.cello_model
+    if settings.cello_speed != 1.0 and not os.environ.get("VIDO_CELLO_SPEED"):
+        os.environ["VIDO_CELLO_SPEED"] = str(settings.cello_speed)
+    from ..local import jobs
+
+    jobs.apply(settings.jobs)
     return settings
 
 

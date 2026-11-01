@@ -42,11 +42,12 @@ def test_advisor_only_looks_copilot_asks_before_long_work_and_paid_credit_is_alw
     assert "ask before anything that takes time" in cello.allowed("copilot", "make_it", {})
     assert cello.allowed("copilot", "make_it", {"they_said_yes": True}) is None
     assert cello.allowed("full", "make_it", {}) is None  # full access: it does it and tells them after
-    assert "paid credit" in cello.allowed("full", "ai_clip", {})  # the promise holds at every level
+    # paid credit: without their yes an AI shot only shows its prompt (the prompt workshop test proves nothing is sent)
+    assert cello.allowed("full", "ai_clip", {}) is None and "ai_clip" in cello.PAID
     assert cello.allowed("full", "ai_clip", {"they_said_yes": True}) is None
     assert cello.allowed("", "build", {}) is not None  # not asked yet: co-pilot
     assert cello.allowed("copilot", "work", {}, hands=True) is None  # its hands, on a request they said yes to
-    assert "paid credit" in cello.allowed("copilot", "ai_clip", {}, hands=True)
+    assert cello.allowed("advisor", "ai_clip", {}) is not None  # an advisor doesn't even prepare one
     long_tools = [t for t in cello.TOOLS if t["name"] in cello.LONG | cello.PAID]
     assert long_tools and all("they_said_yes" in t["parameters"]["properties"] for t in long_tools)
 
@@ -143,6 +144,36 @@ def test_connect_shows_tabs_counts_and_the_health_ring(studio, monkeypatch):
     for t in ("This computer", "Claude", "Keys", "Tools", "Models"):
         assert f">{t} <span class=\"n" in page.replace("</svg>", ">"), t
     assert "working" in page and 'class="health"' in page
+
+
+def test_each_job_has_its_own_model_kept_and_live_at_once(studio, monkeypatch):
+    import yaml
+
+    from vidosuper.local import jobs
+    from vidosuper.motion import scenes
+
+    for j in jobs.JOBS:
+        monkeypatch.delenv(j.env, raising=False)
+    monkeypatch.delenv("HIGGSFIELD_API_KEY", raising=False)
+    monkeypatch.setenv("VIDO_RENDERER_CHECK", "0")
+    client = local_client(studio)[0]
+    csrf = _csrf(client.get("/", follow_redirects=True).text)
+    page = client.get("/connect").text
+    assert all(f'data-connect-job="{j.id}"' in page for j in jobs.JOBS) and "Who does each job" in page
+    assert scenes.design_model() == "claude-opus-5-5"
+    r = client.post("/api/connect/job", json={"job": "design", "choice": "claude-sonnet-5-5"}, headers={"X-CSRF": csrf})
+    assert r.json()["ok"] and scenes.design_model() == "claude-sonnet-5-5"  # the next design uses it
+    kept = yaml.safe_load((studio.s.home / "studio.yaml").read_text(encoding="utf-8"))
+    assert kept["jobs"]["design"] == "claude-sonnet-5-5"
+    r = client.post("/api/connect/job", json={"job": "clips", "choice": "higgsfield"}, headers={"X-CSRF": csrf})
+    assert not r.json()["ok"] and "key" in r.json()["detail"]  # kept, and said plainly why it can't run yet
+    r = client.post("/api/connect/job", json={"job": "clips", "choice": "auto"}, headers={"X-CSRF": csrf})
+    assert "VIDO_AI_CLIPS" not in __import__("os").environ  # "Best here": the code picks again
+    assert client.post("/api/connect/job", json={"job": "design", "choice": "gpt"}, headers={"X-CSRF": csrf}).status_code == 400
+    # at the next start the kept choices come back, unless the environment already says otherwise
+    monkeypatch.delenv("VIDO_DESIGN_MODEL")
+    jobs.apply(kept["jobs"])
+    assert scenes.design_model() == "claude-sonnet-5-5"
 
 
 # ---------------------------------------------------------------- the new film: a drop or a take begins it
@@ -262,3 +293,72 @@ def test_the_picture_is_cut_on_the_kept_stretches(tmp_path):
 
     seconds = float(ffprobe_json(out)["format"]["duration"])
     assert abs(seconds - cut["duration"]) < 0.15
+
+
+def test_cello_lists_switches_removes_and_restores_their_rules_by_voice(studio):
+    user = person(studio.db)
+    prof = studio.profile(user)
+    prof.add("Never use slow motion", "they said", "you")
+    prof.add("Captions in yellow", "they said", "you")
+    prof.save()
+    listed = cello.act(studio, user, None, "rules", {})["result"]
+    rid = next(r["id"] for r in listed["rules"] if r["rule"] == "Never use slow motion")
+    assert cello.act(studio, user, None, "rule", {"do": "off", "which": "slow motion"})["result"].endswith("(kept, not followed).")
+    assert not next(r for r in cello.act(studio, user, None, "rules", {})["result"]["rules"] if r["id"] == rid)["on"]
+    assert "bin" in cello.act(studio, user, None, "rule", {"do": "remove", "which": rid})["result"]
+    gone = cello.act(studio, user, None, "rules", {})["result"]
+    assert rid not in {r["id"] for r in gone["rules"]} and rid in {r["id"] for r in gone["removed_lately"]}
+    assert cello.act(studio, user, None, "rule", {"do": "restore", "which": "slow"})["result"].endswith("is back.")
+    assert "No rule matches" in cello.act(studio, user, None, "rule", {"do": "off", "which": "purple"})["result"]
+
+
+def test_shape_length_and_kind_are_worked_out_from_their_words_and_their_footage(studio, tmp_path):
+    from vidosuper.studio import service
+
+    wide = [{"width": 1920, "height": 1080, "seconds": 40}, {"width": 1920, "height": 1080, "seconds": 20}]
+    tall = [{"width": 1080, "height": 1920, "seconds": 12}]
+    assert service.decide_shape("for my reels", wide)[0] == "9:16"  # their words win
+    assert service.decide_shape("a youtube video", tall)[0] == "16:9"
+    assert service.decide_shape("our trip", wide)[0] == "16:9" and service.decide_shape("our trip", tall)[0] == "9:16"
+    assert service.decide_length("45 seconds of our trip", wide)[0] == 45
+    assert service.decide_length("1.5 min recap", wide)[0] == 90 and service.decide_length("a minute", [])[0] == 60
+    assert service.decide_length("our trip", wide)[0] == 30  # half of a minute of footage
+    assert service.decide_length("", [])[0] is None
+    # a draft begun by a drop: Start works the shape and length out and says why
+    user = person(studio.db)
+    p = studio.new_draft(user, "clips")
+    studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, width, height, created) "
+                  "VALUES('c1', ?, 'a.mp4', 'c1.mp4', 1, 50, 1920, 1080, 1)", (p["id"],))
+    studio.db.run("INSERT INTO clips(id, project_id, name, file, bytes, seconds, width, height, created) "
+                  "VALUES('c2', ?, 'b.mp4', 'c2.mp4', 1, 30, 1920, 1080, 2)", (p["id"],))
+    done = studio.fill_draft(user, p["id"], "our beach day, cut on the beat")
+    assert done["shapes"] == "16:9" and done["length"] == 40 and done["kind"] == "montage"
+    assert "widescreen 16:9, the way your clips were shot" in done["routed"] and "40 s long" in done["routed"]
+
+
+def test_a_prompt_is_shown_changed_and_sent_only_when_they_say_so(studio, monkeypatch):
+    from vidosuper.studio import agent
+
+    sent = []
+    monkeypatch.setattr(studio, "generate_clip", lambda u, p, prompt, shot=None: sent.append((prompt, shot)) or 1)
+    user = person(studio.db)
+    p = studio.new_draft(user, "clips")
+    level_full = {"cello_access": "full"}
+    prof = studio.profile(user)
+    prof.answers.update(level_full)
+    prof.save()
+    out = cello.act(studio, user, p, "ai_clip", {"prompt": "a red kite over the beach at dusk", "shot": 3})
+    assert "on screen" in out["result"] and not sent  # shown, nothing sent
+    cello.act(studio, user, p, "ai_clip", {"prompt": "a red kite over the beach at dusk, slow push in"})
+    cards = [c for m in agent.thread(studio.db, p["id"]) for c in (m["body"].get("cards") or []) if c["type"] == "prompt"]
+    assert [c.get("done") for c in cards] == ["replaced", None]  # one open prompt at a time
+    # they change the words on the card and send it
+    client, _, csrf = local_client(studio)
+    mid, k, _ = agent.open_prompt(studio, p)
+    client.post(f"/p/{p['id']}/card", data={"csrf": csrf, "mid": mid, "k": k, "choice": "send",
+                                            "text": "a red kite over the beach at dusk, handheld"})
+    assert sent == [("a red kite over the beach at dusk, handheld", None)] and agent.open_prompt(studio, p) is None
+    # by voice: "send it" sends the card on screen as it is
+    cello.act(studio, user, p, "ai_clip", {"prompt": "waves at night", "shot": 2})
+    cello.act(studio, user, p, "ai_clip", {"prompt": "", "they_said_yes": True})
+    assert sent[-1] == ("waves at night", 2)

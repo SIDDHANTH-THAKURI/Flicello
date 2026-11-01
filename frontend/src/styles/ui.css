@@ -239,3 +239,9 @@ select.ui-hidden { position: absolute !important; width: 1px !important; height:
 .my-style + .danger-zone { margin-top: 1.2rem; }
 
 @media (max-width: 480px) { .app-top { gap: .4rem; padding-inline: .6rem; } .app-nav { gap: 0; } .app-nav a, .app-nav button.navlink { padding: .45rem .5rem; } }
+
+/* Connect, Models: who does each job (a dropdown per job) */
+.tab-h { margin: 4px 0 4px; font-size: 1rem; letter-spacing: -.01em; }
+.jobs .crow { align-items: center; }
+.jobs .acts .ui-select, .jobs .acts select { min-width: min(260px, 40vw); }
+@media (max-width: 700px) { .jobs .crow { grid-template-columns: 34px minmax(0, 1fr); } .jobs .acts { grid-column: 1 / -1; justify-content: stretch; } .jobs .acts .ui-select { width: 100%; } }

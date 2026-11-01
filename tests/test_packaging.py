@@ -19,7 +19,7 @@ VIA = {"markupsafe": "jinja2", "starlette": "fastapi"}
 # would pull in a second onnxruntime and Stable Audio 3 its own PyTorch build.
 LAUNCHED = {"kokoro_onnx", "stable_audio_3"}
 # Only exist inside another program that runs the file: Blender's own Python (motion/blender_kit.py).
-LAUNCHED |= {"bpy"}
+LAUNCHED |= {"bpy", "bmesh", "mathutils"}  # Blender's own modules, inside Blender
 
 
 def _canon(name: str) -> str:

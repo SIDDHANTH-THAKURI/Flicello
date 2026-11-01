@@ -373,3 +373,20 @@ def test_the_person_is_held_where_the_first_section_put_them():
         place3 = worlds.place_of(first, "3d")
         assert place3 == "x=-2.55, z=-0.22, scale=1.16" and worlds.hold_place(later, "3d", place3)
         assert "k.person(x=-2.55, z=-0.22, scale=1.16)" in (later / "scene.py").read_text(encoding="utf-8")
+
+
+def test_the_library_is_searched_by_whole_words_names_first(monkeypatch, capsys):
+    from vidosuper.motion import assets
+
+    cat = {"Rockingchair_01": {"name": "Rockingchair 01", "tags": ["chair", "rocking"], "categories": ["furniture"]},
+           "rock_face_01": {"name": "Rock Face 01", "tags": ["cliff", "rock"], "categories": ["nature"],
+                            "dimensions": [7110, 5620, 4980], "polycount": 9000},
+           "boulder_01": {"name": "Boulder 01", "tags": ["rocks", "stone"], "categories": ["nature"], "polycount": 500},
+           "Barrel_01": {"name": "Barrel 01", "tags": ["drum"], "categories": ["containers"]}}
+    monkeypatch.setattr(assets, "catalogue", lambda kind="models": cat)
+    hits = [h["id"] for h in assets.find("rocks")]
+    assert hits == ["rock_face_01", "boulder_01"]  # a name beats a tag; "rocking chair" is not a rock
+    assert assets.find("rock")[0]["size_m"] == [7.11, 5.62, 4.98]
+    assert assets.main(["find", "spaceship"]) == 0 and "Nothing in the library matches" in capsys.readouterr().out
+    assets.main(["find", "barrel"])
+    assert "Barrel_01" in capsys.readouterr().out

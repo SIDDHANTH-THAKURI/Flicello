@@ -614,6 +614,14 @@ export function studio() {
     try { const r = await api('POST', '/api/connect/settings', { brain: b.dataset.connectBrain }); said(box, true, r.detail); }
     catch (err) { said(box, false, err.message); }
   }));
+  $$('[data-connect-job] select[data-job-select]').forEach((sel) => sel.addEventListener('change', async () => {
+    const row = sel.closest('[data-connect-job]');
+    said(row, true, 'Saving…');
+    try {
+      const r = await api('POST', '/api/connect/job', { job: row.dataset.connectJob, choice: sel.value });
+      said(row, r.ok, r.detail);
+    } catch (err) { said(row, false, err.message); }
+  }));
   const blender = $('[data-connect-blender]');
   if (blender) blender.addEventListener('submit', async (e) => {
     e.preventDefault();

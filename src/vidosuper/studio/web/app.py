@@ -903,7 +903,10 @@ def create_app(studio: Studio) -> FastAPI:
         bad = [i for i in rep["items"] if i["status"] in (checks.MISSING, checks.FAILING)
                and (i["needed"] or i["status"] == checks.FAILING)]
         health = {"ok": len(ok), "total": len(ok) + len(bad), "bad": len(bad)}
+        from ...local import jobs as local_jobs
+
         return page(request, "connect.html", user, sess, rep=rep, groups=groups, prompt=setup_prompt.prompt(s.port),
+                    jobs=local_jobs.listing(),
                     brain=s.owner_brain, blender=s.blender_path, keys=local_keys.KEYS, tabs=connect_tabs(rep, groups),
                     health=health)
 
@@ -1017,6 +1020,33 @@ def create_app(studio: Studio) -> FastAPI:
             said.append("Blender connected" if found else "Blender disconnected")
         path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         return JSONResponse({"ok": True, "detail": "; ".join(said) or "Nothing changed."})
+
+    @app.post("/api/connect/job")
+    async def connect_job(request: Request):
+        """Who does one job (local/jobs.py): kept in studio.yaml and live from the next job on."""
+        user, sess = need_owner(request)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        from ...local import jobs as local_jobs
+        import yaml
+
+        job = local_jobs.BY_ID.get(str(body.get("job") or ""))
+        choice = str(body.get("choice") or "")
+        if not job or choice not in {c[0] for c in job.choices}:
+            return JSONResponse({"ok": False, "detail": "There's no such choice."}, status_code=400)
+        path = s.home / "studio.yaml"
+        data = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.exists() else {}
+        data.setdefault("jobs", {})[job.id] = choice
+        s.jobs[job.id] = choice
+        if job.id == "talk":  # the same choice as the model on Cello's ring
+            data["cello_model"] = s.cello_model = choice
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        local_jobs.put(job, choice)
+        name = next(n for c, n, _ in job.choices if c == choice)
+        why = local_jobs.ready(job, choice)
+        detail = f"{job.label}: {name}" + (f". It can't run here yet: {why}." if why else
+                                           f" ({job.note})." if job.note else ", from the next job on.")
+        return JSONResponse({"ok": not why, "detail": detail})
 
     # ------------------------------------------------------------------ Cello: the presence that edits with you
     @app.get("/cello", response_class=HTMLResponse)
@@ -1162,6 +1192,7 @@ def create_app(studio: Studio) -> FastAPI:
         return JSONResponse({"access": access_of(studio, user), "voice": mode, "voice_chosen": s.cello_voice,
                              "local_voice": local_voice.available(), "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                              "model": local_voice.MODEL, "models": [{"id": m, "name": n, "says": d} for m, n, d in CELLO_MODELS],
+                             "speed": local_voice.speed(),
                              "owner": studio.is_owner(user)})
 
     @app.post("/api/cello/settings")
@@ -1181,7 +1212,7 @@ def create_app(studio: Studio) -> FastAPI:
             said.append({"advisor": "Advisor: I'll look, point and suggest; you make the changes.",
                          "copilot": "Co-pilot: small edits at once, and I'll ask before anything that takes time.",
                          "full": "Full access: I'll do it all and tell you after."}[body["access"]])
-        machine = {k: body[k] for k in ("voice", "model") if k in body}
+        machine = {k: body[k] for k in ("voice", "model", "speed") if k in body}
         if machine and not studio.is_owner(user):
             raise HTTPException(403, "Only the owner changes Cello's voice and model on this computer.")
         if machine:
@@ -1200,6 +1231,14 @@ def create_app(studio: Studio) -> FastAPI:
                 data["cello_model"] = s.cello_model = machine["model"]
                 os.environ["VIDO_CELLO_MODEL"] = local_voice.MODEL = machine["model"]
                 said.append("Model changed (restart Cello to use it)")
+            if "speed" in machine:
+                try:
+                    sp = max(0.7, min(1.5, round(float(machine["speed"]), 2)))
+                except (TypeError, ValueError):
+                    sp = 1.0
+                data["cello_speed"] = s.cello_speed = sp
+                os.environ["VIDO_CELLO_SPEED"] = str(sp)
+                said.append(f"Speaking at {sp:g} times")
             path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         return JSONResponse({"ok": True, "said": " ".join(said) or "Nothing changed."})
 
@@ -1581,9 +1620,10 @@ def create_app(studio: Studio) -> FastAPI:
 
     @app.post("/p/{pid}/card")
     def card(request: Request, pid: str, csrf: str = Form(""), mid: int = Form(0), k: int = Form(0),
-             choice: str = Form("")):
-        """A card in the conversation tapped: an answer, a step to run now, a preference to keep."""
-        return act(request, csrf, pid, lambda u, p: studio.answer_card(u, p, mid, k, choice))
+             choice: str = Form(""), text: str = Form("")):
+        """A card in the conversation tapped: an answer, a step to run now, a preference to keep, a prompt sent (with
+        the words they changed in it)."""
+        return act(request, csrf, pid, lambda u, p: studio.answer_card(u, p, mid, k, choice, text))
 
     @app.post("/p/{pid}/spec")
     def spec_edit(request: Request, pid: str, csrf: str = Form(""), item: str = Form(""), op: str = Form("")):

@@ -164,7 +164,7 @@ def test_cello_picks_the_idea_they_name_by_its_number(studio, monkeypatch):
     picked = []
     monkeypatch.setattr(studio, "pitches", lambda p: shown)
     monkeypatch.setattr(studio, "choose", lambda p, pid: picked.append(pid))
-    cello.act(studio, user, film, "step", {"action": "pick", "pitch": 2})
+    cello.act(studio, user, film, "step", {"action": "pick", "pitch": 2, "they_said_yes": True})
     assert picked == [59]  # the second idea on the page (the rejected one isn't shown)
 
 

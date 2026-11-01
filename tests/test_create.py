@@ -86,7 +86,10 @@ def test_an_ai_clip_asked_for_takes_a_shots_place(studio_film, media, monkeypatc
     monkeypatch.setattr(higgsfield, "generate", fake_generate)
     client.post(f"/p/{pid}/talk", data={"csrf": csrf, "text": "make an AI clip of waves at sunset for shot 2"},
                 headers={"Accept": "application/json"})
-    assert agent.thread(studio.db, pid)[-1]["body"]["text"].startswith("Making it with an AI video model")
+    assert agent.thread(studio.db, pid)[-1]["body"]["text"] == agent.PROMPT_SAYS  # the prompt shown, nothing sent yet
+    mid, k, card = agent.open_prompt(studio, studio.db.project(pid))
+    assert card["prompt"] == "waves at sunset" and card["shot"] == 2
+    client.post(f"/p/{pid}/card", data={"csrf": csrf, "mid": mid, "k": k, "choice": "send", "text": card["prompt"]})
     _drain_all(studio)
     assert list(work.glob("clips/ai-01.mp4"))
     draft = studio.draft_of(studio.db.project(pid))

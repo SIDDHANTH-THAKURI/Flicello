@@ -68,6 +68,20 @@ def no_real_keychain(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_gpu_models(monkeypatch):
+    """No test starts a real model on a GPU: on a machine that has one (a pod), "best here" picked the real Wan 2.2
+    video model for a test that meant a faked online one, and the suite waited on it for over half an hour. Every
+    local model reads as unavailable, as on a machine without a GPU; a test of a local path fakes it in."""
+    from vidosuper.motion import painter, videogen
+    from vidosuper.music import maker
+
+    monkeypatch.setattr(videogen, "available", lambda: False)
+    monkeypatch.setattr(painter, "available", lambda: False)
+    monkeypatch.setattr(maker, "can_make_music", lambda *a, **k: False)
+    monkeypatch.setattr(maker, "can_make_sounds", lambda *a, **k: False)
+
+
+@pytest.fixture(autouse=True)
 def offline_animations(tmp_path, monkeypatch):
     """No test reaches LottieFiles or runs the (slow) portrait-matting model: the animation library lives in a temp
     folder and is offline, and the cut-out is off unless a test turns it on with a fake matte."""

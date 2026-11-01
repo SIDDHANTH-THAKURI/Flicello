@@ -83,7 +83,7 @@ def test_cello_cannot_touch_someone_elses_film(studio):
     assert seen["title"] == "Ana's film" and seen["stage"] == p_stage(studio, mine)
     films = client.post("/api/cello/act", headers={"X-CSRF": csrf}, json={"name": "list_films"}).json()["result"]
     assert [f["title"] for f in films] == ["Ana's film"]
-    r = client.post("/api/cello/act", headers={"X-CSRF": csrf}, json={"name": "make_it", "args": {}})
+    r = client.post("/api/cello/act", headers={"X-CSRF": csrf}, json={"name": "make_it", "args": {"they_said_yes": True}})
     assert r.json()["result"].startswith("Not done: No film is open")
     assert client.get("/api/cello/events", params={"pid": theirs["id"]}).status_code == 404
     assert client.get("/api/cello/events", params={"pid": mine["id"], "since": 0}).json()["events"] == []

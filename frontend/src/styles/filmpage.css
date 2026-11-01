@@ -206,3 +206,11 @@
 
 /* record it now, beside the place clips go */
 .rec-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+
+/* the prompt workshop: the exact words a video model would get, changed in place, sent only by them */
+.cello-dock .m-prompt-form { display: grid; gap: 8px; margin-top: 6px; }
+.cello-dock .m-prompt-form textarea { width: 100%; resize: vertical; min-height: 84px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2);
+  background: var(--ink-2); color: var(--paper); font: inherit; font-size: .82rem; line-height: 1.45; }
+.cello-dock .m-prompt-form textarea:focus { outline: 0; border-color: color-mix(in srgb, var(--rose) 60%, transparent); }
+.cello-dock .m-prompt-text { margin: 6px 0 0; padding: 6px 10px; border-left: 2px solid var(--line-2); font-size: .8rem; color: var(--muted); }
+.cello-dock .m-card.spent { opacity: .75; }

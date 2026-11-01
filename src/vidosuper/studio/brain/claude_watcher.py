@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -35,7 +36,7 @@ class ClaudeWatcher:
 
     def __init__(self, via: str, spend: SpendFn, log_dir: Path | None = None):
         self.via = via  # "claude_code" (their plan) or "api" (their key)
-        self.model = WATCH_MODEL
+        self.model = os.environ.get("VIDO_WATCH_MODEL") or WATCH_MODEL  # chosen on Connect (local/jobs.py)
         self.spend = spend
         self.log_dir = log_dir
         self.parallel = 2

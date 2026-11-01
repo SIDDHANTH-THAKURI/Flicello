@@ -311,6 +311,8 @@ def _scripts(desk: Path, engine: str) -> None:
         for name, cmd in (("look", "look3d"), ("review", "review3d")):
             (desk / name).write_text(f'#!/bin/bash\n"{py}" -m vidosuper.motion.worlds {cmd} "{desk.as_posix()}" "$@"\n',
                                      encoding="utf-8")
+        # ready-made models and skies (Poly Haven, CC0), searched by words
+        (desk / "assets").write_text(f'#!/bin/bash\n"{py}" -m vidosuper.motion.assets find "$@"\n', encoding="utf-8")
     else:
         scenes._look_script(desk)  # look, paint and review on the page (motion/scenes.py)
 
@@ -369,10 +371,10 @@ def _at_desk(desk: Path, prompt: str, timeout: float, log_name: str) -> None:
     WorldError when the plan's limit stops it."""
     from ..local import claude_exe, plan_env, run_claude
 
-    cmd = [claude_exe(), "-p", "--output-format", "json", "--model", scenes.DESIGN_MODEL, "--system-prompt-file",
+    cmd = [claude_exe(), "-p", "--output-format", "json", "--model", scenes.design_model(), "--system-prompt-file",
            str(desk / "system.md"), "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config",
            "--max-budget-usd", "60", "--tools", "Read,Write,Edit,Bash", "--allowedTools", "Read(./**)", "Write(./**)",
-           "Edit(./**)", "Bash(bash look:*)", "Bash(bash review:*)", "Bash(bash paint:*)"]
+           "Edit(./**)", "Bash(bash look:*)", "Bash(bash review:*)", "Bash(bash paint:*)", "Bash(bash assets:*)"]
     env = {**plan_env(), "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000", "VIDO_SCENES_VIA": "claude_code",
            "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "1200000"}
     try:

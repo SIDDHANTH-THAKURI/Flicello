@@ -162,6 +162,68 @@ def route_kind(describe: str) -> tuple[str, str]:
                           "cartoon": "It sounds like a story to animate, so it's made as a cartoon: Claude directs "
                                      "it and an animation engine makes every shot."}[kind]
     return "montage", "It sounds like it's made from your clips, so they're cut together into a story on the beat."
+# ---------------------------------------------------------------- worked out, not asked: shape, length, kind
+SHAPE_WORDS = (("both", r"\b(both|every ?where|all (the )?platforms)\b"),
+               ("16:9", r"\b(youtube(?! shorts)|widescreen|wide ?screen|landscape|horizontal|16:9|big screen|tv)\b"),
+               ("9:16", r"\b(reels?|tiktok|shorts|stor(y|ies)|vertical|portrait|9:16|insta(gram)?|phone)\b"))
+
+
+def decide_shape(words: str, clips: list[dict]) -> tuple[str, str]:
+    """The film's shape: what their words name (a platform, "vertical"), else the way most of their clips were shot."""
+    import re
+
+    for shape, pattern in SHAPE_WORDS:
+        if re.search(pattern, words or "", re.IGNORECASE):
+            return shape, {"both": "both shapes, as you asked", "16:9": "widescreen 16:9, for where you said",
+                           "9:16": "vertical 9:16, for where you said"}[shape]
+    sized = [c for c in clips if c.get("width") and c.get("height")]
+    if sized:
+        tall = sum(1 for c in sized if c["height"] > c["width"])
+        if tall * 2 >= len(sized):
+            return "9:16", "vertical 9:16, the way your clips were shot"
+        return "16:9", "widescreen 16:9, the way your clips were shot"
+    return "9:16", "vertical 9:16"
+
+
+def decide_length(words: str, clips: list[dict]) -> tuple[float | None, str]:
+    """The film's length: the one their words give ("45 seconds", "a minute", "1.5 min"), else from how much footage
+    there is (about half of it, 10 to 60 seconds). None: nothing to go on (the default stays)."""
+    import re
+
+    t = (words or "").lower()
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m)\b", t)
+    if m:
+        n = float(m.group(1).replace(",", "."))
+        sec = n * (60 if m.group(2).startswith("m") else 1)
+        if 3 <= sec <= 3600:
+            return sec, "as long as you said"
+    if re.search(r"\bhalf a minute\b", t):
+        return 30.0, "as long as you said"
+    if re.search(r"\b(a|one) minute\b", t):
+        return 60.0, "as long as you said"
+    total = sum(float(c.get("seconds") or 0) for c in clips)
+    if total > 0:
+        sec = max(10.0, min(60.0, round(total * 0.5 / 5) * 5))
+        return sec, f"about half of your {round(total)} s of footage"
+    return None, ""
+
+
+def speech_share(path: Path, upto: float = 90.0) -> float:
+    """How much of a clip's first minute and a half is someone speaking (0..1), by Whisper's voice-activity check;
+    0 when it can't be measured."""
+    try:
+        from faster_whisper.audio import decode_audio
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+        audio = decode_audio(str(path), sampling_rate=16000)[: int(upto * 16000)]
+        if not len(audio):
+            return 0.0
+        spans = get_speech_timestamps(audio, VadOptions(min_silence_duration_ms=500))
+        return sum(sp["end"] - sp["start"] for sp in spans) / len(audio)
+    except Exception:  # noqa: BLE001 - no audio, no Whisper: nothing measured
+        return 0.0
+
+
 STYLES = ("designed", "labels")  # designer animations behind the person; clean labels over the video
 TYPICAL_SECONDS = {"prepare": 240, "pitch": 70, "sample": 100, "render": 300, "revise": 180, "beat": 45}  # first guesses, until real jobs have run
 DRAW_RATE = {"designed": 20.0, "labels": 3.0}  # first guesses: seconds of drawing per second of a voice or talking video
@@ -405,14 +467,33 @@ class Studio:
             return project
         words = " ".join((describe or "").split())[:600]
         kind, routed = project["kind"], project.get("routed") or ""
-        has = self.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (pid,)) or 0
+        clips = self.db.all("SELECT * FROM clips WHERE project_id=? ORDER BY created", (pid,))
+        has = len(clips)
         if words and kind == "montage" and not project.get("song"):
             guess, why = route_kind(words)
             if guess in ("talk", "voice") and (guess != "talk" or has <= 1):
                 kind, routed = guess, why
+        if kind == "montage" and has == 1 and not project.get("song") and float(clips[0].get("seconds") or 0) >= 20 \
+                and not re.search(r"\b(montage|cut|beat|music|song|edit (it|them) together)\b", words, re.I):
+            # one long clip that is mostly someone speaking: a talk (their words carry it), unless they said otherwise
+            work = workdir(self.s, user["id"], pid)
+            if speech_share(work.clips / clips[0]["file"]) >= 0.5:
+                kind, routed = "talk", ("Your clip is mostly someone talking, so their video stays and graphics land "
+                                        "on their words.")
+        shape, shape_why = decide_shape(words, clips)
+        if kind == "talk" and shape == "both":
+            shape = "9:16"
+        seconds, len_why = decide_length(words, clips) if kind == "montage" else (None, "")
+        decided = f"Made {shape_why}" + (f", {seconds:g} s long ({len_why})" if seconds else "") + "."
+        routed = f"{routed} {decided}".strip()
+        if seconds:
+            try:
+                self.length_ok(user, seconds)
+            except ActionError:
+                seconds = None
         intent = (words + (" " + project["intent"] if project["intent"] and project["intent"] not in words else "")).strip()
-        self.db.run("UPDATE projects SET intent=?, kind=?, routed=?, updated=? WHERE id=?",
-                    (" ".join(intent.split())[:900], kind, routed, time.time(), pid))
+        self.db.run("UPDATE projects SET intent=?, kind=?, routed=?, shapes=?, length=COALESCE(?, length), updated=? "
+                    "WHERE id=?", (" ".join(intent.split())[:900], kind, routed, shape, seconds, time.time(), pid))
         return self.db.project(pid)
 
     def suggest_from_clips(self, user: dict, pid: str) -> str:
@@ -1697,9 +1778,9 @@ class Studio:
         self.soon(lambda: agent.turn(self, project["id"], mid))
         return mid
 
-    def answer_card(self, user: dict, project: dict, mid: int, k: int, choice: str) -> None:
+    def answer_card(self, user: dict, project: dict, mid: int, k: int, choice: str, text: str = "") -> None:
         try:
-            agent.answer(self, user, project, mid, k, choice)
+            agent.answer(self, user, project, mid, k, choice, text)
         except agent.TalkError as exc:
             raise ActionError(str(exc)) from exc
 

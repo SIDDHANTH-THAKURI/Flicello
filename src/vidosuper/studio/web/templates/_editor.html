@@ -34,6 +34,22 @@
       {% if c.done %}<p class="help">✓ Done</p>
       {% else %}<div class="m-faces">{% for f in c.people %}<form method="post" action="/p/{{ p.id }}/card"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="mid" value="{{ m.id }}"><input type="hidden" name="k" value="{{ k }}"><input type="hidden" name="choice" value="{{ f.id }}"><button class="face-btn" type="submit">{% if f.thumb %}<img src="/m/{{ p.id }}/stills/{{ f.thumb }}" alt="">{% endif %}<span>{{ f.label }}<small>{{ f.seconds }} s</small></span></button></form>{% endfor %}</div>{% endif %}
     </div>
+    {% elif c.type == 'prompt' %}
+    <div class="m-card m-prompt{% if c.done %} spent{% endif %}">
+      <p><b>{{ c.what }}</b>{% if c.shot %}<span> · in shot {{ c.shot }}'s place</span>{% endif %}</p>
+      <p class="help">{{ c.cost }}</p>
+      {% if c.done %}
+      <p class="help">{{ {'sent': '✓ Sent', 'no': 'Not sent', 'replaced': 'A newer prompt replaced this one'}.get(c.done, c.done) }}</p>
+      <blockquote class="m-prompt-text">{{ c.sent or c.prompt }}</blockquote>
+      {% else %}
+      <form method="post" action="/p/{{ p.id }}/card" class="m-prompt-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="mid" value="{{ m.id }}"><input type="hidden" name="k" value="{{ k }}">
+        <label class="sr-only" for="prompt-{{ m.id }}-{{ k }}">The prompt</label>
+        <textarea id="prompt-{{ m.id }}-{{ k }}" name="text" rows="4" maxlength="600">{{ c.prompt }}</textarea>
+        <div class="m-taps"><button class="btn-sun" type="submit" name="choice" value="send"><span>Send it</span></button><button class="btn quiet" type="submit" name="choice" value="no">Not now</button></div>
+      </form>
+      <p class="help">Change the words here, or ask Cello for another.</p>
+      {% endif %}
+    </div>
     {% elif c.type == 'remember' %}
     <div class="m-card">
       <p>Keep this for your next films? <q>{{ c.text }}</q></p>

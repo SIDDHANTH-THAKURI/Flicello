@@ -100,6 +100,18 @@
   </div>
 
   <div class="tabpanel" data-p="models" hidden>
+    <h3 class="tab-h">Who does each job</h3>
+    <p class="hint">Pick the model for each kind of work. Stronger models give better films and use more of your plan; "Best here" lets Flicello pick what can run on this computer.</p>
+    <div class="jobs">
+    {% for j in jobs|default([]) %}
+    {% set icon = {'talk': 'ear', 'hands': 'scissors', 'design': 'palette', 'eyes': 'film', 'painter': 'palette', 'clips': 'cam', 'cartoons': 'star', 'music': 'music'}.get(j.id, 'brain') %}
+    <div class="crow" data-connect-job="{{ j.id }}"><span class="ic"><svg class="ico"><use href="#i-{{ icon }}"/></svg></span>
+      <div><b>{{ j.label }}</b><small>{{ j.says[:1]|upper ~ j.says[1:] }}.</small><output class="connect-out hint"></output></div>
+      <span class="acts"><select class="input" data-job-select aria-label="{{ j.label }}">{% for c in j.choices %}<option value="{{ c.id }}"{% if c.id == j.now %} selected{% endif %}>{{ c.name }} · {{ c.says }}{% if c.why_not %} (not here: {{ c.why_not }}){% endif %}</option>{% endfor %}</select></span>
+    </div>
+    {% endfor %}
+    </div>
+    <h3 class="tab-h gap-top">Downloaded models</h3>
     {% for i in groups.get('models', []) %}{{ row(i, 'wave') }}{% endfor %}
   </div>
 </div>

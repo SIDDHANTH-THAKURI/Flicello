@@ -34,6 +34,11 @@ from ..local import claude_exe, plan_env, run_claude
 from . import stage
 
 DESIGN_MODEL = "claude-opus-5-5"
+
+
+def design_model() -> str:
+    """The model that designs scenes, worlds and cartoons: chosen on Connect (VIDO_DESIGN_MODEL), else Opus."""
+    return os.environ.get("VIDO_DESIGN_MODEL") or DESIGN_MODEL
 GSAP_DIR = REPO_ROOT / "frontend" / "node_modules" / "gsap" / "dist"
 GSAP_FILES = ("gsap.min.js", "CustomEase.min.js", "CustomBounce.min.js", "CustomWiggle.min.js", "DrawSVGPlugin.min.js",
               "MorphSVGPlugin.min.js", "MotionPathPlugin.min.js", "SplitText.min.js", "Physics2DPlugin.min.js",
@@ -338,7 +343,7 @@ VIA = os.environ.get("VIDO_SCENES_VIA", "claude_code")
 
 
 def _ask_claude_code(system: str, content: list[dict], task: str, timeout: float = 2400.0,
-                     model: str = DESIGN_MODEL) -> str:
+                     model: str | None = None) -> str:
     """The same question through `claude -p` on the owner's plan: the pictures are written to files it reads, and a
     scene is written by it to a file (no reply-length limit), then read back."""
     import tempfile
@@ -385,7 +390,7 @@ def _ask(client, system: str, content: list[dict], max_tokens: int, spend=None, 
     if VIA == "claude_code":
         return _ask_claude_code(system, content, task)
     t0 = time.monotonic()
-    with client.messages.stream(model=DESIGN_MODEL, max_tokens=max_tokens, system=system,
+    with client.messages.stream(model=design_model(), max_tokens=max_tokens, system=system,
                                 thinking={"type": "adaptive"}, extra_body={"output_config": {"effort": effort}},
                                 messages=[{"role": "user", "content": content}]) as stream:
         msg = stream.get_final_message()
@@ -394,7 +399,7 @@ def _ask(client, system: str, content: list[dict], max_tokens: int, spend=None, 
             from ..studio.brain.backends import Usage
 
             u = msg.usage
-            spend(Usage.priced(task, DESIGN_MODEL, "api", u.input_tokens, u.output_tokens,
+            spend(Usage.priced(task, design_model(), "api", u.input_tokens, u.output_tokens,
                                getattr(u, "cache_creation_input_tokens", 0) or 0,
                                getattr(u, "cache_read_input_tokens", 0) or 0, time.monotonic() - t0))
         except Exception:  # noqa: BLE001 - the books are a help; the scene goes on
@@ -514,7 +519,7 @@ def desk(brief: Brief, video: Path, folder: Path, previous: str | None = None, p
               .replace("- Reply with the whole document in one ```html block and nothing after it.",
                        "- Write the whole document to scene.html.")) + "\n\n# Your desk\n" + DESK
     (folder / "system.md").write_text(system, encoding="utf-8")
-    cmd = [claude_exe(), "-p", "--output-format", "json", "--model", DESIGN_MODEL, "--system-prompt-file",
+    cmd = [claude_exe(), "-p", "--output-format", "json", "--model", model or design_model(), "--system-prompt-file",
            str(folder / "system.md"), "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config",
            "--max-budget-usd", "40", "--tools", "Read,Write,Edit,Bash", "--allowedTools", "Read(./**)", "Write(./**)", "Edit(./**)",
            "Bash(bash look:*)", "Bash(bash paint:*)", "Bash(bash review:*)"]  # its own desk folder only

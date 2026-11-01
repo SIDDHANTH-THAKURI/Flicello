@@ -208,8 +208,15 @@ function onPage(args) {
     return `Clicked "${words(el)}".`;
   }
   if (args.do === 'type') {
-    const el = find(d, what, 'input:not([type=hidden]):not([type=file]), textarea') || d.querySelector('textarea, input[type=text]');
+    const el = findField(d, what, 'input:not([type=hidden]):not([type=file]), textarea') || find(d, what, 'input:not([type=hidden]):not([type=file]), textarea') || d.querySelector('textarea, input[type=text]');
     if (!el) return 'There is no field to type in on this page.';
+    if (secret(el)) { // keys and passwords are theirs alone
+      reveal(el);
+      d.querySelectorAll('[data-cello-pointed]').forEach((x) => x.removeAttribute('data-cello-pointed'));
+      el.setAttribute('data-cello-pointed', '');
+      point('[data-cello-pointed]', 6000);
+      return 'Not typed: that is a key or password box. Only they type keys (never ask them to say one aloud); point them to it.';
+    }
     reveal(el);
     el.focus();
     el.value = String(args.text || '');
@@ -217,7 +224,47 @@ function onPage(args) {
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return `Typed into "${words(el) || 'the field'}".`;
   }
-  return 'Say scroll, click, type or back.';
+  if (args.do === 'choose') { // a dropdown's option, by its words
+    const sel = findField(d, what, 'select');
+    if (!sel) return `There is no dropdown called "${args.where}" here.`;
+    const want = String(args.text || '').toLowerCase().trim();
+    const opts = [...sel.options];
+    const o = opts.find((x) => x.textContent.toLowerCase().trim() === want || x.value.toLowerCase() === want)
+      || opts.find((x) => x.textContent.toLowerCase().startsWith(want)) || opts.find((x) => want && x.textContent.toLowerCase().includes(want));
+    if (!o) return `"${labelOf(sel)}" has no "${args.text}". Its options: ${opts.map((x) => x.textContent.split(' · ')[0].trim()).join(', ')}.`;
+    reveal(sel.dataset.ui && sel.previousElementSibling?.classList.contains('ui-select') ? sel.previousElementSibling : sel);
+    sel.value = o.value;
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    const save = fieldOf(sel).saved_by;
+    return `Chose "${o.textContent.split(' · ')[0].trim()}" in "${labelOf(sel)}".${save ? ` Not saved yet: "${save}" saves it.` : ''}`;
+  }
+  if (args.do === 'set') { // a switch, a tick box or a choice on or off; a colour; a slider
+    const el = findField(d, what, 'button[role=switch], input[type=checkbox], input[type=radio], input[type=color], input[type=range]')
+      || find(d, what, 'button[role=switch], input[type=checkbox], input[type=radio]');
+    if (!el) return `There is no switch, colour or slider called "${args.where}" here.`;
+    reveal(el);
+    const v = String(args.text || '').trim().toLowerCase();
+    if (el.matches('button[role=switch]')) {
+      const on = el.getAttribute('aria-checked') === 'true';
+      const want = !/^(off|no|false|0)$/.test(v);
+      if (on !== want) el.click();
+      return `"${labelOf(el) || words(el)}" is ${want ? 'on' : 'off'}.`;
+    }
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      if (destroys(el)) return 'Not ticked: that box agrees to deleting for good; only they may tick it.';
+      const want = el.type === 'radio' || !/^(off|no|false|0)$/.test(v);
+      if (el.checked !== want) el.click();
+      return `"${labelOf(el)}" is ${want ? 'on' : 'off'}.`;
+    }
+    if (el.type === 'color' && !/^#[0-9a-f]{6}$/i.test(v)) return 'A colour is set as #rrggbb (for example #ff5a36).';
+    el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    const save = fieldOf(el).saved_by;
+    return `"${labelOf(el)}" set to ${el.value}.${save ? ` Not saved yet: "${save}" saves it.` : ''}`;
+  }
+  return 'Say scroll, click, type, choose, set or back.';
 }
 
 // what can't be undone: deleting a film, every film, clips, their style or account. Cello may take them there and
@@ -258,7 +305,77 @@ async function upload() {
 }
 
 function screen() {
-  try { return { page: frame.contentWindow.location.pathname, title: doc().title }; } catch { return {}; }
+  try { return { page: frame.contentWindow.location.pathname, title: doc().title, ...pageMap() }; } catch { return {}; }
+}
+
+// ---------------------------------------------------------------- the page, as Cello needs to know it
+// Its sections and tabs, and every field a person could fill: its label, kind, what it holds now (a key or password
+// only as set / empty, never its value), a dropdown's options, and the button that saves the form it is in. So "make
+// the type serif and save" fills the right field and presses the right Save.
+const shown = (n) => !!(n.offsetParent !== null || n.getClientRects().length);
+function labelOf(el) {
+  const d = el.ownerDocument;
+  const byFor = el.id && d.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+  const own = el.getAttribute('aria-label') || (byFor && words(byFor)) || (el.labels?.[0] && words(el.labels[0]));
+  const field = el.closest('.field, label');
+  const fromField = field && field.querySelector('span, b') && words(field.querySelector('span, b'));
+  return (own || fromField || el.getAttribute('placeholder') || el.name || '').replace(/\s+/g, ' ').slice(0, 80);
+}
+function secret(el) { return el.type === 'password' || !!el.closest('[data-connect-key]') || /key|token|secret|password/i.test(el.name || ''); }
+function fieldOf(el) {
+  const f = { label: labelOf(el) };
+  if (el.tagName === 'SELECT') {
+    f.kind = 'dropdown';
+    f.now = el.selectedOptions[0] ? words(el.selectedOptions[0]) : '';
+    f.options = [...el.options].map((o) => o.textContent.split(' · ')[0].trim()).slice(0, 20);
+  } else if (el.matches('button[role=switch]')) {
+    f.kind = 'switch';
+    f.now = el.getAttribute('aria-checked') === 'true' ? 'on' : 'off';
+  } else if (el.type === 'checkbox' || el.type === 'radio') {
+    f.kind = el.type;
+    f.now = el.checked ? 'on' : 'off';
+  } else if (el.type === 'color' || el.type === 'range') {
+    f.kind = el.type === 'color' ? 'colour' : 'slider';
+    f.now = el.value;
+  } else if (el.type === 'file') {
+    f.kind = 'file (only they can pick files: point at it)';
+  } else {
+    f.kind = el.tagName === 'TEXTAREA' ? 'text box' : 'text';
+    f.now = secret(el) ? (el.value ? 'set' : 'empty') : String(el.value || '').slice(0, 80);
+    if (secret(el)) f.kind = 'key (only they type keys)';
+  }
+  const form = el.closest('form');
+  const save = form && [...form.querySelectorAll('button[type=submit], button:not([type]), input[type=submit]')].find(shown);
+  if (save) f.saved_by = words(save);
+  for (let n = el.parentElement; n && n.tagName !== 'MAIN'; n = n.parentElement) { // the nearest titled part it sits in
+    const head = n.matches('details') ? n.querySelector(':scope > summary')
+      : n.querySelector(':scope > h2, :scope > h3, :scope > h4, :scope > header h2, :scope > header h3, :scope > .card-h');
+    const tab = n.matches('.tabpanel[data-p]') && n.ownerDocument.querySelector(`[role=tab][data-t="${n.dataset.p}"]`);
+    if (head || tab) { f.in = words(head || tab).replace(/\s*\d+$/, '').slice(0, 60); break; }
+  }
+  return f;
+}
+function pageMap() {
+  const d = doc();
+  if (!d) return {};
+  const sections = [...d.querySelectorAll('main h1, main h2, main h3')].filter(shown).map((h) => words(h)).filter(Boolean).slice(0, 20);
+  const tabs = [...d.querySelectorAll('[data-tabs]')].filter(shown).map((bar) => ({
+    tabs: [...bar.querySelectorAll('[role=tab]')].map((t) => words(t)),
+    open: words(bar.querySelector('[role=tab][aria-selected=true]')),
+  }));
+  const fields = [...d.querySelectorAll('main input:not([type=hidden]), main select, main textarea, main button[role=switch]')]
+    .filter((el) => shown(el) || (el.tagName === 'SELECT' && el.dataset.ui)) // a styled dropdown hides its real select
+    .filter((el) => !el.closest('[data-dock]')) // their conversation box isn't a field to fill
+    .slice(0, 60).map(fieldOf);
+  return { sections, ...(tabs.length ? { tabs } : {}), ...(fields.length ? { fields } : {}) };
+}
+window.celloHands = { look: () => screen(), page: (args) => onPage(args) }; // the same hands, for checks and the console
+function findField(d, what, kinds) {
+  const want = String(what || '').toLowerCase().trim();
+  const all = [...d.querySelectorAll(kinds)].filter((el) => shown(el) || (el.tagName === 'SELECT' && el.dataset.ui));
+  const named = all.map((el) => [el, labelOf(el).toLowerCase()]).filter(([, w]) => w);
+  return (named.find(([, w]) => w === want) || named.find(([, w]) => w.startsWith(want)) || named.find(([, w]) => w.includes(want))
+    || named.find(([, w]) => want.includes(w) && w.length > 2) || [])[0] || null;
 }
 
 function gazeAt(x, y, r = body.getBoundingClientRect()) {
@@ -358,9 +475,14 @@ function note(who, text) {
   if (told.length > 120) told.splice(0, told.length - 120);
   if (book.length > 40) sendBook();
 }
+const recent = []; // the last few things said, both ways: a restart carries them over
+function keep(who, text) {
+  recent.push(`${who === 'you' ? 'They' : 'You'}: ${text.slice(0, 400)}`);
+  if (recent.length > 8) recent.splice(0, recent.length - 8);
+}
 function closeTurn() { // what they said and what it answered, each as one line
-  if (turn.you.trim()) note('you', turn.you.trim());
-  if (turn.cello.trim()) note('cello', turn.cello.trim());
+  if (turn.you.trim()) { note('you', turn.you.trim()); keep('you', turn.you.trim()); }
+  if (turn.cello.trim()) { note('cello', turn.cello.trim()); keep('cello', turn.cello.trim()); }
   turn.you = '';
   turn.cello = '';
 }
@@ -379,6 +501,7 @@ function send(msg) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify
 function say(text) {
   if (!S.open) { S.pending.push(text); return; }
   note(text.startsWith('(Note') ? 'note' : 'you', text);
+  if (!text.startsWith('(Note')) S.lastAsk = text;
   send({ realtimeInput: { text } });
   S.awaiting = true;
   S.asked = performance.now();
@@ -443,6 +566,11 @@ function onMessage(m) {
     S.warned = false;
     if (S.pending.length) S.greeted = true; // they spoke first: answering them is the greeting
     while (S.pending.length) say(S.pending.shift());
+    if (S.carry) { // it restarted itself: no greeting, it picks up where it was
+      S.greeted = true;
+      hidden(S.carry);
+      S.carry = '';
+    }
     if (!S.greeted) {
       S.greeted = true;
       const access = { advisor: 'Advisor (you look, point and suggest; they make the changes)', full: 'Full (you do the whole job and tell them after)' }[ring.access()] || 'Co-pilot (small edits at once; ask before anything that takes time)';
@@ -470,6 +598,7 @@ function onMessage(m) {
     S.awaiting = true;
     S.asked = performance.now();
   }
+  if (m.cello?.working && S.awaiting) S.asked = performance.now(); // thinking or using a tool: quiet, not stuck
   if (m.toolCall) tools(m.toolCall.functionCalls || []);
   const sc = m.serverContent;
   if (!sc) return;
@@ -483,6 +612,7 @@ function onMessage(m) {
     S.cut = false;
     if (!said.you) said.me = ''; // a new thing from them: its last answer steps aside
     line('you', sc.inputTranscription.text);
+    S.lastAsk = turn.you.trim();
     S.awaiting = true;
     S.asked = performance.now();
   }
@@ -905,10 +1035,10 @@ function tick(now) {
     if (now > S.targetUntil) orb.look(0, -0.35); // it looks at you while you talk
   } else { orb.bands = new Float32Array(8); orb.level = 0; }
   if (!speaking && now - said.t > 3200) caption.classList.remove('on');
-  if (S.awaiting && !S.acting && !speaking && S.asked && now - S.asked > 25000) {
+  if (S.awaiting && !S.acting && !speaking && S.asked && now - S.asked > 30000) {
     S.awaiting = false;
     S.asked = 0;
-    show('I lost that one. Say it again?');
+    selfRestart();
   }
   flush(now);
   drawBeam(now);
@@ -1080,8 +1210,26 @@ function mute() {
   root.classList.toggle('muted', S.muted);
   show(S.muted ? 'Mic off: Cello isn\u2019t listening' : 'Listening again');
 }
-function restart() { // a fresh line and a fresh mind; the page and the film stay
-  show('Restarting\u2026');
+// no word, no tool and no sign of thought for 30 s after they asked: its line or its mind is stuck. It restarts
+// itself quietly (a fresh line and mind; the page, the film and the work running stay) and the new mind gets the last
+// few turns and what was still unanswered, so it carries on instead of greeting. Once in two minutes at most: a
+// second stall soon after is said plainly instead of looping.
+function selfRestart() {
+  const now = performance.now();
+  if (S.restartedAt && now - S.restartedAt < 120000) { show('I\u2019m stuck on that one. Say it again, or restart me from the ring.'); return; }
+  S.restartedAt = now;
+  note('event', 'no reply for 30 s: restarted itself');
+  closeTurn();
+  const before = recent.slice(-6).join('\n');
+  const ask = (S.lastAsk || '').trim();
+  S.carry = '(Note, not them talking: you were restarted because your last reply never came; the page, the film and '
+    + `any work running are as they were. ${before ? `Just before:\n${before}\n` : ''}`
+    + `${ask ? `Still unanswered, answer it now: "${ask.slice(0, 600)}". ` : ''}Start with "I lost my place, I'm back," then carry on. Don't greet.)`;
+  show('I lost my place, I\u2019m back.', 4000);
+  restart(true);
+}
+function restart(quiet = false) { // a fresh line and a fresh mind; the page and the film stay
+  if (!quiet) show('Restarting\u2026');
   sleep();
   S.handle = '';
   sessionStorage.removeItem('cello-handle');

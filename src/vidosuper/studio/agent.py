@@ -578,12 +578,11 @@ def fast_path(studio, project: dict, user: dict, words: str) -> dict | None:
             return {"text": str(exc), "cards": [], "spec": []}
     if project["stage"] == "done" and (m := GENERATE.search(words)) and not studio.db.active_job(project["id"]):
         shot = int(m.group("shot")) if m.group("shot") else None
-        try:
-            studio.generate_clip(user, project, m.group("what"), shot)
-        except Exception as exc:  # noqa: BLE001 - said plainly (no key yet, no changes left)
+        try:  # the prompt workshop: the words go on screen first; their Send makes it
+            card = new_prompt_card(studio, project, m.group("what"), shot)
+        except Exception as exc:  # noqa: BLE001 - said plainly
             return {"text": str(exc), "cards": [], "spec": []}
-        return {"text": f"Making it with an AI video model (a minute or two){f', then it takes the place of shot {shot} in a draft' if shot else ''}.",
-                "cards": [], "spec": [], "fast": True}
+        return {"text": PROMPT_SAYS, "cards": [card], "spec": [], "fast": True}
     if project["stage"] == "done" and (mus := music_asked(words, project)) and not studio.db.active_job(project["id"]):
         start, end, want = mus
         try:
@@ -778,7 +777,52 @@ def turn(studio, pid: str, mid: int) -> None:
     studio.db.run("UPDATE messages SET body=? WHERE id=?", (json.dumps(body), mid))
 
 
-def answer(studio, user: dict, project: dict, mid: int, k: int, choice: str) -> None:
+PROMPT_SAYS = "Here's the prompt I'd send. Change any words, then send it, or ask me for another."
+
+
+def prompt_card(studio, user: dict, project: dict, prompt: str, shot: int | None = None) -> str:
+    """The prompt workshop: before anything is sent to a video model, the exact prompt is put in the conversation as a
+    card they can read, change and send (or leave). Returns what it costs, in words."""
+    card = new_prompt_card(studio, project, prompt, shot)
+    post(studio.db, project, "editor", "reply", {"text": PROMPT_SAYS, "cards": [card]})
+    return card["cost"]
+
+
+def new_prompt_card(studio, project: dict, prompt: str, shot: int | None = None) -> dict:
+    """A prompt card (earlier open ones are marked replaced: one prompt waits at a time)."""
+    from ..create import clips, higgsfield
+
+    prompt = " ".join(str(prompt).split())[:600]
+    if len(prompt) < 4:
+        raise TalkError("Describe the shot in a few words.")
+    for row in studio.db.all("SELECT * FROM messages WHERE project_id=? AND role='editor' ORDER BY id DESC LIMIT 40",
+                             (project["id"],)):
+        body = json.loads(row["body"] or "{}")
+        changed = False
+        for c in body.get("cards") or []:
+            if c.get("type") == "prompt" and not c.get("done"):
+                c["done"], changed = "replaced", True
+        if changed:
+            studio.db.run("UPDATE messages SET body=? WHERE id=?", (json.dumps(body), row["id"]))
+    maker = clips.maker()
+    cost = {"local": "free, made on this computer in a minute or two",
+            "higgsfield": f"about ${higgsfield.MODELS[higgsfield.DEFAULT][1] * 5:.2f} of your Higgsfield credit"
+            }.get(maker or "", "nothing here can make it yet (Connect, Models)")
+    return {"type": "prompt", "what": "An AI shot", "prompt": prompt, "shot": shot, "cost": cost}
+
+
+def open_prompt(studio, project: dict) -> tuple[int, int, dict] | None:
+    """The prompt card waiting to be sent, if any: (message id, card index, card)."""
+    for row in studio.db.all("SELECT * FROM messages WHERE project_id=? AND role='editor' ORDER BY id DESC LIMIT 40",
+                             (project["id"],)):
+        body = json.loads(row["body"] or "{}")
+        for k, c in enumerate(body.get("cards") or []):
+            if c.get("type") == "prompt" and not c.get("done"):
+                return row["id"], k, c
+    return None
+
+
+def answer(studio, user: dict, project: dict, mid: int, k: int, choice: str, text: str = "") -> None:
     """They tapped a card: a question's answer (it becomes their message), a step offered (it runs now, exactly as
     the page's own button would), or a preference to keep for their next films."""
     from .profiles import scope_of
@@ -813,6 +857,15 @@ def answer(studio, user: dict, project: dict, mid: int, k: int, choice: str) -> 
         run_action(studio, user, project, card["action"], card.get("params") or {})
         save("yes")
         post(studio.db, project, "you", "tap", {"text": f"✓ {card['label']}"})
+    elif card["type"] == "prompt":
+        if choice != "send":
+            save("no")
+            return
+        words = " ".join((text or card["prompt"]).split())[:600]
+        studio.generate_clip(user, project, words, card.get("shot"))
+        card["sent"] = words
+        save("sent")
+        post(studio.db, project, "you", "tap", {"text": "✓ Sent the prompt"})
     elif card["type"] == "who":
         person = next((p for p in (studio.people_of(project) or {}).get("people") or [] if p["id"] == choice), None)
         if person is None:

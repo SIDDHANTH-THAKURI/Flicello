@@ -152,3 +152,7 @@
   opacity: 0; visibility: hidden; pointer-events: none !important; transition: opacity .25s, visibility 0s .25s; }
 #cello.dock-in .cello-ask, #cello.dock-in.flip .cello-ask, #cello.dock-in.high .cello-ask { left: auto; right: 14px; top: auto; bottom: 150px;
   width: min(380px, calc(var(--dockw, 400px) - 28px)); }
+
+/* the voice panel's speaking speed */
+.speed-row { display: grid; grid-template-columns: auto minmax(0, 1fr) 3.2em; align-items: center; gap: 10px; margin-top: 12px; font-size: .8rem; }
+.speed-row b { font-family: var(--f-mono, monospace); text-align: right; }

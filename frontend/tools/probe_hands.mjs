@@ -1,0 +1,30 @@
+// Cello's hands on real pages: the page map, and choose / set / type (keys refused). node tools/probe_hands.mjs
+import puppeteer from 'puppeteer-core';
+const browser = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new', defaultViewport: { width: 1440, height: 900 } });
+const page = await browser.newPage();
+page.on('pageerror', (e) => console.log('[pageerror]', e.message));
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const hands = (fn, args) => page.evaluate((f, a) => (f === 'look' ? window.celloHands.look() : window.celloHands.page(a)), fn, args);
+await page.goto('http://127.0.0.1:8766/cello?to=/style', { waitUntil: 'networkidle2' });
+await wait(1500);
+const map = await hands('look');
+console.log('STYLE sections', JSON.stringify(map.sections), 'tabs', JSON.stringify(map.tabs));
+console.log('STYLE fields', JSON.stringify(map.fields?.slice(0, 8)));
+const typeField = map.fields?.find((f) => f.kind === 'dropdown');
+if (typeField) console.log('choose:', await hands('page', { do: 'choose', where: typeField.label, text: typeField.options.at(-1) }));
+console.log('choose bad:', await hands('page', { do: 'choose', where: typeField?.label || 'type', text: 'zzz' }));
+const colour = map.fields?.find((f) => f.kind === 'colour');
+if (colour) console.log('set colour:', await hands('page', { do: 'set', where: colour.label, text: '#ff5a36' }));
+await page.goto('http://127.0.0.1:8766/cello?to=/connect', { waitUntil: 'networkidle2' });
+for (let k = 0; k < 60; k++) { const ok = await page.evaluate(() => !!document.querySelector('#cello-app').contentDocument?.querySelector('[data-tabs]')); if (ok) break; await wait(500); }
+await wait(800);
+console.log('tab:', await hands('page', { do: 'click', where: 'Keys' }));
+await wait(400);
+const cmap = await hands('look');
+console.log('CONNECT keys fields', JSON.stringify(cmap.fields?.filter((f) => f.kind.startsWith('key')).slice(0, 3)));
+console.log('type key:', await hands('page', { do: 'type', where: 'Gemini', text: 'AIzaFAKE' }));
+console.log('tab models:', await hands('page', { do: 'click', where: 'Models' }));
+await wait(400);
+const jm = (await hands('look')).fields?.filter((f) => f.kind === 'dropdown').slice(0, 3);
+console.log('JOBS', JSON.stringify(jm));
+await browser.close();

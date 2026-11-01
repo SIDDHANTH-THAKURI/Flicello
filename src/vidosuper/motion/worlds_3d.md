@@ -45,6 +45,15 @@ Use them instead of rebuilding them; restyle freely. Materials (each returns a m
 - `k.toon(name, rgb, sun=(x, y, z))` cel shading in flat bands lit from a fixed drawn direction, with a crisp rim
   (a drawn look in 3D, the same under any lights), and
   `k.outline(obj)` an ink line around its silhouette.
+Real things before primitives: a box, a cylinder or a cone standing in for a boat, a lighthouse or a chair reads as
+unfinished (a lighthouse built from a plain cylinder scored 4/10). First look in the free library:
+- `bash assets lighthouse rocks` lists ready-made models that match (id, name, real size, tags); `bash assets --hdri
+  night sea` lists real skies and places. They are CC0 (free for anything).
+- `k.model("<id or words>", loc=(x, y, z), height=<scene units>, rot_z=<degrees>)` downloads it once, imports it with
+  its own textures, stands its base on `loc` and returns one empty to animate (`k.keys(m, "location", ...)`). None when
+  nothing matches: then build it, well (bevelled, real materials, detail), from the kit's shapes.
+- `k.hdri("<id or words>", strength=0.4, rotation=<degrees>, visible=True)` lights the whole scene from a real sky
+  (metal and glass need something to reflect); `visible=False` lights without showing it.
 Shapes and places:
 - `k.rounded_box(name, size, loc, radius, material)`, `k.bevel(obj)` rounded edges on anything, `k.smooth(obj)`.
 - `k.cyc(rgb, y, z)` a studio cyclorama: a floor curving up into a wall with no seam (products, objects on show,

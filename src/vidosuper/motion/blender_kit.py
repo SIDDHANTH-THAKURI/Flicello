@@ -662,6 +662,142 @@ def studio(target=(0.0, 2.0, 0.0), key=(1.0, 0.95, 0.88), fill=(0.75, 0.85, 1.0)
     return out
 
 
+# ---------------------------------------------------------------- ready-made things: Poly Haven (CC0)
+PH_API = "https://api.polyhaven.com"
+PH_AGENT = "Flicello/1.0 (open-source video studio; github.com/SIDDHANTH-THAKURI/Flicello)"
+
+
+def _ph_cache(*parts):
+    base = os.environ.get("VIDO_MODELS_DIR") or os.path.join(
+        os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "VidoSuper", "models")
+    path = os.path.join(base, "polyhaven", *parts)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _ph_get(url, to=None):
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": PH_AGENT})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        data = r.read()
+    if to:
+        os.makedirs(os.path.dirname(to), exist_ok=True)
+        with open(to, "wb") as fh:
+            fh.write(data)
+    return data
+
+
+def _ph_id(words, kind):
+    """An asset's id: the words as given when they are one, else the library's best match for them."""
+    path = os.path.join(_ph_cache(), f"{kind}.json")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            cat = json.load(fh)
+    else:
+        cat = json.loads(_ph_get(f"{PH_API}/assets?t={kind}"))
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(cat, fh)
+    if words in cat:
+        return words
+    want = [w.rstrip("s") for w in words.lower().replace("_", " ").split() if len(w) > 1]
+    best, score = None, 0
+    for aid, a in cat.items():
+        name = {t.rstrip("s") for t in (a.get("name", "") + " " + aid.replace("_", " ")).lower().split()}
+        tags = {t.rstrip("s") for t in " ".join(a.get("tags", [])).lower().split()}
+        sc = sum(3 if w in name else 2 if w in tags else 0 for w in want)
+        if sc > score:
+            best, score = aid, sc
+    return best
+
+
+def model(what, loc=(0.0, 0.0, 0.0), height=None, rot_z=0.0, res="1k"):
+    """A ready-made model from Poly Haven's free library (id from `bash assets`, or words: the best match), downloaded
+    once, imported and gathered under one empty: stood on `loc` (its base there), turned `rot_z` degrees and scaled
+    to `height` scene units (its real size otherwise). Returns the empty (animate it: keys(empty, "location", ...)),
+    or None when nothing in the library matches (then build it from the kit's shapes)."""
+    aid = _ph_id(what, "models")
+    if not aid:
+        print(f"[kit] nothing in the library matches {what!r}")
+        return None
+    files = json.loads(_ph_get(f"{PH_API}/files/{aid}"))
+    sizes = files.get("gltf") or {}
+    got = sizes.get(res) or sizes.get("1k") or next(iter(sizes.values()))
+    main = got["gltf"]
+    folder = _ph_cache("models", aid, res)
+    path = os.path.join(folder, os.path.basename(main["url"]))
+    if not os.path.exists(path):
+        _ph_get(main["url"], path)
+        for rel, inc in (main.get("include") or {}).items():
+            _ph_get(inc["url"], os.path.join(folder, rel))
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=path)
+    new = [o for o in bpy.data.objects if o not in before]
+    holder = obj(f"model-{aid}", None, (0, 0, 0))
+    for o in new:
+        if o.parent is None:
+            o.parent = holder
+    bpy.context.view_layer.update()
+    import mathutils
+
+    pts = [o.matrix_world @ mathutils.Vector(c) for o in new if o.type == "MESH" for c in o.bound_box]
+    if pts:
+        lo = mathutils.Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+        hi = mathutils.Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+        k = (height / max(1e-6, hi.z - lo.z)) if height else 1.0
+        centre = (lo + hi) / 2
+        for o in new:  # its base centre to the holder's origin, so loc is where it stands
+            if o.parent is holder:
+                o.location -= mathutils.Vector((centre.x, centre.y, lo.z))
+        holder.scale = (k, k, k)
+    holder.location = loc
+    holder.rotation_euler = (0, 0, math.radians(rot_z))
+    print(f"[kit] model {aid} ({len(new)} parts)")
+    return holder
+
+
+def hdri(what="sunset", strength=0.4, rotation=0.0, res="2k", visible=True):
+    """A real sky or place from Poly Haven lighting the whole scene (reflections, soft light from every side; the
+    kit's Standard view clips bright skies, so `strength` starts low: raise it for a dim one);
+    `visible` False keeps it lighting but not seen behind (the world's own colour shows instead)."""
+    aid = _ph_id(what, "hdris")
+    if not aid:
+        print(f"[kit] no sky matches {what!r}")
+        return None
+    files = json.loads(_ph_get(f"{PH_API}/files/{aid}"))["hdri"]
+    got = (files.get(res) or files.get("1k") or next(iter(files.values())))["hdr"]
+    path = os.path.join(_ph_cache("hdris"), f"{aid}_{res}.hdr")
+    if not os.path.exists(path):
+        _ph_get(got["url"], path)
+    w = bpy.context.scene.world
+    n, l = w.node_tree.nodes, w.node_tree.links
+    n.clear()
+    coord = n.new("ShaderNodeTexCoord")
+    turn = n.new("ShaderNodeMapping")
+    turn.inputs["Rotation"].default_value = (0, 0, math.radians(rotation))
+    env = n.new("ShaderNodeTexEnvironment")
+    env.image = bpy.data.images.load(path)
+    bg = n.new("ShaderNodeBackground")
+    bg.inputs["Strength"].default_value = strength
+    out = n.new("ShaderNodeOutputWorld")
+    l.new(coord.outputs["Generated"], turn.inputs[0])
+    l.new(turn.outputs[0], env.inputs[0])
+    l.new(env.outputs["Color"], bg.inputs["Color"])
+    if visible:
+        l.new(bg.outputs[0], out.inputs[0])
+    else:  # lights the scene, but the camera sees the world's plain colour
+        lp = n.new("ShaderNodeLightPath")
+        plain = n.new("ShaderNodeBackground")
+        plain.inputs["Color"].default_value = (0, 0, 0, 1)
+        mix = n.new("ShaderNodeMixShader")
+        l.new(lp.outputs["Is Camera Ray"], mix.inputs[0])
+        l.new(bg.outputs[0], mix.inputs[1])
+        l.new(plain.outputs[0], mix.inputs[2])
+        l.new(mix.outputs[0], out.inputs[0])
+    print(f"[kit] sky {aid}")
+    return bg
+
+
 def end():
     """Render what Flicello asked for: stills at the asked seconds (look/<t>.png), the person alone there on a clear
     background (alone: Flicello measures their framing with it), or every frame (frames/f_####.png)."""

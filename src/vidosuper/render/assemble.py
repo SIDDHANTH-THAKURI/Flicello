@@ -55,7 +55,10 @@ def assembly_graph(timeline: Timeline, meta: EditMeta, texts: list[tuple[TextOve
     for k, run in enumerate(runs):
         labels = "".join(f"[{i}:v]" for i in run)
         joined = f"concat=n={len(run)}:v=1:a=0," if len(run) > 1 else ""
-        lines.append(f"{labels}{joined}settb=AVTB,fps={fps}[r{k}]")
+        # every shot is already rendered at exactly `fps` with its exact frame count: the joined frames are numbered
+        # in order (time base 1/fps, timestamp = frame number). Re-timing them (settb=AVTB,fps) rounded differently
+        # on FFmpeg 7, doubling and dropping frames: a freeze slipped a frame and the text missed its window.
+        lines.append(f"{labels}{joined}settb=1/{fps},setpts=N,fps={fps}[r{k}]")  # (fps: the rate xfade needs)
     current = "r0"
     for k in range(1, len(runs)):
         first = timeline.items[runs[k][0]]
@@ -70,12 +73,21 @@ def assembly_graph(timeline: Timeline, meta: EditMeta, texts: list[tuple[TextOve
         lines.append(f"[{current}]{bars}[lb]")
         current = "lb"
     first_text = len(timeline.items)
+    frame = 1.0 / fps
     for k, (overlay, _) in enumerate(texts or []):
+        # the text's window is its own alpha: fully there from start to end, nothing outside it (faded in and out
+        # when it has a fade, else switched in one frame). The overlay's `enable` switch never turned it on with
+        # FFmpeg 7.0, so the window lives in the picture, the same on every version.
         f = max(0.0, min(overlay.fade, (overlay.end - overlay.start) / 2))
-        alpha = f"fade=t=in:st={overlay.start:.3f}:d={f:.3f}:alpha=1,fade=t=out:st={overlay.end - f:.3f}:d={f:.3f}:alpha=1" \
-            if f > 0 else "null"
-        lines.append(f"[{first_text + k}:v]format=rgba,{alpha}[t{k}]")
-        lines.append(f"[{current}][t{k}]overlay=0:0:enable='between(t,{overlay.start:.3f},{overlay.end:.3f})'[o{k}]")
+        if f > 0:
+            fades = [f"fade=t=in:st={overlay.start:.3f}:d={f:.3f}:alpha=1",
+                     f"fade=t=out:st={overlay.end - f:.3f}:d={f:.3f}:alpha=1"]
+        else:
+            fades = [f"fade=t=out:st={overlay.end:.6f}:d={frame:.6f}:alpha=1"]
+            if overlay.start > 0:
+                fades.insert(0, f"fade=t=in:st={max(0.0, overlay.start - frame):.6f}:d={frame:.6f}:alpha=1")
+        lines.append(f"[{first_text + k}:v]format=rgba,{','.join(fades)}[t{k}]")
+        lines.append(f"[{current}][t{k}]overlay=0:0[o{k}]")
         current = f"o{k}"
     first_graphic = first_text + len(texts or [])
     first_matte = first_graphic + len(graphics or [])

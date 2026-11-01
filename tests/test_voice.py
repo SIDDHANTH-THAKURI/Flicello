@@ -64,8 +64,8 @@ def test_the_tools_are_cellos_and_each_runs_on_the_page(monkeypatch):
 
 
 class FakeMind:
-    def __init__(self, folder, url, token, on_text, on_done, on_error):
-        self.on_text, self.on_done = on_text, on_done
+    def __init__(self, folder, url, token, on_text, on_done, on_error, on_alive=None):
+        self.on_text, self.on_done, self.on_alive = on_text, on_done, on_alive
         self.said, self.interrupts = [], 0
 
     def say(self, text):
@@ -117,6 +117,43 @@ def test_it_speaks_as_it_writes_stops_when_spoken_over_and_runs_tools_on_the_pag
         assert await task == {"result": {"page": "home"}}
         live.close()
         assert live.token not in voice.SESSIONS
+
+    asyncio.run(run())
+
+
+def test_a_long_quiet_turn_says_it_is_working_so_the_page_does_not_think_it_stuck(monkeypatch):
+    """Thinking or using tools sends no words; the page restarts Cello when nothing comes for 30 s, so the mind's
+    other steps are passed on as a "working" sign (at most every 4 s, and only while a reply is awaited)."""
+    import io
+    import types
+
+    lines = [{"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "thinking"}}},
+             {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "mcp__cello__look"}]}},
+             {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hi."}}},
+             {"type": "result", "result": "Hi."}]
+    seen = []
+    mind = voice.Mind.__new__(voice.Mind)
+    mind.proc = types.SimpleNamespace(stdout=io.BytesIO("".join(json.dumps(x) + "\n" for x in lines).encode()))
+    mind.on_text, mind.on_done = (lambda t: seen.append(("text", t))), (lambda: seen.append(("done",)))
+    mind.on_error, mind.on_alive = (lambda why: seen.append(("error", why))), (lambda: seen.append(("alive",)))
+    mind._read()
+    assert seen[:4] == [("alive",), ("alive",), ("text", "Hi."), ("done",)]
+
+    monkeypatch.setattr(voice, "Mind", FakeMind)
+    sent = []
+
+    async def run():
+        async def send(msg):
+            sent.append(msg)
+
+        live = voice.Live("http://127.0.0.1:1", send, asyncio.get_running_loop())
+        live.mind.on_alive()  # nothing asked: nothing said
+        live.text("cut shot three")
+        live.mind.on_alive()
+        live.mind.on_alive()  # within 4 s of the last: once is enough
+        await asyncio.sleep(0.05)
+        assert [m for m in sent if "cello" in m] == [{"cello": {"working": True}}]
+        live.close()
 
     asyncio.run(run())
 
@@ -251,3 +288,17 @@ def test_the_page_gets_this_machines_voice_with_a_one_time_ticket(studio, monkey
     monkeypatch.setenv("GEMINI_API_KEY", "")
     r = client.post("/api/cello/token", headers={"X-CSRF": csrf})
     assert r.status_code == 503 and "download its voice on the Connect page" in r.json()["detail"]
+
+
+def test_how_fast_it_speaks_is_set_from_its_ring_and_kept(studio, monkeypatch):
+    import yaml
+
+    monkeypatch.delenv("VIDO_CELLO_SPEED", raising=False)
+    assert voice.speed() == 1.0
+    client, _, csrf = local_client(studio)
+    r = client.post("/api/cello/settings", json={"speed": 1.25}, headers={"X-CSRF": csrf})
+    assert "1.25" in r.json()["said"] and voice.speed() == 1.25  # the next sentence is faster
+    assert yaml.safe_load((studio.s.home / "studio.yaml").read_text(encoding="utf-8"))["cello_speed"] == 1.25
+    client.post("/api/cello/settings", json={"speed": 9}, headers={"X-CSRF": csrf})
+    assert voice.speed() == 1.5  # kept in range
+    assert client.get("/api/cello/settings").json()["speed"] == 1.5

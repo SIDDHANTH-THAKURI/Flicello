@@ -147,11 +147,16 @@ TOOLS = [
      "its time and where in the frame), where the video on screen is playing, and what the page shows. Call it when "
      "they say this, here, that, there.", "parameters": {"type": "object", "properties": {}}},
     {"name": "page", "description": "Do something on the page for them: scroll (up, down, top, bottom), click a "
-     "button or link by its words, type into a field (its label or placeholder words, and the text), or go back.",
+     "button, link or tab by its words, type into a field, choose a dropdown's option, set a switch, tick box, colour "
+     "or slider, or go back. `look` lists the page's fields (label, kind, value now, a dropdown's options, the button "
+     "that saves it): fill what they asked, then press that Save (or ask which, when two forms could be meant). Keys "
+     "and passwords are typed by them only; files are picked by them only (point at the box).",
      "parameters": {"type": "object", "properties": {
-         "do": {"type": "string", "enum": ["scroll", "click", "type", "back"]},
-         "where": {"type": "string", "description": "scroll: up, down, top or bottom; click / type: the words on it."},
-         "text": {"type": "string", "description": "type: what to type."}}, "required": ["do"]}},
+         "do": {"type": "string", "enum": ["scroll", "click", "type", "choose", "set", "back"]},
+         "where": {"type": "string", "description": "scroll: up, down, top or bottom; otherwise the field's label or "
+                                                    "the words on the button."},
+         "text": {"type": "string", "description": "type: what to type; choose: the option's words; set: on, off, a "
+                                                  "colour as #rrggbb, or a slider's number."}}, "required": ["do"]}},
     {"name": "upload", "description": "Show them where their clips go on the film page (lit up, ready to tap or drop "
      "files on). You can't pick their files yourself.", "parameters": {"type": "object", "properties": {}}},
     {"name": "brief", "description": "What the film is (all optional). title: its name, any time (name it once you "
@@ -254,7 +259,10 @@ TOOLS = [
      "parameters": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["parallax", "remove", "upscale"]},
                                                      "shot": _shot("the shot"), "want": {"type": "string"}},
                     "required": ["kind", "shot"]}},
-    {"name": "ai_clip", "description": "Make a clip with an AI video model from words, optionally into a shot's place.",
+    {"name": "ai_clip", "description": "A clip made by an AI video model from words, optionally into a shot's place. "
+     "Without they_said_yes it only puts the exact prompt on screen as a card (nothing is sent): read it to them in a "
+     "line; they change it, send it, or ask for another (call again with the new prompt). With they_said_yes=true "
+     "(they said send it) it sends the prompt on screen, as they left it, or the one you give.",
      "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}, "shot": _shot("the shot to replace")},
                     "required": ["prompt"]}},
     {"name": "music", "description": "Make a stretch of the film's made music again (the rest kept): start, end seconds "
@@ -269,6 +277,14 @@ TOOLS = [
      "parameters": {"type": "object", "properties": {}}},
     {"name": "remember", "description": "Keep a lasting preference for all their films.",
      "parameters": {"type": "object", "properties": {"rule": {"type": "string"}}, "required": ["rule"]}},
+    {"name": "rules", "description": "Their standing rules (what every film follows): each with its id, whether it is "
+     "on, and the rules removed lately (in the bin for 30 days, can come back).",
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "rule", "description": "Change one standing rule: off (kept, not followed), on, remove (to the bin, it "
+     "can come back for 30 days) or restore (back from the bin). `which`: its id from `rules`, or words from it.",
+     "parameters": {"type": "object", "properties": {
+         "do": {"type": "string", "enum": ["off", "on", "remove", "restore"]},
+         "which": {"type": "string"}}, "required": ["do", "which"]}},
     {"name": "diagnose", "description": "What went wrong: the film's failed steps and errors, and the system's health.",
      "parameters": {"type": "object", "properties": {}}},
     {"name": "repair", "description": "Repair what failed: try the failed step again (after diagnose).",
@@ -289,7 +305,7 @@ BROWSER = {"open", "show", "play", "pointing", "page", "upload", "quiet", "sleep
 # At every level: nothing deleted for good, keys never touched, and a yes before spending paid credit.
 ACCESS = ("advisor", "copilot", "full")
 LOOKS = {"look", "list_films", "open", "show", "play", "pointing", "upload", "find", "diagnose", "quiet", "sleep",
-         "answer"}  # never change anything
+         "answer", "rules"}  # never change anything
 LONG = {"make_it", "build", "step", "effect", "music", "work", "repair"}  # take minutes (or more)
 PAID = {"ai_clip"}  # spends paid credit (their Higgsfield balance)
 for _t in TOOLS:
@@ -314,7 +330,7 @@ def allowed(level: str, name: str, args: dict, hands: bool = False) -> str | Non
         return ("Not done: they gave you Advisor access, so you look, point and suggest, and they make the change "
                 "themselves (or say \"take more control\"). Tell them exactly what to do and where.")
     yes = bool(args.get("they_said_yes"))
-    if name in PAID and not yes:
+    if name in PAID and not yes and name != "ai_clip":  # (ai_clip without a yes only shows its prompt)
         return ("Not done: this spends paid credit, so ask them first in one sentence (what it makes and that it uses "
                 "their balance), then call again with they_said_yes=true once they agree.")
     if name in LONG and level == "copilot" and not yes and not hands:
@@ -529,7 +545,7 @@ def act(studio, user: dict, project: dict | None, name: str, args: dict, hands: 
     refused = allowed(access_of(studio, user), name, args, hands)
     if refused:
         return {"result": refused}
-    args.pop("they_said_yes", None)
+    said_yes = bool(args.pop("they_said_yes", None))
 
     def need() -> dict:
         if project is None:
@@ -685,8 +701,19 @@ def act(studio, user: dict, project: dict | None, name: str, args: dict, hands: 
         studio.ask_effect(user, need(), str(args.get("kind")), int(args.get("shot") or 1), str(args.get("want") or ""))
         return {"result": "Working on the effect (a few minutes); it comes back as a draft.", "ui": {"wait": "job"}}
     if name == "ai_clip":
-        studio.generate_clip(user, need(), str(args.get("prompt", "")), int(args["shot"]) if args.get("shot") else None)
-        return {"result": "An AI model is making the clip (a minute or two).", "ui": {"wait": "job"}}
+        p = need()
+        shot = int(args["shot"]) if args.get("shot") else None
+        if not said_yes:  # the prompt workshop: on screen first, sent only when they say so
+            cost = agent.prompt_card(studio, user, p, str(args.get("prompt", "")), shot)
+            return {"result": f"The prompt is on screen in the conversation ({cost}). Read it to them in one line and "
+                              "ask: send it, change it, or another?", "ui": {"reload": True}}
+        waiting = agent.open_prompt(studio, p)
+        if waiting:  # the card on screen, with any words they changed by voice given as the prompt
+            mid, k, card = waiting
+            agent.answer(studio, user, p, mid, k, "send", str(args.get("prompt") or card["prompt"]))
+        else:
+            studio.generate_clip(user, p, str(args.get("prompt", "")), shot)
+        return {"result": "Sent: an AI model is making the clip (a minute or two).", "ui": {"wait": "job"}}
     if name == "music":
         studio.edit_music(user, need(), args.get("start"), args.get("end"), str(args.get("want", "")))
         return {"result": "Making that stretch of the music again, then the film on it.", "ui": {"wait": "job"}}
@@ -709,6 +736,31 @@ def act(studio, user: dict, project: dict | None, name: str, args: dict, hands: 
         if prof.add(str(args.get("rule", ""))[:200], "Cello heard it", "you"):
             prof.save()
         return {"result": "Kept for all their films."}
+    if name == "rules":
+        prof = studio.profile(user)
+        return {"result": {"rules": [{"id": r["id"], "rule": r["text"], "on": not r.get("off"), "for": r.get("for", "all")}
+                                     for r in prof.rules],
+                           "removed_lately": [{"id": r["id"], "rule": r["text"]} for r in prof.binned()]}}
+    if name == "rule":
+        prof = studio.profile(user)
+        do, which = str(args.get("do", "")), str(args.get("which", "")).strip()
+        pool = prof.binned() if do == "restore" else prof.rules
+        found = next((r for r in pool if r["id"] == which), None)
+        if found is None and which:  # their words: the one rule they match, or say which ones
+            hits = [r for r in pool if which.lower() in r["text"].lower()]
+            if len(hits) > 1:
+                return {"result": "Which one? " + "; ".join(f'{r["id"]}: {r["text"]}' for r in hits[:6])}
+            found = hits[0] if hits else None
+        if found is None:
+            return {"result": f'No rule matches "{which}". Call rules to see them.'}
+        ok = {"off": lambda: prof.switch(found["id"], False), "on": lambda: prof.switch(found["id"], True),
+              "remove": lambda: prof.drop(found["id"]), "restore": lambda: prof.restore(found["id"])}.get(do, lambda: False)()
+        if not ok:
+            return {"result": "Not changed."}
+        prof.save()
+        said = {"off": "is off (kept, not followed)", "on": "is on again", "remove": "is removed (in the bin for 30 "
+                "days: it can come back)", "restore": "is back"}[do]
+        return {"result": f'"{found["text"]}" {said}.'}
     if name == "diagnose":
         return {"result": diagnose(studio, need()) if project else {"note": "no film open"}}
     if name == "repair":

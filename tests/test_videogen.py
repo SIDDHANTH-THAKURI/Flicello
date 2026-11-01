@@ -37,12 +37,27 @@ def _port():
         return s.getsockname()[1]
 
 
+def _listening(port: int, wait: float = 15.0) -> None:
+    """The process thread has opened its port (on a busy machine it can take a moment: asking before that read as
+    "not running" and the test failed)."""
+    import time
+
+    end = time.time() + wait
+    while time.time() < end:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return
+        except OSError:
+            time.sleep(0.05)
+
+
 def test_the_process_animates_a_frame_and_lets_the_gpu_go(tmp_path, monkeypatch):
     port = _port()
     monkeypatch.setattr(videogen, "PORT", port)
     monkeypatch.setattr(videogen, "_Model", FakeModel)
     monkeypatch.setattr(videogen, "_start", lambda: pytest.fail("already running"))
     threading.Thread(target=videogen.serve, args=(port,), daemon=True).start()
+    _listening(port)
     videogen.ready(wait=10)
     start = tmp_path / "start.png"
     start.write_bytes(b"png")

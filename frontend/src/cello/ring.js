@@ -149,6 +149,30 @@ export function setupRing(api) {
         }
       }));
       if (!settings.owner) b.append(el('p', 'hint', 'Only the owner of this computer changes the voice.'));
+      if (settings.local_voice && settings.owner) { // this machine's voice: how fast it speaks, from the next sentence
+        const row = el('label', 'speed-row');
+        const name = el('span', '', 'Speaking speed');
+        const val = el('b', '', `${Number(settings.speed || 1).toFixed(2).replace(/0$/, '')}×`);
+        const range = document.createElement('input');
+        range.type = 'range';
+        range.className = 'ui';
+        range.min = '0.7';
+        range.max = '1.5';
+        range.step = '0.05';
+        range.value = String(settings.speed || 1);
+        range.setAttribute('aria-label', 'Speaking speed');
+        const paint = () => {
+          range.style.setProperty('--v', `${((range.value - 0.7) / 0.8) * 100}%`);
+          val.textContent = `${Number(range.value).toFixed(2).replace(/0$/, '')}×`;
+        };
+        range.addEventListener('input', paint);
+        range.addEventListener('change', async () => {
+          try { await save({ speed: Number(range.value) }); settings.speed = Number(range.value); } catch (err) { api.show(err.message); }
+        });
+        paint();
+        row.append(name, range, val);
+        b.append(row);
+      }
       return ['Voice · who speaks and hears', b];
     },
     model: () => {
@@ -157,7 +181,7 @@ export function setupRing(api) {
         await save({ model: id });
         api.show('Model chosen. Restart Cello (in this ring) to think with it.', 5000);
       }));
-      b.append(el('p', 'hint', 'This is the model Cello talks with. Real work (designing, editing, rendering) goes to your hands, which always use the best model.'));
+      b.append(el('p', 'hint', 'This is the model Cello talks with. Real work (editing, designing, watching footage) has its own model per job: Connect, Models.'));
       return ['Model · what Cello thinks with', b];
     },
     did: () => {

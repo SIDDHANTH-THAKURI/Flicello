@@ -113,6 +113,14 @@ def _quietly(fn) -> None:
         pass
 
 
+def speed() -> float:
+    """How fast Cello speaks (VIDO_CELLO_SPEED, set from its ring): 0.7 to 1.5 times, read for every sentence."""
+    try:
+        return max(0.7, min(1.5, float(os.environ.get("VIDO_CELLO_SPEED") or 1.0)))
+    except ValueError:
+        return 1.0
+
+
 def speak(text: str) -> np.ndarray:
     """The words spoken in Cello's voice: 24 kHz mono int16. A GPU that can't run the voice hands it to the CPU, and
     that is remembered (graphics/device.py)."""
@@ -120,13 +128,13 @@ def speak(text: str) -> np.ndarray:
 
     k = _kokoro()
     try:
-        audio, rate = k.create(text, voice=VOICE, speed=1.0, lang="en-us")
+        audio, rate = k.create(text, voice=VOICE, speed=speed(), lang="en-us")
     except Exception:  # noqa: BLE001 - a GPU that starts but can't run it: the CPU can
         if k.sess.get_providers()[0] == "CPUExecutionProvider":
             raise
         _gave_up(voice_files()[0])
         _kokoro.cache_clear()
-        audio, rate = _kokoro(cpu=True).create(text, voice=VOICE, speed=1.0, lang="en-us")
+        audio, rate = _kokoro(cpu=True).create(text, voice=VOICE, speed=speed(), lang="en-us")
     audio = np.asarray(audio, np.float32)
     if rate != RATE_OUT:  # the page plays 24 kHz
         n = int(round(len(audio) * RATE_OUT / rate))
@@ -229,13 +237,15 @@ class Ears:
 
 class Mind:
     """Claude on their plan, as one conversation that stays open: `say` a turn; its words arrive at `on_text` as it
-    writes them, `on_done` when the turn ends."""
+    writes them, `on_done` when the turn ends, and `on_alive` with anything else it does on the way (thinking, using a
+    tool), so a long quiet turn is told apart from a stuck one."""
 
-    def __init__(self, folder: Path, url: str, token: str, on_text, on_done, on_error):
+    def __init__(self, folder: Path, url: str, token: str, on_text, on_done, on_error, on_alive=None):
         from ..local import claude_exe, plan_env
         from ..studio.cello import SYSTEM
 
         self.on_text, self.on_done, self.on_error = on_text, on_done, on_error
+        self.on_alive = on_alive or (lambda: None)
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "system.md").write_text(SYSTEM + LOCAL_NOTE, encoding="utf-8")
         (folder / "mcp.json").write_text(json.dumps({"mcpServers": {"cello": {
@@ -284,6 +294,10 @@ class Mind:
                     self.on_text(delta.get("text", ""))
                 elif ev.get("type") == "content_block_start" and (ev.get("content_block") or {}).get("type") == "text":
                     self.on_text(" ")  # a new block of words after a tool: they don't run into the last ones
+                else:
+                    self.on_alive()  # thinking, or reaching for a tool: quiet, not stuck
+            elif kind in ("assistant", "user", "system"):
+                self.on_alive()  # a whole step (a tool's call or its answer)
             elif kind == "result":
                 if e.get("is_error") and re.search(r"(session|usage|weekly|5-hour) limit|hit your (\S+ )?limit",
                                                    str(e.get("result") or ""), re.I):
@@ -341,7 +355,8 @@ class Live:
         self.mouth = asyncio.Queue()
         self.folder = Path(tempfile.mkdtemp(prefix="cello-live-"))
         self.ears = Ears(self._started, self._heard)
-        self.mind = Mind(self.folder, url, self.token, self._text, self._turn_done, self._failed)
+        self.alive_at = 0.0
+        self.mind = Mind(self.folder, url, self.token, self._text, self._turn_done, self._failed, self._alive)
         SESSIONS[self.token] = self
         self.speaker = loop.create_task(self._speak_loop())
 
@@ -449,6 +464,14 @@ class Live:
         for s in rest:
             self.loop.call_soon_threadsafe(self.mouth.put_nowait, (epoch, s))
         self.loop.call_soon_threadsafe(self.mouth.put_nowait, None)  # the turn's end, after its last words
+
+    def _alive(self) -> None:
+        """Its mind is working on the reply without words yet: the page hears so (at most every 4 s), so it waits
+        instead of deciding Cello is stuck."""
+        now = time.monotonic()
+        if self.busy and now - self.alive_at > 4:
+            self.alive_at = now
+            self._emit({"cello": {"working": True}})
 
     def _failed(self, why: str) -> None:
         if not self.done:

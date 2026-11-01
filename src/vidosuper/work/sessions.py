@@ -178,7 +178,8 @@ class Sessions:
         (folder / "system.md").write_text(brief(), encoding="utf-8")
         from ..local import claude_exe, health, plan_env
 
-        cmd = [claude_exe(), "-p", "--output-format", "json", "--model", MODEL, "--system-prompt-file",
+        model = os.environ.get("VIDO_HANDS_MODEL") or MODEL  # chosen on Connect (local/jobs.py)
+        cmd = [claude_exe(), "-p", "--output-format", "json", "--model", model, "--system-prompt-file",
                str(folder / "system.md"), "--setting-sources", "", "--strict-mcp-config", "--max-budget-usd", BUDGET_USD,
                "--json-schema", json.dumps(SCHEMA), "--tools", "Read,Write,Edit,Bash",
                "--allowedTools", "Read(./**)", "Write(./**)", "Edit(./**)", "Bash(bash fl:*)", "Bash(bash look:*)",

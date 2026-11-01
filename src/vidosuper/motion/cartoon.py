@@ -130,7 +130,7 @@ def _desk(folder: Path, system: str, prompt: str, commands: tuple[str, ...], bud
 
     _scripts(folder, commands)
     (folder / "system.md").write_text(system, encoding="utf-8")
-    cmd = [claude_exe(), "-p", "--output-format", "json", "--model", scenes.DESIGN_MODEL, "--system-prompt-file",
+    cmd = [claude_exe(), "-p", "--output-format", "json", "--model", scenes.design_model(), "--system-prompt-file",
            str(folder / "system.md"), "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config",
            "--max-budget-usd", f"{budget:g}", "--tools", "Read,Write,Edit,Bash", "--allowedTools", "Read(./**)",
            "Write(./**)", "Edit(./**)", *[f"Bash(bash {c}:*)" for c in commands]]  # its own folder only

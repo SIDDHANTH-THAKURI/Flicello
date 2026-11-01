@@ -92,6 +92,20 @@ class FakeMaker:
         return float(body["seconds"])
 
 
+def _listening(port: int, wait: float = 15.0) -> None:
+    """The process thread has opened its port (on a busy machine it can take a moment: asking before that read as
+    "not running" and the test failed)."""
+    import time
+
+    end = time.time() + wait
+    while time.time() < end:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return
+        except OSError:
+            time.sleep(0.05)
+
+
 @pytest.fixture()
 def process(monkeypatch):
     """The sound process for real, on a free port, its models faked."""
@@ -103,6 +117,7 @@ def process(monkeypatch):
     monkeypatch.setattr(maker, "_start", lambda: pytest.fail("the process was already running"))
     FakeMaker.asked = []
     threading.Thread(target=maker.serve, args=(port,), daemon=True).start()
+    _listening(port)
     maker.ready(wait=10)
     return FakeMaker.asked
 
