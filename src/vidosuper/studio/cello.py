@@ -307,6 +307,7 @@ ACCESS = ("advisor", "copilot", "full")
 LOOKS = {"look", "list_films", "open", "show", "play", "pointing", "upload", "find", "diagnose", "quiet", "sleep",
          "answer", "rules"}  # never change anything
 LONG = {"make_it", "build", "step", "effect", "music", "work", "repair"}  # take minutes (or more)
+WORKSHOP = {"ai_clip", "music"}  # without a yes they only put their prompt on screen
 PAID = {"ai_clip"}  # spends paid credit (their Higgsfield balance)
 for _t in TOOLS:
     if _t["name"] in LONG | PAID:
@@ -330,10 +331,10 @@ def allowed(level: str, name: str, args: dict, hands: bool = False) -> str | Non
         return ("Not done: they gave you Advisor access, so you look, point and suggest, and they make the change "
                 "themselves (or say \"take more control\"). Tell them exactly what to do and where.")
     yes = bool(args.get("they_said_yes"))
-    if name in PAID and not yes and name != "ai_clip":  # (ai_clip without a yes only shows its prompt)
+    if name in PAID and not yes and name not in WORKSHOP:
         return ("Not done: this spends paid credit, so ask them first in one sentence (what it makes and that it uses "
                 "their balance), then call again with they_said_yes=true once they agree.")
-    if name in LONG and level == "copilot" and not yes and not hands:
+    if name in LONG and level == "copilot" and not yes and not hands and name not in WORKSHOP:
         return ("Not done: as their co-pilot you ask before anything that takes time. Say what it will do and roughly "
                 "how long, in one sentence, then call again with they_said_yes=true once they say yes.")
     return None
@@ -715,7 +716,21 @@ def act(studio, user: dict, project: dict | None, name: str, args: dict, hands: 
             studio.generate_clip(user, p, str(args.get("prompt", "")), shot)
         return {"result": "Sent: an AI model is making the clip (a minute or two).", "ui": {"wait": "job"}}
     if name == "music":
-        studio.edit_music(user, need(), args.get("start"), args.get("end"), str(args.get("want", "")))
+        p = need()
+        if not said_yes:  # the prompt workshop: on screen first, made only when they say so
+            studio.music_editable(user, p)
+            card = agent.new_prompt_card(studio, p, str(args.get("want", "")), job="music", start=args.get("start"),
+                                         end=args.get("end"))
+            agent.post(studio.db, p, "editor", "reply", {"text": "Here's how I'd ask for the music to change. Change "
+                                                                 "any words, then send it.", "cards": [card]})
+            return {"result": f"It is on screen ({card['cost']}). Read it in a line and ask: send it, or change it?",
+                    "ui": {"reload": True}}
+        waiting = agent.open_prompt(studio, p)
+        if waiting and waiting[2].get("job") == "music":
+            mid, k, card = waiting
+            agent.answer(studio, user, p, mid, k, "send", str(args.get("want") or card["prompt"]))
+        else:
+            studio.edit_music(user, p, args.get("start"), args.get("end"), str(args.get("want", "")))
         return {"result": "Making that stretch of the music again, then the film on it.", "ui": {"wait": "job"}}
     if name == "export":
         kind = str(args.get("kind", "")).lower()

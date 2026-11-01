@@ -413,3 +413,45 @@ def test_the_director_and_the_designer_always_get_a_model_the_one_chosen_for_des
         with pytest.raises(RuntimeError):
             scenes._ask_claude_code("system", [{"type": "text", "text": "look"}], "review")
     assert seen == ["claude-opus-5-5", "claude-sonnet-5-5"]
+
+
+def test_a_montage_stretch_is_timed_on_its_music_and_keeps_their_footage(tmp_path):
+    import subprocess
+
+    from vidosuper.devtools import make_placeholder_music
+    from vidosuper.ffmpeg import ffmpeg_bin
+    from vidosuper.motion import moments as mo
+    from vidosuper.motion import worlds
+    from vidosuper.work import scenes_in_film
+
+    song = make_placeholder_music(tmp_path / "song.wav", bpm=120)
+    stretch = tmp_path / "stretch.mp4"
+    subprocess.run([ffmpeg_bin(), "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=30",
+                    "-i", str(song), "-t", "6", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(stretch)],
+                   check=True)
+    marks = scenes_in_film.marks(stretch, tmp_path)
+    assert len(marks) >= 8 and {"bar", "beat"} <= {m[2] for m in marks}  # about two a second at 120 bpm
+    assert all(0 <= a < 6.1 for a, _, _ in marks)
+    said = mo.prompt(marks, 6.0, "a map line from Sydney to the coast", "montage", 1920, 1080)
+    assert "STRETCH OF THEIR MONTAGE" in said and "music's marks" in said and "cut out" not in said
+    design = mo.FilmDesign(look="ink", moments=[mo.Moment(start=0, end=6, before="a", after="b")])
+    brief = worlds.brief_text(design, worlds.sections(design, 6.0)[0], marks, "a map", "montage", True, w=1920, h=1080)
+    assert "THEIR FOOTAGE" in brief and "THE PERSON" not in brief
+
+
+def test_surfaces_are_searched_by_each_word_most_matches_first(monkeypatch, capsys):
+    import json as _json
+
+    from vidosuper.motion import assets
+
+    pages = {"stone": [{"assetId": "Rock051", "displayName": "Rock 051", "tags": ["rock", "stone"]},
+                       {"assetId": "Bricks085", "displayName": "Bricks 085", "tags": ["stone", "wall"]}],
+             "wall": [{"assetId": "Bricks085", "displayName": "Bricks 085", "tags": ["stone", "wall"]}]}
+
+    def fake(url, timeout=30.0):
+        word = url.split("q=")[1].split("&")[0]
+        return _json.dumps({"foundAssets": pages.get(word, [])}).encode()
+
+    monkeypatch.setattr(assets, "_get", fake)
+    assert [h["id"] for h in assets.materials("stone wall")] == ["Bricks085", "Rock051"]
+    assert assets.main(["find", "--material", "stone"]) == 0 and "k.texture" in capsys.readouterr().out

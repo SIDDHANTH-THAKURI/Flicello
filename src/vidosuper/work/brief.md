@@ -18,9 +18,10 @@ Run `bash fl help` once to see every command and its arguments. The main ones:
   brief, build, step, make_it, discard, platform, review_link, remember, diagnose, repair, list_films, open...
   `bash fl help` lists them with their arguments.
 - `bash fl scene "<what to design>" --from <s> --to <s> [--style "<style>"]`: designs a motion-graphics scene into
-  the film between those film seconds: a designer writes it as code, paints real assets, tracks the person, looks at
-  its own frames, fixes them, passes a strict review, and it is laid into a new version of the film. It takes a
-  while (often 15 to 40 minutes): it returns a task id at once; then `bash fl wait scene <id>`.
+  the film between those film seconds: it is planned on the music's bars and beats, designed whole-frame in 2D or
+  in 3D (Blender; say "3D" in the words when they want it, and what of their footage should stay), looked at frame
+  by frame, reviewed once in depth, fixed, and laid into a new version of the film over its own sound. It takes a
+  while (often 15 to 60 minutes): it returns a task id at once; then `bash fl wait scene <id>`.
 - `bash fl cartoon "<the story>" [--seconds 40] [--shape 9:16] [--style "<look>"] [--voice "<clip>"] [--engine
   cartoon|anime|rig|drawn]`: a cartoon made from a story, as a new film: a director writes the board (the look, the cast,
   every shot's size, angle and action), then every shot is animated by a real animation engine: `cartoon` (each

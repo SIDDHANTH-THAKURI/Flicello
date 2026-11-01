@@ -17,6 +17,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 
 import bpy
@@ -662,6 +663,97 @@ def studio(target=(0.0, 2.0, 0.0), key=(1.0, 0.95, 0.88), fill=(0.75, 0.85, 1.0)
     return out
 
 
+
+def haze(density=0.01, rgb=(0.75, 0.8, 0.9), anisotropy=0.35, size=(80.0, 80.0, 30.0), centre=(0.0, 15.0, 5.0)):
+    """Air with a little haze in it, so light shows as shafts (EEVEE volumetrics): a lighthouse beam, light through a
+    window, a spotlight. It fills a box around the scene (`size`, `centre`), not the world: a world volume is endless
+    and turns the sky black. Thin is right (0.005-0.02); thick hides the world."""
+    sc = bpy.context.scene
+    for attr, v in (("volumetric_tile_size", "4"), ("volumetric_samples", 96), ("use_volumetric_shadows", True),
+                    ("volumetric_end", max(size) * 1.5)):
+        try:
+            setattr(sc.eevee, attr, v)
+        except (AttributeError, TypeError):
+            pass
+    bpy.ops.mesh.primitive_cube_add(size=1, location=centre)
+    box = bpy.context.object
+    box.name = "haze"
+    box.scale = size
+    m, n, l = mat("haze")
+    n.clear()
+    vol = n.new("ShaderNodeVolumePrincipled")
+    vol.inputs["Density"].default_value = density
+    vol.inputs["Color"].default_value = (*rgb, 1)
+    vol.inputs["Anisotropy"].default_value = anisotropy
+    out = n.new("ShaderNodeOutputMaterial")
+    l.new(vol.outputs[0], out.inputs["Volume"])
+    box.data.materials.append(m)
+    return box
+
+
+def beam(origin=(0, 0, 0), aim=(0, 10, 0), length=30.0, spread=6.0, rgb=(1.0, 0.86, 0.62), strength=0.9):
+    """A beam of light the way the eye sees one at night: a soft cone from `origin` toward `aim`, bright at its source,
+    fading along its length and soft at its edges (never a hard laser line), `spread` degrees wide. Returns the cone
+    (rotate it, or its parent, to sweep it). Pair it with a real light inside for what it lights."""
+    import mathutils
+
+    r = math.tan(math.radians(spread / 2)) * length
+    bpy.ops.mesh.primitive_cone_add(vertices=48, radius1=0.02, radius2=r, depth=length, end_fill_type="NOTHING")
+    cone = bpy.context.object
+    cone.name = "beam"
+    for v in cone.data.vertices:  # its tip at the origin, opening along +Z
+        v.co.z += length / 2
+    smooth(cone)
+    m, n, l = mat("beam")
+    n.clear()
+    geo = n.new("ShaderNodeNewGeometry")
+    coord = n.new("ShaderNodeTexCoord")
+    sep = n.new("ShaderNodeSeparateXYZ")
+    along = n.new("ShaderNodeMapRange")  # bright at the source, gone by the far end
+    along.inputs["From Min"].default_value, along.inputs["From Max"].default_value = 0.0, length
+    along.inputs["To Min"].default_value, along.inputs["To Max"].default_value = 1.0, 0.0
+    fall = n.new("ShaderNodeMath")
+    fall.operation = "POWER"
+    fall.inputs[1].default_value = 1.6
+    edge = n.new("ShaderNodeLayerWeight")  # soft at its sides: seen side-on, the cone's rim fades to nothing
+    edge.inputs["Blend"].default_value = 0.75
+    soft = n.new("ShaderNodeMath")
+    soft.operation = "SUBTRACT"
+    soft.inputs[0].default_value = 1.0
+    both = n.new("ShaderNodeMath")
+    both.operation = "MULTIPLY"
+    em = n.new("ShaderNodeEmission")
+    em.inputs["Color"].default_value = (*rgb, 1)
+    clear = n.new("ShaderNodeBsdfTransparent")
+    add = n.new("ShaderNodeAddShader")
+    gain = n.new("ShaderNodeMath")
+    gain.operation = "MULTIPLY"
+    gain.inputs[1].default_value = strength
+    out = n.new("ShaderNodeOutputMaterial")
+    l.new(coord.outputs["Object"], sep.inputs[0])
+    l.new(sep.outputs["Z"], along.inputs["Value"])
+    l.new(along.outputs["Result"], fall.inputs[0])
+    l.new(edge.outputs["Facing"], soft.inputs[1])
+    l.new(fall.outputs[0], both.inputs[0])
+    l.new(soft.outputs[0], both.inputs[1])
+    l.new(both.outputs[0], gain.inputs[0])
+    l.new(gain.outputs[0], em.inputs["Strength"])
+    l.new(em.outputs[0], add.inputs[0])
+    l.new(clear.outputs[0], add.inputs[1])
+    l.new(add.outputs[0], out.inputs[0])
+    _ = geo
+    try:
+        m.surface_render_method = "BLENDED"
+    except AttributeError:
+        m.blend_method = "BLEND"
+    m.use_backface_culling = False
+    cone.data.materials.append(m)
+    cone.location = origin
+    d = mathutils.Vector(aim) - mathutils.Vector(origin)
+    cone.rotation_euler = d.to_track_quat("Z", "Y").to_euler()
+    return cone
+
+
 # ---------------------------------------------------------------- ready-made things: Poly Haven (CC0)
 PH_API = "https://api.polyhaven.com"
 PH_AGENT = "Flicello/1.0 (open-source video studio; github.com/SIDDHANTH-THAKURI/Flicello)"
@@ -796,6 +888,98 @@ def hdri(what="sunset", strength=0.4, rotation=0.0, res="2k", visible=True):
         l.new(mix.outputs[0], out.inputs[0])
     print(f"[kit] sky {aid}")
     return bg
+
+
+
+CG_API = "https://ambientcg.com/api/v2/full_json"
+
+
+def texture(what, scale=1.0, res="1K", tint=None, name=None):
+    """A real surface from ambientCG's free library (CC0): stone, brick, wood, metal, rust, sand, fabric... by its id
+    (from `bash assets --material ...`) or words (the best match). Downloaded once; colour, roughness, bumps, metal
+    and depth all mapped, projected from the object's own axes so it works on any shape (no UVs needed). `scale`:
+    how many times it repeats per scene unit. `tint`: (r, g, b) to multiply the colour by. Returns a material to
+    append to a mesh, or None when nothing matches (use the kit's own materials then)."""
+    import glob
+    import urllib.parse
+    import zipfile
+
+    aid = what
+    if not re.fullmatch(r"[A-Za-z]+\d+[A-Z]?", what or ""):
+        words = [w for w in re.findall(r"[a-z]+", (what or "").lower()) if len(w) > 2]
+        best, score = None, 0
+        found = {}
+        for w in words:
+            data = json.loads(_ph_get(f"{CG_API}?" + urllib.parse.urlencode({"type": "Material", "q": w, "limit": 30})))
+            for a in data.get("foundAssets", []):
+                found[a["assetId"]] = found.get(a["assetId"], 0) + 1
+        for k_, v in found.items():
+            if v > score:
+                best, score = k_, v
+        aid = best
+    if not aid:
+        print(f"[kit] no surface matches {what!r}")
+        return None
+    folder = _ph_cache("materials", f"{aid}_{res}")
+    if not glob.glob(os.path.join(folder, "*Color*")):
+        zpath = os.path.join(folder, f"{aid}_{res}-JPG.zip")
+        _ph_get(f"https://ambientcg.com/get?file={aid}_{res}-JPG.zip", zpath)
+        with zipfile.ZipFile(zpath) as z:
+            z.extractall(folder)
+        os.remove(zpath)
+
+    def part(kind):
+        hits = sorted(glob.glob(os.path.join(folder, f"*_{kind}.jpg")) + glob.glob(os.path.join(folder, f"*_{kind}.png")))
+        return hits[0] if hits else None
+
+    m, n, l = mat(name or f"surface-{aid}")
+    b = n["Principled BSDF"]
+    coord = n.new("ShaderNodeTexCoord")
+    mapping = n.new("ShaderNodeMapping")
+    mapping.inputs["Scale"].default_value = (scale, scale, scale)
+    l.new(coord.outputs["Object"], mapping.inputs[0])
+
+    def image(path, colour):
+        t = n.new("ShaderNodeTexImage")
+        t.image = bpy.data.images.load(path)
+        t.image.colorspace_settings.name = "sRGB" if colour else "Non-Color"
+        t.projection = "BOX"
+        t.projection_blend = 0.25
+        l.new(mapping.outputs[0], t.inputs[0])
+        return t
+
+    if (p := part("Color")):
+        c = image(p, True)
+        if tint:
+            mix = n.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.blend_type = "MULTIPLY"
+            mix.inputs["Factor"].default_value = 1.0
+            a_in, b_in = [i for i in mix.inputs if i.type == "RGBA"]
+            b_in.default_value = (*tint, 1)
+            l.new(c.outputs["Color"], a_in)
+            l.new(next(o for o in mix.outputs if o.type == "RGBA"), b.inputs["Base Color"])
+        else:
+            l.new(c.outputs["Color"], b.inputs["Base Color"])
+    if (p := part("Roughness")):
+        l.new(image(p, False).outputs["Color"], b.inputs["Roughness"])
+    if (p := part("Metalness")):
+        l.new(image(p, False).outputs["Color"], b.inputs["Metallic"])
+    if (p := part("NormalGL")):
+        nm = n.new("ShaderNodeNormalMap")
+        l.new(image(p, False).outputs["Color"], nm.inputs["Color"])
+        l.new(nm.outputs["Normal"], b.inputs["Normal"])
+    if (p := part("Displacement")):
+        disp = n.new("ShaderNodeDisplacement")
+        disp.inputs["Scale"].default_value = 0.03 / max(scale, 1e-3)
+        l.new(image(p, False).outputs["Color"], disp.inputs["Height"])
+        l.new(disp.outputs[0], n["Material Output"].inputs["Displacement"])
+        try:
+            m.displacement_method = "BOTH"
+        except (AttributeError, TypeError):
+            pass
+    print(f"[kit] surface {aid}")
+    return m
 
 
 def end():

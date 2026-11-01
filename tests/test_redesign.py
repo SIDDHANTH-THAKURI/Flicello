@@ -362,3 +362,24 @@ def test_a_prompt_is_shown_changed_and_sent_only_when_they_say_so(studio, monkey
     cello.act(studio, user, p, "ai_clip", {"prompt": "waves at night", "shot": 2})
     cello.act(studio, user, p, "ai_clip", {"prompt": "", "they_said_yes": True})
     assert sent[-1] == ("waves at night", 2)
+
+
+def test_a_music_change_is_shown_first_and_made_only_when_sent(studio, monkeypatch):
+    from vidosuper.studio import agent
+
+    made = []
+    monkeypatch.setattr(studio, "music_editable", lambda u, p: None)
+    monkeypatch.setattr(studio, "edit_music", lambda u, p, s, e, want: made.append((s, e, want)) or 1)
+    user = person(studio.db)
+    p = studio.new_draft(user, "clips")
+    prof = studio.profile(user)
+    prof.answers["cello_access"] = "copilot"
+    prof.save()
+    out = cello.act(studio, user, p, "music", {"want": "calmer, softer drums", "start": 20.0, "end": 30.0})
+    assert "on screen" in out["result"] and not made  # a co-pilot shows it first; nothing is made
+    mid, k, card = agent.open_prompt(studio, p)
+    assert card["job"] == "music" and card["what"].startswith("The music, made again from 0:20")
+    client, _, csrf = local_client(studio)
+    client.post(f"/p/{p['id']}/card", data={"csrf": csrf, "mid": mid, "k": k, "choice": "send",
+                                            "text": "calmer, no drums at all"})
+    assert made == [(20.0, 30.0, "calmer, no drums at all")]

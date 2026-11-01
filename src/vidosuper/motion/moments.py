@@ -137,12 +137,17 @@ def prompt(words: list[tuple[float, float, str]], duration: float, ask: str, kin
                 "moments run end to end with no gaps (the first starts at 0, each starts where the last ends, the "
                 "last ends at the film's end), each 3-20 s, each handing over to the next (the AFTER of one is the "
                 "BEFORE of the next, or turns into it)." if kind == "voice" else
+                "A STRETCH OF THEIR MONTAGE (their own clips, cut to music): plan what they asked for in it. Their "
+                "footage stays unless they asked for a whole-frame moment. Little or nothing is said, so each change "
+                "lands on a mark of the music listed below ('bar' starts a bar, 'drop' is where it lifts, 'beat' is "
+                "a beat): use that mark, exactly as listed, as the change's word." if kind == "montage" else
                 "Their own video of them talking: they are cut out of it and stand in your world the whole time; "
                 "the moments happen in that world around them."))
     text_note = ("They asked for words on screen: put the exact words they want in `text`, and only there."
                  if wants_text(ask) else "They did NOT ask for words on screen: every `text` is empty.")
     parts = [f"What they asked for: {ask or '(nothing beyond the recording itself)'}", notes, text_note,
-             f"What is said, each word with the second it starts:\n{said}"]
+             ("The music's marks and anything said, each with the second it starts:\n" if kind == "montage" else
+              "What is said, each word with the second it starts:\n") + said]
     if previous is not None:
         parts.append("Your plan so far:\n" + previous.model_dump_json(indent=1))
         if feedback.strip():

@@ -585,12 +585,13 @@ def fast_path(studio, project: dict, user: dict, words: str) -> dict | None:
         return {"text": PROMPT_SAYS, "cards": [card], "spec": [], "fast": True}
     if project["stage"] == "done" and (mus := music_asked(words, project)) and not studio.db.active_job(project["id"]):
         start, end, want = mus
-        try:
-            studio.edit_music(user, project, start, end, want)
+        try:  # the prompt workshop: what will be asked of the music maker goes on screen first; their Send makes it
+            studio.music_editable(user, project)
+            card = new_prompt_card(studio, project, want, job="music", start=start, end=end)
         except Exception as exc:  # noqa: BLE001 - said plainly
             return {"text": str(exc), "cards": [], "spec": []}
-        return {"text": f"Making that stretch of the music again ({want}); the rest stays note for note, then the film is "
-                        "made on it (a few minutes).", "cards": [], "spec": [], "fast": True}
+        return {"text": "Here's how I'd ask for the music to change (the rest stays note for note). Change any "
+                        "words, then send it.", "cards": [card], "spec": [], "fast": True}
     if project["stage"] == "done" and (fx := effect_asked(words)) and not studio.db.active_job(project["id"]):
         kind, shot, want = fx
         try:
@@ -788,13 +789,15 @@ def prompt_card(studio, user: dict, project: dict, prompt: str, shot: int | None
     return card["cost"]
 
 
-def new_prompt_card(studio, project: dict, prompt: str, shot: int | None = None) -> dict:
-    """A prompt card (earlier open ones are marked replaced: one prompt waits at a time)."""
+def new_prompt_card(studio, project: dict, prompt: str, shot: int | None = None, job: str = "clip",
+                    start: float | None = None, end: float | None = None) -> dict:
+    """A prompt card (earlier open ones are marked replaced: one prompt waits at a time). `job`: "clip" (an AI shot)
+    or "music" (a stretch of the made music made again, `start` to `end`)."""
     from ..create import clips, higgsfield
 
     prompt = " ".join(str(prompt).split())[:600]
     if len(prompt) < 4:
-        raise TalkError("Describe the shot in a few words.")
+        raise TalkError("Describe the shot in a few words." if job == "clip" else "Say how the music should change.")
     for row in studio.db.all("SELECT * FROM messages WHERE project_id=? AND role='editor' ORDER BY id DESC LIMIT 40",
                              (project["id"],)):
         body = json.loads(row["body"] or "{}")
@@ -804,6 +807,18 @@ def new_prompt_card(studio, project: dict, prompt: str, shot: int | None = None)
                 c["done"], changed = "replaced", True
         if changed:
             studio.db.run("UPDATE messages SET body=? WHERE id=?", (json.dumps(body), row["id"]))
+    if job == "music":
+        from ..music import compose
+
+        who = compose.maker()
+        cost = {"local": "free, made on this computer in a few minutes, then the film on it",
+                "elevenlabs": "uses your ElevenLabs credit, then the film is made on it"
+                }.get(who, "nothing here can make music yet (Connect, Models)")
+        span = (f"from {_mmss(start)} to {_mmss(end)}" if start is not None and end is not None else
+                f"from {_mmss(start)}" if start is not None else f"up to {_mmss(end)}" if end is not None else
+                "all of it")
+        return {"type": "prompt", "job": "music", "what": f"The music, made again {span}", "prompt": prompt,
+                "start": start, "end": end, "cost": cost}
     maker = clips.maker()
     cost = {"local": "free, made on this computer in a minute or two",
             "higgsfield": f"about ${higgsfield.MODELS[higgsfield.DEFAULT][1] * 5:.2f} of your Higgsfield credit"
@@ -862,7 +877,10 @@ def answer(studio, user: dict, project: dict, mid: int, k: int, choice: str, tex
             save("no")
             return
         words = " ".join((text or card["prompt"]).split())[:600]
-        studio.generate_clip(user, project, words, card.get("shot"))
+        if card.get("job") == "music":
+            studio.edit_music(user, project, card.get("start"), card.get("end"), words)
+        else:
+            studio.generate_clip(user, project, words, card.get("shot"))
         card["sent"] = words
         save("sent")
         post(studio.db, project, "you", "tap", {"text": "✓ Sent the prompt"})

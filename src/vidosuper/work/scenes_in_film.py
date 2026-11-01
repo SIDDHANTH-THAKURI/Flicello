@@ -1,4 +1,4 @@
-"""Designed scenes (motion/scenes.py) laid into the film.
+"""Designed scenes laid into the film (the worlds engine, motion/worlds.py: 2D or 3D, whatever they ask for).
 
 A scene is designed on a stretch of the version they work on: its words, its frames, the person in it. The finished
 stretch (the footage with the scene on it and its sounds) is spliced into a new version, frame for frame; the scene is
@@ -126,8 +126,7 @@ def _design(studio, user, p, wid, what, start_s, end_s, style, version, on_progr
         folder = work.root / "scenes" / wid
         scenes.VIA = "claude_code" if studio.s.owner_brain == "claude_code" else "api"
         words = _words(studio, p, version, shape)
-        result = scenes.make(film, words, start_s, end_s, what, folder, style=style, rounds=2, log=progress,
-                             library=studio.s.home / "sfx")
+        result = world_scene(film, words, start_s, end_s, what, style, shape, folder, studio.s.home / "sfx", progress)
         meta = {"id": wid, "what": what, "style": style, "start": round(start_s, 3), "end": round(end_s, 3),
                 "shape": shape, "version": version, "video": str(Path(result["video"]).relative_to(work.root)),
                 "signature": signature(versions.edl_path(work.out, version, shape), start_s, end_s),
@@ -144,6 +143,59 @@ def _design(studio, user, p, wid, what, start_s, end_s, style, version, on_progr
         log.warning("scene %s failed", wid, exc_info=True)
         db.run("UPDATE work SET status='failed', say=?, updated=? WHERE id=?",
                (f"The scene couldn't be made: {type(exc).__name__}: {str(exc)[:300]}", time.time(), wid))
+
+
+def marks(stretch: Path, folder: Path) -> list[tuple[float, float, str]]:
+    """The music's marks in a stretch (seconds into it): bars, the drop, the beats between. What a change in a
+    montage lands on, the way a change in a talk lands on a word. Empty when there is no music to read."""
+    from ..ffmpeg import run_ffmpeg
+    from ..music.analysis import analyze_music
+
+    wav = folder / "stretch.wav"
+    try:
+        run_ffmpeg(["-i", str(stretch), "-vn", "-ac", "1", "-ar", "22050", str(wav)], what="no sound in the stretch")
+        music = analyze_music(wav)
+    except Exception:  # noqa: BLE001 - no music, no marks: the planner times on what is seen
+        return []
+    drops = {round(t, 2) for t in music.drops}
+    bars = {round(t, 2) for t in music.downbeats}
+    out = []
+    for t in music.beats:
+        r = round(t, 2)
+        out.append((r, r + 0.05, "drop" if r in drops else "bar" if r in bars else "beat"))
+    return out
+
+
+def world_scene(film: Path, words, start_s: float, end_s: float, what: str, style: str, shape: str, folder: Path,
+                library: Path, progress) -> dict:
+    """The stretch [start_s, end_s) of the film designed by the worlds engine: planned from what they asked (timed on
+    the music's marks and anything said), designed at the desk, reviewed once, rendered over their own sound.
+    Returns {video, rounds: [{score}]}."""
+    from ..motion import moments as mo
+    from ..motion import worlds
+    from . import moments_film as mf
+
+    folder.mkdir(parents=True, exist_ok=True)
+    stretch = folder / "stretch.mp4"
+    if not stretch.exists():  # the stretch with its own sound (the music the marks come from, laid back under it)
+        from ..ffmpeg import run_ffmpeg
+
+        run_ffmpeg(["-ss", f"{start_s:.3f}", "-i", str(film), "-t", f"{end_s - start_s:.3f}", "-c:v", "libx264",
+                    "-preset", "medium", "-crf", "10", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k",
+                    str(stretch)], what="the stretch couldn't be cut")
+    duration = end_s - start_s
+    said = [(round(a - start_s, 3), round(b - start_s, 3), w) for a, b, w in words if start_s <= a < end_s]
+    timing = sorted(marks(stretch, folder) + said)
+    ask = " ".join(x for x in (what, f"(style: {style})" if style else "") if x)
+    w, h = mf.SIZES.get(shape, mf.SIZES["9:16"])
+    progress("Planning the scene on the music")
+    design = mo.plan(timing, duration, ask, "montage", w, h, log=progress)
+    (folder / "plan.json").write_text(design.model_dump_json(indent=1), encoding="utf-8")
+    result = worlds.make(design, stretch, timing, ask, "montage", folder / "worlds", library,
+                         progress=lambda done, total, msg: progress(msg))
+    scores = [s["score"] for s in result["sections"] if isinstance(s.get("score"), (int, float))]
+    return {"video": result["video"], "rounds": [{"score": min(scores)}] if scores else [],
+            "notes": result.get("notes") or []}
 
 
 def _new_version(studio, p: dict, version: int, shape: str, meta: dict, work) -> int:

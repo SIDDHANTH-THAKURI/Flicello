@@ -33,6 +33,16 @@ k.end()                                      # renders what was asked
 - Orbits: parent things to an empty that faces the camera (rotation X 90 degrees); for the camera, clockwise is a
   POSITIVE turn about +Y. Each member also tumbles on its own axis.
 - Hidden things must be scale 0 (unlit dust shows as black dots).
+- Light you can see (a lighthouse, headlights, a torch, sun through a window) is a soft shaft, never a hard line or
+  a flat glowing tube: `k.haze()` (a thin haze box around the scene; never a world volume, it blacks out the sky)
+  and `k.beam(origin, aim, length, spread)` (a soft cone, bright at its source, fading along it and at its edges),
+  with a real spot light inside for what it lights.
+- Night is dark blue, not black: the sky (`k.sky`) and a cool moonlit fill keep the land, the sea and the subject
+  readable. Anything that matters sits well above black; check the darkest frame of every section.
+- A wide shot must still read: the subject is at least about a quarter of the frame's height (or framed so the eye
+  goes to it), lit by a key or a rim of its own. A tiny dark subject in a big dark frame reads as nothing.
+- The first frame of the film already shows the world and its subject. Never open on an empty sky or an empty
+  room waiting for something to arrive; a birth or a reveal happens inside a frame that is already designed.
 - Write beats.json ([{"t": 1.7, "what": "the circle opens"}, ...]) and sound.json ([{"t": 1.6, "sound": "a soft
   round pop with a shimmer", "gain": -14}, ...]) beside the scene: the director reads the beats, the film gets the
   sounds.
@@ -52,12 +62,17 @@ unfinished (a lighthouse built from a plain cylinder scored 4/10). First look in
 - `k.model("<id or words>", loc=(x, y, z), height=<scene units>, rot_z=<degrees>)` downloads it once, imports it with
   its own textures, stands its base on `loc` and returns one empty to animate (`k.keys(m, "location", ...)`). None when
   nothing matches: then build it, well (bevelled, real materials, detail), from the kit's shapes.
+- Real surfaces: `bash assets --material wet stone` lists ambientCG's free surfaces (stone, brick, wood, metal,
+  rust, sand, fabric); `k.texture("<id or words>", scale=<repeats per unit>, tint=(r, g, b))` gives a material with
+  its colour, roughness, bumps and metal, wrapped onto any shape (no UVs needed). A lighthouse of plain white clay
+  reads as a toy; the same tower in weathered stone reads as a place.
 - `k.hdri("<id or words>", strength=0.4, rotation=<degrees>, visible=True)` lights the whole scene from a real sky
   (metal and glass need something to reflect); `visible=False` lights without showing it.
 Shapes and places:
 - `k.rounded_box(name, size, loc, radius, material)`, `k.bevel(obj)` rounded edges on anything, `k.smooth(obj)`.
 - `k.cyc(rgb, y, z)` a studio cyclorama: a floor curving up into a wall with no seam (products, objects on show,
   soft shadows), lit by `k.studio(target)`: a soft key, a cool fill and a rim light aimed at the subject.
+- `k.haze(density, size, centre)` air you can see light in; `k.beam(origin, aim, length, spread, rgb)` a soft beam.
 - `k.sky(top, horizon, strength, changes=[(t, top, horizon)])` the world as a sky gradient that also lights the
   scene and can move from night to dawn over the section.
 - `k.terrain(size, height, loc, seed, low, mid, high, flat)` rolling land coloured by height (faceted or smooth);

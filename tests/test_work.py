@@ -241,15 +241,33 @@ def test_a_designed_scene_goes_into_a_new_version_and_back_in_only_while_the_fil
     edl1 = json.loads((work / "out" / "v1-16x9.edl.json").read_text(encoding="utf-8"))
     w, h, fps = edl1["meta"]["width"], edl1["meta"]["height"], edl1["meta"]["fps"]
 
-    def designed(video, words, start, end, what, folder, **kw):
-        return {"video": str(_scene_clip(folder / "scene.mp4", end - start, w, h, fps)), "rounds": [{"score": 8}]}
+    from vidosuper.motion import moments as mo
+    from vidosuper.motion import worlds
 
-    monkeypatch.setattr(scenes, "make", designed)
+    asked = {}
+
+    def planned(timing, duration, ask, kind, width, height, **kw):
+        asked.update(plan_kind=kind, duration=duration, ask=ask)
+        return mo.FilmDesign(look="red", moments=[mo.Moment(start=0.0, end=duration, before="wings", after="wings")])
+
+    def designed(design, stretch, timing, ask, kind, folder, library, progress=None, **kw):
+        from vidosuper.ffmpeg import ffprobe_json
+
+        asked.update(kind=kind, stretch=[s["codec_type"] for s in ffprobe_json(stretch)["streams"]])
+        clip = _scene_clip(folder / "scene.mp4", float(ffprobe_json(stretch)["format"]["duration"]), w, h, fps)
+        return {"video": str(clip), "sections": [{"score": 8}], "notes": []}
+
+    monkeypatch.setattr(mo, "plan", planned)
+    monkeypatch.setattr(worlds, "make", designed)
+    monkeypatch.setattr(scenes_in_film, "marks", lambda stretch, folder: [(0.5, 0.55, "bar")])
     studio.db.run("INSERT INTO work(id, project_id, user_id, kind, status, request, created, updated) "
                   "VALUES ('s1', ?, ?, 'scene', 'running', 'wings', 0, 0)", (pid, user["id"]))
     scenes_in_film._design(studio, user, project, "s1", "wings open behind me", 1.0, 2.5, "", 1, None)
     row = studio.db.one("SELECT * FROM work WHERE id='s1'")
     assert row["status"] == "done" and "version 2" in row["say"], row["say"]
+    # the worlds engine, on the stretch with its own sound, planned as a montage's stretch from what they asked
+    assert asked["kind"] == asked["plan_kind"] == "montage" and "audio" in asked["stretch"]
+    assert asked["ask"] == "wings open behind me" and abs(asked["duration"] - 1.5) < 0.01
     project = studio.db.project(pid)
     assert project["version"] == 2 and project["stage"] == "done"
     v2 = work / "out" / "v2-16x9.mp4"

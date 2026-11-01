@@ -3238,13 +3238,18 @@ class Studio:
     def edit_music(self, user: dict, project: dict, start: float | None, end: float | None, want: str) -> int:
         """'Make the ending calmer': that stretch of the film's made track written again, the rest kept note for note,
         then the film made again on it (a new version: the cut stays exactly as it was)."""
+        self.music_editable(user, project)
+        return self._enqueue(project, "music_edit", {"start": start, "end": end, "want": " ".join(want.split())[:200]})
+
+    def music_editable(self, user: dict, project: dict) -> None:
+        """Raises (said plainly) when a stretch of this film's music can't be made again: asked before the prompt is
+        shown, so nobody edits a prompt only to hear no after sending it."""
         self._guard(project, "done")
         row = self.beat_row(project, project.get("beat"))
         song_id = (row or {}).get("full_song_id") or ((row or {}).get("song_id") if (row or {}).get("whole") else None)
         if not song_id and not self._made_here(project, row):
             raise ActionError("Only music made here can be changed in one stretch; this film's track can't (yet).")
         self._check_revisions(user, project)
-        return self._enqueue(project, "music_edit", {"start": start, "end": end, "want": " ".join(want.split())[:200]})
 
     def _made_here(self, project: dict, row: dict | None) -> bool:
         """The film's track was made by the music model on this machine (a stretch of it can be written again here)."""

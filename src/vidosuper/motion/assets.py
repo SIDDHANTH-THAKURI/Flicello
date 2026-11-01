@@ -4,7 +4,8 @@ light a scene). The 3D desk lists them with `bash assets <words>`; its scene.py 
 `k.hdri(...)` (blender_kit.py downloads it once into the models folder).
 
     python -m vidosuper.motion.assets find lighthouse rocks      what there is, best first
-    python -m vidosuper.motion.assets find --hdri sunset beach   skies and places"""
+    python -m vidosuper.motion.assets find --hdri sunset beach   skies and places
+    python -m vidosuper.motion.assets find --material wet stone  surfaces (ambientCG, CC0 too)"""
 from __future__ import annotations
 
 import json
@@ -74,11 +75,42 @@ def find(words: str, kind: str = "models", limit: int = 12) -> list[dict]:
     return out[:limit]
 
 
+CG_API = "https://ambientcg.com/api/v2/full_json"
+
+
+def materials(words: str, limit: int = 12) -> list[dict]:
+    """Surfaces from ambientCG (CC0): stone, brick, wood, metal, rust, sand, water, fabric... each word searched, the
+    ones matching most words first."""
+    from urllib.parse import urlencode
+
+    want = _words(words)
+    seen: dict[str, dict] = {}
+    for w in want or []:
+        data = json.loads(_get(f"{CG_API}?" + urlencode({"type": "Material", "q": w, "limit": 40, "include": "tagData"})))
+        for a in data.get("foundAssets", []):
+            hit = seen.setdefault(a["assetId"], {"id": a["assetId"], "name": a.get("displayName", a["assetId"]),
+                                                 "tags": a.get("tags", [])[:8], "score": 0})
+            hit["score"] += 1
+    return sorted(seen.values(), key=lambda h: -h["score"])[:limit]
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] != "find":
         print(__doc__)
         return 2
     args = argv[1:]
+    if "--material" in args:
+        words = " ".join(a for a in args if a != "--material")
+        try:
+            hits = materials(words)
+        except OSError as exc:
+            print(f"The library can't be reached right now ({exc}). Make the surface with the kit's materials.")
+            return 1
+        for h in hits:
+            print(f"{h['id']:<24} {h['name']:<30} {', '.join(h['tags'])}")
+        print("\nUse one in scene.py: k.texture(\"<id>\", scale=<repeats per metre>) (a material to append to a mesh)"
+              if hits else f'No surface matches "{words}": try one word (stone, brick, wood, metal, rust, sand).')
+        return 0
     kind = "hdris" if "--hdri" in args else "models"
     words = " ".join(a for a in args if a != "--hdri")
     try:

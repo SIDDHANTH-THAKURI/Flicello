@@ -234,9 +234,17 @@ def brief_text(design: mo.FilmDesign, section: Section, words, ask: str, kind: s
              f"THE LOOK: {design.look}"]
     if design.idea:
         lines.append(f"THE IDEA: {design.idea}")
-    lines.append("THE PERSON: none: a voice-only film, every pixel is yours." if kind == "voice" else
-                 "THE PERSON: their cut-out stands in your world the whole time (see the kit for placing them). Their "
-                 "face stays clear and comfortably big; nothing covers it.")
+    if kind == "voice":
+        lines.append("THE PERSON: none: a voice-only film, every pixel is yours.")
+    elif kind == "montage":
+        lines.append("THEIR FOOTAGE: this is a stretch of their own film (clips cut to music); its shot is on your "
+                     "desk (frames/). Their footage stays the hero unless they asked for the whole frame: the design "
+                     "lives in it (built into the scene, framed by it, growing out of it), never stickers floating on "
+                     "top. If they asked for a whole-frame moment (a map, a world, a 3D scene), the stretch is yours "
+                     "and hands back to their footage at its end. Changes land on the music's marks below.")
+    else:
+        lines.append("THE PERSON: their cut-out stands in your world the whole time (see the kit for placing them). "
+                     "Their face stays clear and comfortably big; nothing covers it.")
     if section.moments:
         lines.append("WHAT HAPPENS (a contract, checked frame by frame; each change lands on its word):")
         for k in section.moments:
@@ -731,7 +739,7 @@ def make(design_: mo.FilmDesign, base: Path, words, ask: str, kind: str, folder:
     parts = sections(design_, duration)
     if only_first:
         parts = parts[:1]
-    person = kind != "voice"
+    person = kind not in ("voice", "montage")  # a montage's stretch: their footage, nobody cut out of it
     done = [0]
     notes: list[str] = []
     results: dict[int, dict] = {}
