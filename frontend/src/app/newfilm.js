@@ -13,29 +13,42 @@ const isVideo = (f) => f.type.startsWith('video/') || /\.(mov|mp4|m4v|mkv|webm|a
 // ---------------------------------------------------------------- the box: a ghost that types ideas, examples that write
 function ghost(box, el) {
   const ideas = ['Tell me what you want to make…', 'a talk where my words come alive beside me',
-    'Sydney in 30 seconds, on the beat', "a cartoon about my dog's secret life", 'my voice memo, turned into an animation'];
-  const hide = () => { el.classList.toggle('off', !!box.value); el.classList.toggle('soft', !box.value && document.activeElement === box); };
+    'our weekend away, on the beat', "a cartoon about my dog's secret life", 'my voice memo, turned into an animation'];
+  // gone the moment the box has words or they click into it (never typed under what they're about to write)
+  const hide = () => { el.classList.toggle('off', !!box.value || document.activeElement === box || box.dataset.typing === '1'); };
   box.addEventListener('input', hide);
   box.addEventListener('focus', hide);
   box.addEventListener('blur', hide);
+  window.addEventListener('pageshow', hide); // a value the browser puts back on Back never fires 'input'
+  el.style.transition = 'none'; // at once the first time: never two texts on top of each other
   hide();
+  requestAnimationFrame(() => { el.style.transition = ''; });
   if (reduced) { el.textContent = ideas[0]; return; }
   (async () => {
     for (let i = 0; ; i += 1) {
       const s = ideas[i % ideas.length];
-      for (let k = 0; k <= s.length; k += 1) { el.textContent = s.slice(0, k); await sleep(38); }
+      for (let k = 0; k <= s.length; k += 1) { el.textContent = s.slice(0, k); hide(); await sleep(38); }
       await sleep(1700);
       for (let k = s.length; k >= 0; k -= 3) { el.textContent = s.slice(0, k); await sleep(14); }
     }
   })();
 }
 
+let typing = 0; // a newer example tapped stops the one still being typed (fast taps never mix two)
 async function typeInto(box, text) {
+  const mine = ++typing;
+  box.dataset.typing = '1';
   box.value = '';
   box.dispatchEvent(new Event('input'));
   if (reduced) { box.value = text; } else {
-    for (const ch of text) { box.value += ch; await sleep(14); }
+    for (let k = 1; k <= text.length; k += 1) {
+      if (mine !== typing) return;
+      box.value = text.slice(0, k);
+      await sleep(14);
+    }
   }
+  if (mine !== typing) return;
+  box.dataset.typing = '';
   box.focus();
   box.setSelectionRange(box.value.length, box.value.length);
   box.dispatchEvent(new Event('input'));
@@ -159,17 +172,23 @@ function minis() {
 
 // ---------------------------------------------------------------- the draft: begun by the first drop or take
 const state = { pid: '', kind: '', making: null };
+// an example they tapped and never changed is not what their clips are about
+const examples = () => new Set($$('.ex[data-say]').map((x) => x.dataset.say.trim()));
+const untouchedExample = (box) => !!box && examples().has(box.value.trim());
 async function draft(source) {
   const input = $('[data-draft]');
   if (input && input.value) { state.pid = input.value; return state.pid; }
   if (state.making) return state.making;
-  const describe = ($('[data-say-box]') || {}).value || '';
+  const box = $('[data-say-box]');
+  const describe = box && !untouchedExample(box) ? box.value : '';
   state.making = api('POST', '/api/new/draft', { source, describe }).then((r) => {
     state.pid = r.pid;
     state.kind = r.kind;
     document.body.dataset.kind = r.kind;
     document.body.dataset.shapes = r.shapes;
     if (input) input.value = r.pid;
+    // this page is now this film's start: Back from the film comes here with its words and clips, not to a blank page
+    history.replaceState(history.state, '', `/new?film=${r.pid}`);
     return r.pid;
   });
   try { return await state.making; } finally { state.making = null; }
@@ -237,6 +256,8 @@ function clips() {
     const vids = files.filter(isVideo);
     if (!vids.length) { toast('Those aren’t video files: drop clips (mp4, mov and more).'); return; }
     going += vids.length;
+    const box = $('[data-say-box]');
+    if (untouchedExample(box)) { box.value = ''; box.dispatchEvent(new Event('input')); } // their clips lead, not our example
     say(`${vids.length} clip${vids.length === 1 ? '' : 's'} going in…`);
     let pid;
     try { pid = await draft('clips'); } catch (err) { say(err.message); going -= vids.length; return; }
@@ -249,6 +270,13 @@ function clips() {
       }
     };
     await Promise.all([lane(), lane()]);
+    if (!going && !landed && !$('[data-drop-text]').dataset.kept) { // nothing got in: no empty film left behind
+      await api('POST', '/api/new/discard', { pid }).catch(() => {});
+      state.pid = ''; const input = $('[data-draft]'); if (input) input.value = '';
+      history.replaceState(history.state, '', '/new');
+      say('None of those got in. Try again, or drop other clips.');
+      return;
+    }
     if (!going) {
       await suggest();
       say(`${landed} clip${landed === 1 ? '' : 's'} in your film. Drop more, or press Start.`);

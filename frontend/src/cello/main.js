@@ -517,6 +517,8 @@ async function connect() {
     if (!r.ok) throw new Error(tok.detail || 'no voice');
   } catch (err) {
     show(`Cello can't speak right now. ${err.message || ''}`);
+    S.blocked = String(err.message || "Cello can't speak right now.");
+    tellPage({ blocked: S.blocked });
     setTimeout(() => { if (S.on) connect(); }, Math.min(30000, 2000 * 2 ** S.retry++));
     return;
   }
@@ -548,9 +550,11 @@ async function connect() {
         : `Cello can't speak: Google says "${why}".`)
         : "Cello's voice isn't available right now. Try again a little later.";
       show(S.blocked, 30000);
+      tellPage({ blocked: S.blocked }); // the open film's conversation says it too (the caption is hidden while docked)
       if (S.on) setTimeout(() => { if (S.on && !S.ws) connect(); }, 180000);
       return;
     }
+    if (S.blocked) tellPage({ blocked: '' });
     S.blocked = '';
     if (S.on && !S.warned) { S.warned = true; show('Reconnecting\u2026'); }
     if (S.on) setTimeout(() => { if (S.on && !S.ws) connect(); }, Math.min(8000, 800 * 2 ** S.retry++));
@@ -560,6 +564,7 @@ async function connect() {
 function onMessage(m) {
   if (m.setupComplete) {
     if (S.ws) S.ws.ready = true;
+    if (S.blocked) { S.blocked = ''; tellPage({ blocked: '' }); }
     S.open = true;
     S.ever = true;
     S.retry = 0;

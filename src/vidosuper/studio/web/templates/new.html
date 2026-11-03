@@ -21,7 +21,7 @@
   {% if cartoon_ask %}<input type="hidden" name="confirm" value="cartoon">{% endif %}
   <div class="say">
     <textarea name="describe" rows="2" maxlength="900" autofocus aria-label="What are we making?" data-say-box>{{ f.get('describe') or f.get('intent', '') }}</textarea>
-    <div class="ghost-ph" data-ghost aria-hidden="true"></div>
+    <div class="ghost-ph{% if f.get('describe') or f.get('intent') %} off{% endif %}" data-ghost aria-hidden="true"></div>
     <div class="say-foot">
       <button type="button" class="rec" data-record="camera"><svg class="ico s"><use href="#i-cam"/></svg>Film me</button>
       <button type="button" class="rec" data-record="screen"><svg class="ico s"><use href="#i-screen"/></svg>Record screen</button>
@@ -34,16 +34,16 @@
   <label class="dropzone" data-dropzone>
     <input type="file" accept="video/*,.mov,.mp4,.m4v,.mkv,.webm" multiple data-drop-input>
     <span class="strip" data-strip></span>
-    <span class="grow" data-drop-text>Drop clips anywhere here, or <u>choose them</u>. Empty is fine too: tell me what you want, or record it.</span>
+    <span class="grow" data-drop-text{% if kept_clips %} data-kept="{{ kept_clips }}"{% endif %}>{% if kept_clips %}{{ kept_clips }} clip{{ '' if kept_clips == 1 else 's' }} in your film. Drop more, or press Start.{% else %}Drop clips anywhere here, or <u>choose them</u>. Empty is fine too: tell me what you want, or record it.{% endif %}</span>
   </label>
   <div class="suggest" data-suggest hidden>
     <div><small data-suggest-from>From the clips you just dropped</small><div class="sug-text" data-suggest-text></div></div>
     <button type="button" class="btn sm sun" data-suggest-use>Use this</button>
   </div>
   <div class="examples">
-    <button type="button" class="ex" data-say="A talk where everything I describe appears beside me as I say it"><span class="prev"><canvas class="mini" data-kind="words"></canvas></span><span class="txt"><b>Your words come alive</b><small>Talk to camera; the things you describe appear and move as you say them.</small><span class="use">“a white circle slowly turning orange…”</span></span></button>
-    <button type="button" class="ex" data-say="Sydney in 30 seconds, cut on the beat of music made for it"><span class="prev"><canvas class="mini" data-kind="trip"></canvas></span><span class="txt"><b>A trip, on the beat</b><small>Drop a day's clips; the best moments cut to music made for them.</small><span class="use">“Sydney in 30 seconds”</span></span></button>
-    <button type="button" class="ex" data-say="A cartoon about a kid whose drawings come alive on her dad's truck"><span class="prev"><canvas class="mini" data-kind="toon"></canvas></span><span class="txt"><b>A cartoon from a story</b><small>Tell the story; it's drawn, animated and voiced, shot like a film.</small><span class="use">“a kid whose drawings come alive”</span></span></button>
+    <button type="button" class="ex" data-say="A talk where everything I describe appears beside me as I say it"><span class="prev"><canvas class="mini" data-kind="words"></canvas></span><span class="txt"><b>Your words come alive</b><small>Talk to camera; the things you describe appear and move as you say them.</small><span class="use">“a rocket lifts off as I say it…”</span></span></button>
+    <button type="button" class="ex" data-say="Our weekend in the mountains in 30 seconds, cut on the beat of music made for it"><span class="prev"><canvas class="mini" data-kind="trip"></canvas></span><span class="txt"><b>A trip, on the beat</b><small>Drop a day's clips; the best moments cut to music made for them.</small><span class="use">“our weekend in 30 seconds”</span></span></button>
+    <button type="button" class="ex" data-say="A cartoon about a snail who trains all year to win the garden race"><span class="prev"><canvas class="mini" data-kind="toon"></canvas></span><span class="txt"><b>A cartoon from a story</b><small>Tell the story; it's drawn, animated and voiced, shot like a film.</small><span class="use">“a snail who wants to win a race”</span></span></button>
     <button type="button" class="ex" data-say="Turn my voice memo about why sleep makes you smarter into a designed animation"><span class="prev"><canvas class="mini" data-kind="voice"></canvas></span><span class="txt"><b>Just your voice</b><small>A voice memo becomes a fully designed animation, moment by moment.</small><span class="use">“why sleep makes you smarter”</span></span></button>
   </div>
   <p class="hint nf-note">No kind, shape or length to pick: it's worked out from what you say and drop, and said back to you in one line. Want to choose yourself? Open the details below.</p>

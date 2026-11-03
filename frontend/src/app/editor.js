@@ -58,7 +58,7 @@ function waitForReply(pid) {
 }
 
 // ---------------------------------------------------------------- Cello's voice, in this same thread
-const shell = { on: false, you: null, me: null };
+const shell = { on: false, you: null, me: null, blocked: '' }; // blocked: why Cello's voice line can't open
 function lastThread() {
   const list = document.querySelectorAll('#editor ol.thread');
   return list[list.length - 1] || null;
@@ -87,7 +87,16 @@ window.addEventListener('message', (e) => {
   if (typeof m.on === 'boolean') {
     shell.on = m.on;
     document.body.classList.toggle('cello-on', m.on);
-    stateLine(m.on ? 'listening · say anything, or type' : 'your editor · type, or talk to it');
+    stateLine(m.on && !shell.blocked ? 'listening · say anything, or type' : 'your editor · type, or talk to it');
+  }
+  if (typeof m.blocked === 'string' && m.blocked !== shell.blocked) { // its voice can't connect: said once, here, and typing still works
+    shell.blocked = m.blocked;
+    if (m.blocked) {
+      shell.me = null;
+      voiceLine('cello', `${m.blocked} Until then, type here: your words go to your editor as usual.`);
+      shell.me = null;
+      stateLine('your editor · type (voice is off)');
+    }
   }
   if (m.line) voiceLine(m.line, m.text);
   if (m.doing) stateLine(`${m.doing}…`);
@@ -114,7 +123,7 @@ function wire(pid) {
       e.preventDefault();
       const text = area.value.trim();
       if (!text) return;
-      if (shell.on && window.top !== window) { // Cello is on: it hears this, and its answer comes back into this thread
+      if (shell.on && !shell.blocked && window.top !== window) { // Cello is on: it hears this, and its answer comes back into this thread
         shell.you = null;
         voiceLine('you', text);
         shell.you = null;

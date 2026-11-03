@@ -466,8 +466,12 @@ class Studio:
 
     def fill_draft(self, user: dict, pid: str, describe: str) -> dict:
         """Start on a film begun by a drop or a take: their words become what it is about, and the kind follows them
-        unless what they recorded already decides it (a take of them talking stays a talk, a voice memo a voice)."""
+        unless what they recorded already decides it (a take of them talking stays a talk, a voice memo a voice).
+        A film they came back to from its understanding goes back to its setup first, so Start begins it again."""
         project = self.owned(user, pid)
+        if project["stage"] != "setup" and not project.get("version") and "setup" in self.back_targets(project):
+            self.go_back(project, "setup")
+            project = self.owned(user, pid)
         if project["stage"] != "setup":
             return project
         words = " ".join((describe or "").split())[:600]
@@ -496,10 +500,18 @@ class Studio:
                 self.length_ok(user, seconds)
             except ActionError:
                 seconds = None
-        intent = (words + (" " + project["intent"] if project["intent"] and project["intent"] not in words else "")).strip()
+        intent = words or (project["intent"] or "")  # their words now; what the box held when the draft began is not kept
         self.db.run("UPDATE projects SET intent=?, kind=?, routed=?, shapes=?, length=COALESCE(?, length), updated=? "
                     "WHERE id=?", (" ".join(intent.split())[:900], kind, routed, shape, seconds, time.time(), pid))
         return self.db.project(pid)
+
+    def drop_empty_draft(self, user: dict, pid: str) -> None:
+        """A draft that never got anything (every clip failed or was stopped): gone, so it doesn't sit in their
+        films as an empty card. Anything with a clip, a recording or a step taken is kept."""
+        project = self.owned(user, pid)
+        has = self.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (pid,), 0)
+        if project["stage"] == "setup" and not has and not project.get("song") and not self.db.active_job(pid):
+            self.delete_project(project)
 
     def suggest_from_clips(self, user: dict, pid: str) -> str:
         """What these clips could become, in one line, from a frame of each (Flicello looks before they write):
@@ -517,7 +529,7 @@ class Studio:
             return ""
         system = ("You suggest the short video a person's clips could become, as ONE line in their own voice, the way "
                   "they'd ask an editor for it (under 16 words, no quotes, no hashtags), naming what is really in the "
-                  "frames: the place, the people, the activity, the mood. e.g. Sydney in 30 seconds, cut on the beat / "
+                  "frames: the place, the people, the activity, the mood. e.g. Our road trip in 30 seconds, cut on the beat / "
                   "Our beach day, slow and golden, ending on the sunset. Reply with only that line.")
         prompt = (f"{len(clips)} clip(s) were just dropped into a new film. Read a frame of each with the Read tool: "
                   + ", ".join(str(f) for f in frames) + ". Then reply with only the one line.")

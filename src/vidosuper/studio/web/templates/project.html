@@ -54,7 +54,7 @@
 {% set wv0 = (work.version if work else p.version) %}
 <div class="filmpage" data-filmpage>
 <header class="fp-top">
-  <a class="fp-back" href="/" aria-label="Your films" title="Your films"><svg class="ico"><use href="#i-back"/></svg></a>
+  {% set restart = p.stage in ('setup', 'understood', 'failed', 'paused') and not p.version and p.kind in ('montage', 'talk', 'voice') %}<a class="fp-back" href="{{ '/new?film=' ~ p.id if restart else '/' }}" aria-label="{{ 'Back to the start' if restart else 'Your films' }}" title="{{ 'Back to what you started with: change your words or clips' if restart else 'Your films' }}"{% if restart %} data-restart="{{ p.id }}"{% endif %}><svg class="ico"><use href="#i-back"/></svg></a>
   <div class="fp-title">
     <h1>{{ p.title }}</h1>
     <span class="fp-sub mono">{% if film_made %}v{{ wv0 }} · {{ latest[0].seconds|mmss }} · {{ latest[0].shape }}{% else %}{% if looks and p.stage == 'choose' %}Pick a look{% elif looks and p.stage == 'pitching' %}Painting another look{% elif p.kind != 'montage' and p.style == 'designed' and p.stage == 'choose' %}Your plan{% elif p.kind != 'montage' and p.style == 'designed' and p.stage == 'pitching' %}Writing the plan{% else %}{{ STAGES.get(p.stage, p.stage) }}{% endif %}{% endif %}</span>

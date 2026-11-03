@@ -346,8 +346,19 @@ def create_app(studio: Studio) -> FastAPI:
         from ..exports import PLATFORMS
 
         shape = PLATFORMS.get(answers.get("platform", ""), {}).get("shape")  # "make it for YouTube", remembered
+        form, kept = ({"shapes": shape} if shape else {}), 0
+        pid = request.query_params.get("film", "")
+        if pid:  # back to the start of a film begun here: their words and clips as they left them, Start begins it again
+            try:
+                p = studio.owned(user, pid)
+            except ActionError:
+                p = None
+            if p and not p.get("version") and p["kind"] in ("montage", "talk", "voice") and (
+                    p["stage"] == "setup" or "setup" in studio.back_targets(p)):
+                form = {**form, "draft": pid, "describe": p.get("intent") or ""}
+                kept = studio.db.value("SELECT COUNT(*) FROM clips WHERE project_id=?", (pid,), 0)
         return page(request, "new.html", user, sess, default_pace=pace if pace in ("calm", "fast") else "balanced",
-                    form={"shapes": shape} if shape else {}, **new_ctx(user))
+                    form=form, kept_clips=kept, **new_ctx(user))
 
     @app.post("/new")
     def new_post(request: Request, csrf: str = Form(""), title: str = Form(""), shapes: str = Form("9:16"),
@@ -428,6 +439,18 @@ def create_app(studio: Studio) -> FastAPI:
         except ActionError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"pid": project["id"], "kind": project["kind"], "shapes": project["shapes"]})
+
+    @app.post("/api/new/discard")
+    async def new_discard(request: Request):
+        """A draft begun by a drop that never got a clip in (every upload failed or was stopped)."""
+        user, sess = need_user(request, api=True)
+        check_csrf(sess, request.headers.get("x-csrf"))
+        body = await request.json()
+        try:
+            studio.drop_empty_draft(user, str(body.get("pid", "")))
+        except ActionError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True})
 
     @app.post("/api/p/{pid}/suggest")
     async def suggest(request: Request, pid: str):

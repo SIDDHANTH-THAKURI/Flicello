@@ -192,6 +192,29 @@ def test_a_drop_or_a_take_begins_a_draft_and_start_fills_it_in(studio):
     assert kept["kind"] == "talk"  # what they recorded decides: a take of them talking stays a talk
 
 
+def test_their_words_replace_what_the_box_held_and_an_empty_draft_goes(studio):
+    user = person(studio.db)
+    p = studio.new_draft(user, "clips", "Our weekend in the mountains in 30 seconds, cut on the beat")
+    filled = studio.fill_draft(user, p["id"], "Artemis, Google's tool that drives a real phone")
+    assert filled["intent"] == "Artemis, Google's tool that drives a real phone"  # the example isn't kept as a must
+    empty = studio.new_draft(user, "clips")
+    studio.drop_empty_draft(user, empty["id"])
+    assert studio.db.project(empty["id"]) is None  # gone from their films
+    studio.db.run("INSERT INTO clips(id, project_id, file, name, bytes, seconds, created) VALUES ('k1', ?, 'a.mp4', "
+                  "'a.mp4', 10, 3, 0)", (p["id"],))
+    studio.drop_empty_draft(user, p["id"])  # a draft with a clip in it is never thrown away
+    assert studio.db.project(p["id"]) is not None
+
+
+def test_back_from_the_understanding_reopens_its_start_and_start_begins_it_again(studio):
+    user = person(studio.db)
+    p = studio.new_draft(user, "clips")
+    studio.db.run("UPDATE projects SET understood='{}' WHERE id=?", (p["id"],))
+    studio.db.set_stage(p["id"], "understood")
+    again = studio.fill_draft(user, p["id"], "our road trip, slow and golden")
+    assert again["stage"] == "setup" and again["intent"] == "our road trip, slow and golden"
+
+
 def test_a_suggestion_is_never_an_apology_or_an_error(studio, monkeypatch):
     from vidosuper.studio import service as svc
     from vidosuper.studio.storage import workdir

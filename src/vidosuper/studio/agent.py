@@ -981,9 +981,12 @@ def _after_pitch(studio, p: dict, job: dict) -> dict | None:
         params = json.loads(params or "{}")
     fresh = shown if params.get("first") or len(shown) <= 3 else shown[-1:]
     first = len(shown) - len(fresh) + 1
-    listed = "; ".join(f"{first + k}: \"{x['pitch'].get('title', '')}\", {x['pitch'].get('logline') or x['pitch'].get('pitch', '')}"
-                       for k, x in enumerate(fresh))
-    head = f"{len(fresh)} {word}s" if len(fresh) > 1 else f"One more {word}"
+    def line(k: int, x: dict) -> str:  # a designed film's idea says what it is in `idea`, a story's in `logline`
+        about = x["pitch"].get("logline") or x["pitch"].get("pitch") or x["pitch"].get("idea") or ""
+        return f"{first + k}: \"{x['pitch'].get('title', '')}\"" + (f", {about}" if about else "")
+
+    listed = "; ".join(line(k, x) for k, x in enumerate(fresh))
+    head = (f"{len(fresh)} {word}s" if len(fresh) > 1 else f"One more {word}" if first > 1 else f"My {word}")
     return {"text": _clean(f"{head}, as cards below. {listed}. Pick the one you'd post, or tell me what to change or "
                            "mix.", 1500), "stage": "choose", "cards": []}
 
