@@ -376,6 +376,18 @@ def create_app(studio: Studio) -> FastAPI:
             except ValueError:
                 raise ActionError("Type the length as a number.") from None
             words = " ".join(describe.split())
+            if kind == "animated" or (kind == "other" and len(words) >= 3 and route_kind(words)[0] == "animated"):
+                # an animated explainer or promo: its pitch (story and music) is put to them before anything is built
+                from ...work import animated_in_studio
+
+                if len(words) < 20:
+                    raise ActionError("Say what the film is about (a few sentences at least).")
+                try:
+                    row = animated_in_studio.start(studio, user, words, min(240.0, max(15.0, seconds)),
+                                                   shapes if shapes in ("9:16", "16:9") else "16:9")
+                except ValueError as exc:
+                    raise ActionError(str(exc)) from None
+                return back(f"/p/{row['film']}")
             if kind == "cartoon" or (kind == "other" and len(words) >= 3 and route_kind(words)[0] == "cartoon"):
                 # a cartoon is long and uses a good part of their Claude plan: said first, made only once they say so
                 from ...work import cartoons_in_studio
@@ -1354,6 +1366,34 @@ def create_app(studio: Studio) -> FastAPI:
         row = studio.db.one("SELECT * FROM work WHERE id=? AND user_id=? AND kind='cartoon'", (wid, user["id"]))
         if row is None:
             raise HTTPException(404, "No such cartoon task.")
+        return {"done": row["status"] in ("done", "failed", "stopped"), "status": row["status"], "say": row["say"],
+                "progress": row["progress"], "film": row["project_id"]}
+
+    @app.post("/api/work/animated")
+    async def work_animated(request: Request):
+        user, project, entry = need_agent(request)
+        body = await request.json()
+        from ...work import animated_in_studio
+
+        try:
+            row = animated_in_studio.start(studio, user, str(body.get("brief", "")), float(body.get("seconds") or 60),
+                                           str(body.get("shape") or "16:9"), str(body.get("look") or ""),
+                                           on_progress=lambda m: studio.work.progress(entry["work"], f"Animated film: {m}"))
+        except (ValueError, TypeError, ActionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        entry["project_id"] = row["film"]  # the agent works on the new film from here
+        return {"task": row["id"], "film": row["film"],
+                "note": "A new film is being made as an animated film. Its pitch (the story and the music) is put to "
+                        "them as a question in the film's conversation before any scene is built; then the scenes "
+                        f"take an hour or more: bash fl wait animated {row['id']}"}
+
+    @app.get("/api/work/animated/{wid}")
+    def work_animated_state(request: Request, wid: str):
+        hands = agent(request)
+        user = hands[0] if hands else need_user(request, api=True)[0]
+        row = studio.db.one("SELECT * FROM work WHERE id=? AND user_id=? AND kind='animated'", (wid, user["id"]))
+        if row is None:
+            raise HTTPException(404, "No such animated film task.")
         return {"done": row["status"] in ("done", "failed", "stopped"), "status": row["status"], "say": row["say"],
                 "progress": row["progress"], "film": row["project_id"]}
 

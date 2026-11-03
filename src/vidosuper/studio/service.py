@@ -123,6 +123,8 @@ def ask_text(project: dict) -> str:
 
 
 KIND_WORDS = [  # 'something else': which engine can make it (the person sees the reason and can change it)
+    ("animated", r"\b(animated (explainer|promo|ad|video|intro|launch|post)|explainer (animation|video)|"
+                 r"motion graphics (video|film|explainer)|paper[- ]?cut|cut[- ]paper|pop[- ]?up book)\b"),
     ("voice", r"\b(voice ?(memo|note|over)|podcast|audio|narrat\w*|my voice|recording|no camera|animat\w* (of|from) my)"),
     ("talk", r"\b(me talking|talking head|to camera|vlog|explain\w*|tutorial|lesson|interview|presentation|speech|pitch)"),
     ("cartoon", r"\b(cartoons?|anime|animated (short|film|story|movie)|an animation)\b"),
@@ -160,7 +162,10 @@ def route_kind(describe: str) -> tuple[str, str]:
                           "talk": "It sounds like someone talking to camera, so their video stays and graphics "
                                   "land on their words.",
                           "cartoon": "It sounds like a story to animate, so it's made as a cartoon: Claude directs "
-                                     "it and an animation engine makes every shot."}[kind]
+                                     "it and an animation engine makes every shot.",
+                          "animated": "It sounds like an animated film that explains or presents something, so it's "
+                                      "made in a designed look (cut paper): a story on its own music, every idea a "
+                                      "little world, every scene designed and checked."}[kind]
     return "montage", "It sounds like it's made from your clips, so they're cut together into a story on the beat."
 # ---------------------------------------------------------------- worked out, not asked: shape, length, kind
 SHAPE_WORDS = (("both", r"\b(both|every ?where|all (the )?platforms)\b"),

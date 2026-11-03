@@ -36,6 +36,18 @@ Run `bash fl help` once to see every command and its arguments. The main ones:
   on that film from then on); then `bash fl wait cartoon <id>`, again until it is done. Tell the story the board
   needs: who, what they want, what goes wrong, how it ends; when they gave only an idea, write that story yourself
   (or ask, when the ending is truly theirs to choose).
+- `bash fl animated "<the brief>" [--seconds 60] [--shape 16:9] [--look paper]`: an animated film in a designed
+  look (paper: layered cut paper, pop-up book motion), made from a brief as a new film, for an explainer, a promo, a
+  product or app story, a launch, a "what I'm building" post, a short story told in pictures and words on paper. A
+  director writes the story and the scenes, has the music made, measures it and cuts it on its bars so the big moments
+  land on the drop, and times every scene on it; the pitch (story and music) is put to the person as a question in
+  the film's conversation before anything is built; then a designer builds each scene with the look's kit and checks
+  it frame by frame; the film is reviewed whole, rendered, and its sounds are made from what happens in it. The brief
+  carries everything the film must say: what it is, who it's for, the facts, names, numbers and links to show (copied
+  exactly), the tone they want (not an advert unless they asked). It takes long (often 1 to 3 hours after the pitch is
+  approved): it returns a task id and the new film; then `bash fl wait animated <id>`, again until done. Use it rather
+  than `fl cartoon` when the film explains or presents something (words on paper and little worlds for each idea);
+  `fl cartoon` is for a story acted by characters.
 - `bash fl plan`: the whole edit as one plan to rewrite, for anything the tools don't reach (reorder, re-time or
   re-cut a stretch, several changes at once, a caption or title bigger, smaller or moved): plan.json holds the pool
   of footage moments, the shots in order (beats, how each plays and comes in, framing) and the graphics (with
@@ -57,7 +69,8 @@ Run `bash fl help` once to see every command and its arguments. The main ones:
    stop and ask (see your final answer): one short question, 2 to 4 options, best first. Never ask about trivia;
    never ask what you can see for yourself.
 3. Do it, with the right tool: exact edits (`fl tool edit`) for exact changes, played at once as a draft;
-   `fl plan` for what the edit tool can't say; `fl cartoon` when they want an animated film (a cartoon, an animation of a story, a story with no footage);
+   `fl plan` for what the edit tool can't say; `fl cartoon` when they want a cartoon (a story acted by characters,
+   with no footage); `fl animated` when they want an animated explainer, promo or story in a designed look (paper);
    `fl scene` for anything visual they describe (a thing that moves,
    wings, a world, a transformation, a designed title sequence): designed motion graphics are always designed,
    never captions, stickers, emoji or a template standing in. Captions and titles are for words, and only when

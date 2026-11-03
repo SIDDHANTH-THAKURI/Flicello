@@ -133,9 +133,15 @@ def main(argv: list[str] | None = None) -> None:
                     help="cartoon (a video model animates painted frames), anime (the anime video model), rig "
                          "(Blender rigs animated by code), drawn (drawn in code, frame by frame); empty: the best "
                          "one this machine can run")
-    w = sub.add_parser("wait", help="wait for the film's running step (job), a scene task (scene <id>) or a cartoon "
-                                    "(cartoon <id>)")
-    w.add_argument("what", choices=["job", "scene", "cartoon"])
+    an = sub.add_parser("animated", help="make an animated film (an explainer, a promo, a story) in a designed look "
+                                         "from a brief, as a new film (returns a task id)")
+    an.add_argument("brief", nargs="+", help="what the film is about and for, with every fact, name and link to show")
+    an.add_argument("--seconds", type=float, default=60.0, help="about how long (15 to 240)")
+    an.add_argument("--shape", default="16:9", choices=["16:9", "9:16", "1:1", "4:5"])
+    an.add_argument("--look", default="", help="the look (a kit): paper (layered cut paper); empty: from their words")
+    w = sub.add_parser("wait", help="wait for the film's running step (job), a scene task (scene <id>), a cartoon "
+                                    "(cartoon <id>) or an animated film (animated <id>)")
+    w.add_argument("what", choices=["job", "scene", "cartoon", "animated"])
     w.add_argument("id", nargs="?", default="")
     w.add_argument("--timeout", type=float, default=540.0, help="seconds (at most 590)")
     op = sub.add_parser("open", help="work on another film (its id or title)")
@@ -201,8 +207,14 @@ def main(argv: list[str] | None = None) -> None:
                                                  "style": a.style, "voice": a.voice, "engine": a.engine})
         show(out)
         return
+    if a.cmd == "animated":
+        out = call("POST", "/api/work/animated", {"brief": " ".join(a.brief), "seconds": a.seconds, "shape": a.shape,
+                                                  "look": a.look})
+        show(out)
+        return
     if a.cmd == "wait":
-        path = {"scene": f"/api/work/scene/{a.id}", "cartoon": f"/api/work/cartoon/{a.id}"}.get(a.what, "/api/work/job")
+        path = {"scene": f"/api/work/scene/{a.id}", "cartoon": f"/api/work/cartoon/{a.id}",
+                "animated": f"/api/work/animated/{a.id}"}.get(a.what, "/api/work/job")
         show(wait(path, a.timeout))
         return
     if a.cmd == "frames":

@@ -68,6 +68,11 @@ def answer(studio, user: dict, row: dict, text: str) -> dict:
             studio.set_settings(project, shape, None)
         choose(studio, project, "Shape", SHAPES[shape])
         said = f"{SHAPES[shape].split(' (')[0]} it is."
+    elif str(row["key"] or "").startswith("animated-pitch:"):  # the animated film's maker is waiting on this answer
+        from .animated_in_studio import is_go
+
+        said = ("Making it now: every scene designed and checked, then rendered with its sound." if is_go(text)
+                else "Got it: changing the pitch, then you'll see it again.")
     studio.db.run("UPDATE work SET status='done', answer=?, question=NULL, options=NULL, say=?, updated=? WHERE id=?",
                   (text, said, time.time(), row["id"]))
     return studio.db.one("SELECT * FROM work WHERE id=?", (row["id"],))
